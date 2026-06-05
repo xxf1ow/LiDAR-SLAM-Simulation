@@ -1,0 +1,8 @@
+# Force LF line endings for files executed inside Linux/WSL, so scripts
+# authored on Windows don't fail with `/usr/bin/env: 'python3\r'` shebang errors.
+*.py    text eol=lf
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Patch files must stay LF + UTF-8 to apply cleanly with `git apply`.
+*.patch text eol=lf

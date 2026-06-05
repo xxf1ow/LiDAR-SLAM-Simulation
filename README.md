@@ -163,3 +163,18 @@ cd LiDAR-SLAM-Simulation/src
 source install/setup.bash
 ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap "{resolution: 0.1, destination: /result}"
 ```
+
+## ⚠️ 已知限制：点云缺少逐点时间戳，去畸变未生效
+
+> [!NOTE]
+> **现象**：在 RViz2 中，机器人运行一段时间后，TF 树里的 `base_footprint` 及其子节点（`base_link`、`imu_link`、左右轮等）会逐渐「飘到空中」，离开机器人真实位置。
+>
+> **原因**：Gazebo 的 velodyne 仿真插件输出的点云**不包含逐点时间戳**（字段只有 `x / y / z / intensity / ring`，缺少 `time`）。LIO-SAM 的 `imageProjection` 检测不到逐点时间，会自动**禁用点云去畸变（deskew）**，并在启动时打印警告：
+> ```
+> Point cloud timestamp not available, deskew function disabled, system will drift significantly!
+> ```
+> 去畸变缺失后，`imuPreintegration` 节点的高频 IMU 预积分（它负责发布 `odom → base_footprint`）得不到经过去畸变的精确雷达里程计约束，会把机器人的残余微小运动随时间两次积分、不断累积，于是 `base_footprint` 缓慢漂移。
+>
+> **影响范围**：该漂移**只发生在 `imuPreintegration` 的实时预测层**。最终建图由 `mapOptimization` 的点云配准完成，**保存的地图不受影响、不会发散**，`/lio_sam/mapping/*` 的点云与 `velodyne_base_link` 帧均正常。因此此现象可以忽略（若想 RViz2 画面清爽，可关闭对应 TF 的显示）。
+>
+> **根治方向**：需修改 velodyne 仿真插件，使其在点云中额外输出逐点 `time` 字段，并在 LIO-SAM 中作相应配置 —— 改动较大，本项目暂未实现。
