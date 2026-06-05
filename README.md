@@ -120,11 +120,15 @@ git checkout 08af3f32f01725372d4269838dc44c19c6d9e76b
 git apply ../lio-sam.patch
 
 # 4. 把工厂模型拷到 Gazebo 资源目录
+mkdir ~/.gazebo/models
 cp -r models/factory_model/* ~/.gazebo/models/
 
 # 其它:
+# 0. patch 文件编码格式: 必须是 UTF-8 + Unix(LF)
 # 1. 生成 patch 文件: git diff --no-color > ../lio-sam.patch
 # 2. 检查 patch 文件: git apply --check ../lio-sam.patch
+# 3. 检查工作区状态: git status
+# 4. 重置工作区更改: git reset --hard HEAD
 ```
 
 ### 编译运行
@@ -139,22 +143,23 @@ sudo apt install libgtsam-dev libgtsam-unstable-dev
 cd src
 colcon build
 
-# 3. 安装编译目标
-source install/setup.bash
-
-# 4. 终端一运行 (Gazebo Simulation)
+# 3. 终端一运行 (Gazebo Simulation)
+cd LiDAR-SLAM-Simulation/src
 source install/setup.bash
 ros2 launch robot_gazebo robot_sim.launch.py
 
-# 5. 终端二运行 (LIO-SAM + Rviz2) 
+# 4. 终端二运行 (LIO-SAM + Rviz2) 
+cd LiDAR-SLAM-Simulation/src
 source install/setup.bash
 ros2 launch lio_sam run.launch.py
 
-# 6. 保存点云结果
+# 5. 终端三运行: 保存点云结果
 # 调用命令: ros2 service call
 # 服务名称: /lio_sam/save_map
 # 消息类型: lio_sam/srv/SaveMap
-# 请求参数: "{resolution: 0.2, destination: /home/lxx/slam/map}"
-# 最终保存路径: ~/slam/map
-ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap "{resolution: 0.1, destination: /slam/map}"
+# 请求参数: "{resolution: 0.2, destination: /result}"
+# 最终保存路径: ~/result
+cd LiDAR-SLAM-Simulation/src
+source install/setup.bash
+ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap "{resolution: 0.1, destination: /result}"
 ```

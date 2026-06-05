@@ -1,0 +1,11 @@
+*codegraph*
+
+models/*
+results/*
+src/robot_gazebo/*
+src/robot_description/meshes/*
+
+src/LIO-SAM/*
+src/velodyne_simulator/*
+
+src/LIO-SAM-ros2/*
