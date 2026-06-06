@@ -58,9 +58,10 @@ FAST-LIO 作为**独立节点**运行，使用其**原生 frame**（`camera_init
 - **统一放到 `src/fast-lio2-patch/` 文件夹**（LIO-SAM 的补丁相应归到 `src/lio-sam-patch/`；现有的单文件 `src/lio-sam.patch` 后续迁入该文件夹）。
 - 每个补丁是对基准 commit 的 `git diff`，可复现、可对照、无冲突。
 
-阶段 1 预计产生的补丁（示例命名）：
-- `src/fast-lio2-patch/01-add-gazebo-velodyne-config.patch`：新增 `config/gazebo_velodyne.yaml`。
-- （若选方案B）`src/fast-lio2-patch/02-remove-livox-dependency.patch`：移除 livox 编译依赖。
+阶段 1 预计产生的补丁：
+- `src/fast-lio2-patch/01-add-gazebo-velodyne-config.patch`：新增 `config/gazebo_velodyne.yaml`（阶段 1 对 FAST_LIO 的**唯一**改动）。
+
+> livox 依赖改为新增桩包 `src/livox_ros_driver2/`（一等公民包，**不走补丁**）；见 §6.3。
 
 ## 5. 仿真侧关键参数（来自已验证的 LIO-SAM 配置）
 
@@ -105,18 +106,19 @@ ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim
 ```
 （可选）后续提供一个固定上述参数的薄 wrapper launch；阶段 1 非必需。
 
-### 6.3 解决 livox 依赖（编译阻塞）——采用方案 B：补丁移除
+### 6.3 解决 livox 依赖（编译阻塞）——采用方案 A′：消息桩包
 
-FAST-LIO ROS2 分支**硬依赖 `livox_ros_driver2`**（`CMakeLists.txt:62` REQUIRED、`package.xml:30`、`laserMapping.cpp:62` include + 311 行 livox 回调），缺它无法 `colcon build`。该包**不可 apt 安装**，官方需先源码编译 Livox-SDK2 再 clone 构建——为一个 velodyne 用不到的编译期消息依赖背整个 SDK，不值。
+FAST-LIO ROS2 分支在**编译期无条件引用** `livox_ros_driver2::msg::CustomMsg`——雷达选择虽是运行期 `if (lidar_type==AVIA)`，但该消息**类型**在 `laserMapping.cpp` 与 `preprocess.{h,cpp}` 中被无条件 include 并编译（C++ 中被引用的类型即使运行期不执行也要编译），故缺 `livox_ros_driver2` 包无法 `colcon build`。该包**不可 apt 安装**，官方需先编译 Livox-SDK2。
 
-**决策：方案 B（补丁移除 livox）**。理由：velodyne-only 终态最干净、无多余包、无需 Livox-SDK2，且移除动作本身沉淀为一个带注释头的独立补丁，契合 §4 补丁规范。
+**决策：方案 A′（消息桩包），FAST-LIO 源码与 CMake 全部零改动。**
 
-补丁 `src/fast-lio2-patch/02-remove-livox-dependency.patch` 需改动：
-- `CMakeLists.txt`：删 `find_package(livox_ros_driver2 REQUIRED)`（line 62）及依赖列表条目（line 76）。
-- `package.xml`：删 `<depend>livox_ros_driver2</depend>`（line 30）。
-- `src/laserMapping.cpp`：删 `#include <livox_ros_driver2/msg/custom_msg.hpp>`（line 62）、`livox_pcl_cbk`（line 311）、`lidar_type==1` 的 livox 订阅分支（line 923 附近）。
+- 新增一个工作区一等公民包，**包名必须为 `livox_ros_driver2`**，仅提供与官方**字段一致**的 `CustomMsg.msg` + `CustomPoint.msg`（照抄官方，保证 `avia_handler` 字段访问能编译）。
+- colcon 按包名先构建它；FAST-LIO 现有的 `find_package(livox_ros_driver2)` 与 `<depend>` 自动解析到它即可编译。
+- 运行期 `lidar_type=2`（velodyne）永不进入 livox 分支，桩类型从不实例化，**无需任何 Livox 驱动/SDK**。
 
-> 注：这是阶段 1 唯一的 FAST-LIO **源码**改动；frame 等其余源码保持不动。
+理由：velodyne-only 永久场景下，桩包让 FAST-LIO 保持原样（跟随上游最省心）、风险最低，是该场景的 ROS 社区惯用法（messages-only 接口包）。
+
+> 该桩包是一等公民新包（与 `robot_control` 等并列），**不走补丁**；补丁仅用于对 upstream 的修改。
 
 ### 6.4 可选调优（不在阶段 1 必做）
 - `IMU_Processing.hpp` 的 `MAX_INI_COUNT` 10→20：静止零偏估计更准。列为调优项，若初始化不稳再做（并入补丁）。
