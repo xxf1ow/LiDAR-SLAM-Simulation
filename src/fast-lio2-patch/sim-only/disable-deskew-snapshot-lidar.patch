@@ -1,0 +1,31 @@
+# ====================  SIM-ONLY · 真实旋转式雷达请勿应用  ====================
+# Purpose: 关闭 FAST-LIO 对"瞬时快照"仿真点云的帧内去畸变(deskew)。
+#   Gazebo velodyne 插件一次性投射全部射线: 所有点同一时刻、本无运动畸变。
+#   但 FAST-LIO 在缺逐点 time 时会按方位角"编造"逐点时间并去畸变，
+#   旋转时凭空产生拖影/发散(原地转圈最明显)。
+#   本补丁在 velodyne_handler 强制 given_offset_time=true，使各点 offset 时间为 0、
+#   去畸变成为恒等变换，从根上消除该伪畸变。仅改 preprocess.cpp 一处。
+# 为何不做成参数: 仿真/真实的取舍由"是否应用本补丁"决定，无需在源码加开关。
+# ⚠️ 真实旋转式雷达扫描确有运动畸变、必须去畸变 —— 真实场景切勿应用本补丁。
+# Base:    FAST_LIO @ a4743b0 (ROS2 branch)
+# Apply:   cd src/FAST_LIO && git apply ../fast-lio2-patch/sim-only/disable-deskew-snapshot-lidar.patch
+# File:    src/preprocess.cpp (1 处)
+# ===========================================================================
+diff --git a/src/preprocess.cpp b/src/preprocess.cpp
+index 9015782..b42ac0e 100644
+--- a/src/preprocess.cpp
++++ b/src/preprocess.cpp
+@@ -334,6 +334,13 @@ void Preprocess::velodyne_handler(const sensor_msgs::msg::PointCloud2::UniquePtr
+     }
+   }
+ 
++  // [SIM-ONLY] Gazebo's velodyne plugin emits an instantaneous snapshot: all points share one
++  // timestamp, so there is NO intra-scan motion distortion. Force given_offset_time=true so every
++  // point's offset time stays 0 and FAST-LIO's deskew becomes a no-op; otherwise the azimuth-based
++  // time fabrication below injects fake skew that shows up as ghosting/divergence while rotating.
++  // DO NOT apply on a real spinning LiDAR — real scans are skewed and DO need deskew.
++  given_offset_time = true;
++
+   if (feature_enabled)
+   {
+     for (int i = 0; i < N_SCANS; i++)
