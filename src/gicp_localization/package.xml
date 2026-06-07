@@ -1,0 +1,33 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>gicp_localization</name>
+  <version>0.1.0</version>
+  <description>GICP prior-map localization for FAST-LIO2 in Gazebo sim (small_gicp).</description>
+  <maintainer email="20twenty.degree@gmail.com">xxf1ow</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>tf2</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_eigen</depend>
+  <depend>pcl_conversions</depend>
+  <depend>small_gicp</depend>
+  <depend>eigen</depend>
+
+  <!-- 诊断 msg：仅 -DGICP_DIAGNOSTICS=ON 时实际生成 -->
+  <build_depend>rosidl_default_generators</build_depend>
+  <build_depend>builtin_interfaces</build_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+  <member_of_group>rosidl_interface_packages</member_of_group>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
