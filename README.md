@@ -206,12 +206,6 @@ cd ..
 
 # 注: 消息桩包 livox_ros_driver2 (src/livox_ros_driver2) 已随仓库提供，仅用于满足
 #     FAST-LIO 的编译期依赖 (velodyne-only 场景无需安装 Livox-SDK)。
-
-
-# 5. 克隆 small_gicp
-export GIT_LFS_SKIP_SMUDGE=1    # linux (跳过 LFS 文件下载)
-$env:GIT_LFS_SKIP_SMUDGE=1	    # Windows PowerShell (跳过 LFS 文件下载)
-git clone https://github.com/koide3/small_gicp.git --depth 1 --filter=blob:none
 ```
 
 ### 编译运行
@@ -257,9 +251,13 @@ ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim
 # 1. 安装依赖 (OpenMP；Eigen/PCL 随 ROS-desktop / perception-pcl 已装)
 sudo apt install libomp-dev
 
-# 2. 手动克隆 small_gicp 到 src/small_gicp 并 pin 提交 (跳过 LFS 大文件不影响编译)
-GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/koide3/small_gicp.git --depth 1 --filter=blob:none
-# (可选) pin 到已验证提交: cd small_gicp && git fetch origin <SHA> --depth 1 && git checkout <SHA> && cd ..
+# 2. 克隆 small_gicp (跳过 LFS 大文件不影响编译)
+export GIT_LFS_SKIP_SMUDGE=1    # linux (跳过 LFS 文件下载)
+$env:GIT_LFS_SKIP_SMUDGE=1	    # Windows PowerShell (跳过 LFS 文件下载)
+git clone https://github.com/koide3/small_gicp.git --depth 1 --filter=blob:none
+cd small_gicp
+git fetch origin 78f2e7a221720625eb95271ad9da21a04fb77f86 --depth 1
+git checkout 78f2e7a221720625eb95271ad9da21a04fb77f86
 ```
 
 ### 编译运行

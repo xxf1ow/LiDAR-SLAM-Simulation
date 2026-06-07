@@ -50,11 +50,22 @@ GicpLocalizationNode::GicpLocalizationNode() : rclcpp::Node("gicp_localization")
   }
 
   // ---- 加载先验地图（失败致命）----
+  prior_map_pub_ = create_publisher<sensor_msgs::msg::PointCloud2>(
+      "~/prior_map", rclcpp::QoS(1).transient_local());
   aligner_ = std::make_unique<GicpAligner>(gp);
   try {
     auto pts = loadPriorMapPcd(prior_map_path);
     aligner_->setMap(pts);
     RCLCPP_INFO(get_logger(), "已加载先验地图 %s (%zu 点)", prior_map_path.c_str(), pts.size());
+    // 发布先验地图(latched, map 系)供 RViz 叠加查看
+    pcl::PointCloud<pcl::PointXYZ> mapcloud;
+    mapcloud.reserve(pts.size());
+    for (const auto& p : pts) mapcloud.emplace_back(p.x(), p.y(), p.z());
+    sensor_msgs::msg::PointCloud2 map_msg;
+    pcl::toROSMsg(mapcloud, map_msg);
+    map_msg.header.frame_id = map_frame_;
+    map_msg.header.stamp = now();
+    prior_map_pub_->publish(map_msg);
   } catch (const std::exception& e) {
     RCLCPP_FATAL(get_logger(), "先验地图加载失败：%s", e.what());
     throw;
@@ -139,7 +150,7 @@ void GicpLocalizationNode::gicpTimerCb() {
   }
 
   AlignOutcome out = aligner_->align(scan, seed);
-  const bool ok = accept(out.fitness, fitness_threshold_, out.converged);
+  const bool ok = accept(out.fitness, fitness_threshold_);
 
   GicpMetrics m;
   m.fitness = out.fitness;

@@ -47,7 +47,7 @@ TEST(PoseMath, CorrectionDelta) {
 }
 
 TEST(PoseMath, AcceptGate) {
-  EXPECT_TRUE(accept(0.85, 0.8, true));
-  EXPECT_FALSE(accept(0.70, 0.8, true));
-  EXPECT_FALSE(accept(0.90, 0.8, false));
+  EXPECT_TRUE(accept(0.85, 0.8));
+  EXPECT_FALSE(accept(0.70, 0.8));
+  EXPECT_TRUE(accept(0.90, 0.8));  // converged 不再参与门限
 }

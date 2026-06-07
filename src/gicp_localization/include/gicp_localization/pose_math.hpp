@@ -26,6 +26,7 @@ double computeFitness(std::size_t num_inliers, std::size_t num_source);
 CorrectionDelta correctionDelta(const Eigen::Isometry3d& prev,
                                 const Eigen::Isometry3d& cur);
 
-bool accept(double fitness, double threshold, bool converged);
+// 仅按 fitness 判定(对齐 spec/参照实现); converged 仅作诊断, 不参与门限
+bool accept(double fitness, double threshold);
 
 }  // namespace gicp_localization

@@ -41,6 +41,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr init_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr loc_pub_;
+  rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr prior_map_pub_;  // latched, 供 RViz 查看
   rclcpp::TimerBase::SharedPtr gicp_timer_, tf_timer_;
   rclcpp::CallbackGroup::SharedPtr slow_group_, fast_group_;
 

@@ -5,6 +5,9 @@ if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
 endif()
 
+# core/diag 作为静态库直接链进可执行文件(节点自包含, 无需安装/查找自有 .so)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 option(GICP_DIAGNOSTICS "Build GICP diagnostics msg + publisher" OFF)
 
 find_package(ament_cmake REQUIRED)
@@ -21,7 +24,7 @@ find_package(Eigen3 REQUIRED)
 find_package(small_gicp REQUIRED)
 find_package(OpenMP)
 
-add_library(gicp_localization_core
+add_library(gicp_localization_core STATIC
   src/pose_math.cpp
   src/prior_map.cpp
   src/gicp_aligner.cpp
@@ -45,12 +48,12 @@ if(GICP_DIAGNOSTICS)
     "msg/GicpDiagnostics.msg"
     DEPENDENCIES builtin_interfaces
   )
-  add_library(gicp_localization_diag src/diagnostics_real.cpp)
+  add_library(gicp_localization_diag STATIC src/diagnostics_real.cpp)
   rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
   target_link_libraries(gicp_localization_diag ${cpp_typesupport_target})
   target_compile_definitions(gicp_localization_diag PUBLIC GICP_DIAGNOSTICS)
 else()
-  add_library(gicp_localization_diag src/diagnostics_null.cpp)
+  add_library(gicp_localization_diag STATIC src/diagnostics_null.cpp)
 endif()
 target_include_directories(gicp_localization_diag PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)

@@ -38,8 +38,8 @@ CorrectionDelta correctionDelta(const Eigen::Isometry3d& prev,
   return d;
 }
 
-bool accept(double fitness, double threshold, bool converged) {
-  return converged && fitness >= threshold;
+bool accept(double fitness, double threshold) {
+  return fitness >= threshold;
 }
 
 }  // namespace gicp_localization
