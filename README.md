@@ -101,25 +101,31 @@ sudo apt-get install ros-${ROS_DISTRO}-ros-gz ros-${ROS_DISTRO}-gazebo-ros-pkgs
 gazebo --version
 ```
 
-## 编译运行
+## 建图模块 LIO-SAM
+
+- LIO-SAM: https://github.com/TixiaoShan/LIO-SAM
 
 ### 准备项目文件
 
 ```bash
-# 1. 下载 cache zip, 解压到根目录
+# 1. PPA 方式安装 GTSAM 依赖库
+sudo add-apt-repository ppa:borglab/gtsam-release-4.1
+sudo apt install libgtsam-dev libgtsam-unstable-dev
+
+# 2. 下载 cache zip, 解压到根目录
 curl -C - -O https://github.com/xxf1ow/LiDAR-SLAM-Simulation/releases/download/cache-zip/cache.zip
 
-# 2. 克隆 velodyne_simulator
+# 3. 克隆 velodyne_simulator
 git clone https://github.com/ToyotaResearchInstitute/velodyne_simulator --depth 1 --filter=blob:none
 
-# 3. 克隆 LIO-SAM 并应用补丁
+# 4. 克隆 LIO-SAM 并应用补丁
 git clone https://github.com/TixiaoShan/LIO-SAM.git -b ros2 --single-branch --depth 1 --filter=blob:none 
 cd LIO-SAM
 git fetch origin 08af3f32f01725372d4269838dc44c19c6d9e76b --depth 1
 git checkout 08af3f32f01725372d4269838dc44c19c6d9e76b
 git apply ../lio-sam.patch
 
-# 4. 把工厂模型拷到 Gazebo 资源目录
+# 5. 把工厂模型拷到 Gazebo 资源目录
 mkdir ~/.gazebo/models
 cp -r models/factory_model/* ~/.gazebo/models/
 
@@ -134,26 +140,22 @@ cp -r models/factory_model/* ~/.gazebo/models/
 ### 编译运行
 
 ```bash
-# 1. PPA 方式安装 GTSAM 依赖库
-sudo add-apt-repository ppa:borglab/gtsam-release-4.1
-sudo apt install libgtsam-dev libgtsam-unstable-dev
-
-# 2. 编译
+# 1. 编译
 # 重新编译指定包: colcon build --packages-select lio_sam
 cd src
 colcon build
 
-# 3. 终端一运行 (Gazebo Simulation)
+# 2. 终端一运行 (Gazebo Simulation)
 cd LiDAR-SLAM-Simulation/src
 source install/setup.bash
 ros2 launch robot_gazebo robot_sim.launch.py
 
-# 4. 终端二运行 (LIO-SAM + Rviz2) 
+# 3. 终端二运行 (LIO-SAM + Rviz2) 
 cd LiDAR-SLAM-Simulation/src
 source install/setup.bash
 ros2 launch lio_sam run.launch.py
 
-# 5. 终端三运行: 保存点云结果
+# 4. 终端三运行: 保存点云结果
 # 调用命令: ros2 service call
 # 服务名称: /lio_sam/save_map
 # 消息类型: lio_sam/srv/SaveMap
@@ -164,17 +166,94 @@ source install/setup.bash
 ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap "{resolution: 0.1, destination: /result}"
 ```
 
-## ⚠️ 已知限制：点云缺少逐点时间戳，去畸变未生效
+### 验收标准
 
 > [!NOTE]
-> **现象**：在 RViz2 中，机器人运行一段时间后，TF 树里的 `base_footprint` 及其子节点（`base_link`、`imu_link`、左右轮等）会逐渐「飘到空中」，离开机器人真实位置。
+> 验收为定性标准。仿真在 WSL2 中运行，`ros2 topic hz` 量到的话题频率会随 Gazebo 实时因子 (RTF ≈ 0.5) 成比例减半，属正常现象（仿真时间内频率正确）。
+
+- **编译运行**：`colcon build` 通过；两条 launch 分别起 Gazebo 与 LIO-SAM + RViz2，无报错。
+- **数据流**：`ros2 topic list` 含 `points_raw`、`/imu_plugin/out`、`/lio_sam/...`；点云 ≈ 10 Hz、IMU ≈ 200 Hz（按 RTF 折算）。
+- **建图质量**：RViz2（Fixed Frame = `map`）中 `/lio_sam/mapping/cloud_registered` 与 `/lio_sam/mapping/path` 随遥控移动逐步拼出**一致地图**，墙面/物体单层、不重影、不发散。
+- **全局一致**：绕场一圈后地图能闭合、不漂飞（已启用回环）。
+- **保存地图**：`/lio_sam/save_map` 服务能在 `~/result` 写出可用的 PCD（即后续 FAST-LIO2 定位所用的先验地图来源）。
+- 注：实时 TF 的 `base_footprint` 会缓慢漂移（见文末「已知限制」），但**保存的地图正确**，不计为失败。
+
+## 定位模块 FAST-LIO2
+
+- FAST-LIO2: https://github.com/hku-mars/fast_lio
+- GICP: https://github.com/koide3/small_gicp
+
+### 准备项目文件
+
+```bash
+# 1. 安装 perception_pcl 依赖库
+sudo apt install ros-${ROS_DISTRO}-perception-pcl
+
+# 2. 克隆 FAST_LIO2 并应用补丁
+git clone https://github.com/hku-mars/FAST_LIO.git -b ROS2 --single-branch --depth 1 --filter=blob:none
+cd FAST_LIO
+git fetch origin a4743b095409588842a5b30ddfa27e29d2f99164 --depth 1
+git checkout a4743b095409588842a5b30ddfa27e29d2f99164
+# 应用补丁: 仿真配置 + (仅仿真) 关闭快照点云去畸变
+git apply ../fast-lio2-patch/01-add-gazebo-velodyne-config.patch
+git apply ../fast-lio2-patch/sim-only/disable-deskew-snapshot-lidar.patch
+cd ..
+
+# 注: 消息桩包 livox_ros_driver2 (src/livox_ros_driver2) 已随仓库提供，仅用于满足
+#     FAST-LIO 的编译期依赖 (velodyne-only 场景无需安装 Livox-SDK)。
+```
+
+### 编译运行
+
+```bash
+# 1. 编译
+# colcon build --packages-up-to fast_lio 会先建 livox_ros_driver2 桩包再建 fast_lio
+cd src
+colcon build --packages-up-to fast_lio
+
+# 2. 终端一运行 (Gazebo Simulation)
+cd LiDAR-SLAM-Simulation/src
+source install/setup.bash
+ros2 launch robot_gazebo robot_sim.launch.py
+
+# 3. 终端二运行 (FAST_LIO2 + Rviz2) 
+cd LiDAR-SLAM-Simulation/src
+source install/setup.bash
+ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true
+```
+
+### 验收标准
+
+> [!NOTE]
+> 当前为**阶段 1：纯里程计**（不加载先验地图，先验地图定位是后续 GICP 阶段）。纯 LIO 里程计**缓慢漂移属正常**，判据**不是**"估计位姿与真实位姿长期完全重合"。
+
+- **编译运行**：`colcon build --packages-up-to fast_lio` 通过（先建 `livox_ros_driver2` 桩包、再建 `fast_lio`，**无 livox 相关报错**）；launch 起节点 + RViz2。
+- **起步**：启动头几秒**保持机器人静止**（FAST-LIO 需静止初始化陀螺零偏与重力方向）。
+- **建图质量**：RViz2（Fixed Frame = `camera_init`）给 `/cloud_registered` 显示项设较大 `Decay Time` 后，累积点云**单层、不重影、不发散**；`/Odometry` 轨迹形状正确、绕圈回到起点附近。
+- **旋转无拖影**：原地转圈不再产生拖影/发散（依赖已应用仅仿真去畸变补丁 `disable-deskew-snapshot-lidar.patch`）。
+- **漂移有界**：长时间缓慢漂移可接受，但**无突跳、不发散**。
+
+---
+
+## ⚠️ 已知限制
+
+> [!NOTE]
+> ### 限制一：仿真点云缺少逐点时间戳（去畸变）
+> **根因**：Gazebo 的 velodyne 仿真插件输出的是**瞬时快照点云**，字段只有 `x / y / z / intensity / ring`，**缺少逐点 `time`**。
 >
-> **原因**：Gazebo 的 velodyne 仿真插件输出的点云**不包含逐点时间戳**（字段只有 `x / y / z / intensity / ring`，缺少 `time`）。LIO-SAM 的 `imageProjection` 检测不到逐点时间，会自动**禁用点云去畸变（deskew）**，并在启动时打印警告：
-> ```
-> Point cloud timestamp not available, deskew function disabled, system will drift significantly!
-> ```
-> 去畸变缺失后，`imuPreintegration` 节点的高频 IMU 预积分（它负责发布 `odom → base_footprint`）得不到经过去畸变的精确雷达里程计约束，会把机器人的残余微小运动随时间两次积分、不断累积，于是 `base_footprint` 缓慢漂移。
+> - **LIO-SAM**：`imageProjection` 检测不到逐点时间会**自动禁用去畸变（deskew）**，启动时打印 `... deskew function disabled, system will drift significantly!`。结果 `imuPreintegration` 发布的 `odom → base_footprint` 实时 TF 随时间缓慢漂移，`base_footprint` 及子节点（`base_link`、`imu_link`、左右轮）会「飘到空中」。**但最终建图由 `mapOptimization` 的点云配准完成，保存的地图不受影响、不发散**，可忽略此现象（可在 RViz2 关闭对应 TF 显示）。
+> - **FAST-LIO2**：缺 `time` 时它会按方位角**编造**逐点时间并去畸变，对一份本无运动畸变的快照点云施加伪畸变，**旋转时产生拖影/发散**。本项目用仅仿真补丁 `src/fast-lio2-patch/sim-only/disable-deskew-snapshot-lidar.patch` 关闭帧内去畸变来解决（**真实旋转式雷达扫描确有畸变、必须去畸变，故真实场景勿应用此补丁**）。
 >
-> **影响范围**：该漂移**只发生在 `imuPreintegration` 的实时预测层**。最终建图由 `mapOptimization` 的点云配准完成，**保存的地图不受影响、不会发散**，`/lio_sam/mapping/*` 的点云与 `velodyne_base_link` 帧均正常。因此此现象可以忽略（若想 RViz2 画面清爽，可关闭对应 TF 的显示）。
+> **根治方向**：修改 velodyne 仿真插件，使其在点云中额外输出逐点 `time` 字段 —— 改动较大，本项目暂未实现。
+
+> [!NOTE]
+> ### 限制二：机器人模型物理不稳定（竖向抖动）
+> **现象**：仿真启动约 1 分钟后（即使空闲不操作也会发生），四个轮子连同车体出现并逐渐加剧的**竖向抖动**（只上下抖、无左右抖）；爆发前可见车体内部轻微闪烁。
 >
-> **根治方向**：需修改 velodyne 仿真插件，使其在点云中额外输出逐点 `time` 字段，并在 LIO-SAM 中作相应配置 —— 改动较大，本项目暂未实现。
+> **根因**：`robot.sdf` 是 URDF 的粗转换产物，物理条件病态——转向连杆惯量仅 `1e-5`、前轮质量 `0.137 kg`（约为车体的 1/80）、底盘采用 STL **网格碰撞**、前转向关节**自由且零阻尼/零摩擦**。综合表现为**数值积分不稳定**（RTF 稳定、振幅随时间指数增长，故非算力问题）。
+>
+> **已排查无效的尝试**：调整接触 `max_vel`、加大前轮质量/惯量、移除底盘网格碰撞均无改善；把前转向关节锁为 `fixed` 会导致前轮倒车时飞出（进一步印证模型本身病态）。
+>
+> **影响范围**：抖动会污染 IMU，剧烈运动下定位/建图质量下降；**轻柔驾驶下 FAST-LIO / LIO-SAM 仍可正常工作，不阻断里程计与建图**。
+>
+> **根治方向**：重建/清理 robot 模型（合理的连杆质量与惯量、基元（box/cylinder）碰撞、带阻尼或直接固定的关节），或全局收紧物理求解器（减小 `max_step_size`，代价是 RTF 下降）。属独立任务，本项目暂未实现。
