@@ -11,3 +11,5 @@ src/LIO-SAM/*
 src/velodyne_simulator/*
 
 src/LIO-SAM-ros2/*
+
+src/small_gicp/*
