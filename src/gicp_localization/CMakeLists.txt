@@ -37,6 +37,41 @@ if(OpenMP_CXX_FOUND)
   target_link_libraries(gicp_localization_core OpenMP::OpenMP_CXX)
 endif()
 
+# 诊断实现：构建时二选一（主逻辑零开关）
+if(GICP_DIAGNOSTICS)
+  find_package(rosidl_default_generators REQUIRED)
+  find_package(builtin_interfaces REQUIRED)
+  rosidl_generate_interfaces(${PROJECT_NAME}
+    "msg/GicpDiagnostics.msg"
+    DEPENDENCIES builtin_interfaces
+  )
+  add_library(gicp_localization_diag src/diagnostics_real.cpp)
+  rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} rosidl_typesupport_cpp)
+  target_link_libraries(gicp_localization_diag ${cpp_typesupport_target})
+  target_compile_definitions(gicp_localization_diag PUBLIC GICP_DIAGNOSTICS)
+else()
+  add_library(gicp_localization_diag src/diagnostics_null.cpp)
+endif()
+target_include_directories(gicp_localization_diag PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+ament_target_dependencies(gicp_localization_diag rclcpp)
+
+add_executable(gicp_localization_node
+  src/gicp_localization_node.cpp
+  src/main.cpp
+)
+target_include_directories(gicp_localization_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+target_link_libraries(gicp_localization_node
+  gicp_localization_core
+  gicp_localization_diag
+)
+ament_target_dependencies(gicp_localization_node
+  rclcpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_eigen pcl_conversions)
+
+install(TARGETS gicp_localization_node DESTINATION lib/${PROJECT_NAME})
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_pose_math test/test_pose_math.cpp)

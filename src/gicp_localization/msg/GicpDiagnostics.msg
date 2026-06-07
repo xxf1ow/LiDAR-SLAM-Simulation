@@ -1,0 +1,10 @@
+builtin_interfaces/Time stamp
+float64 fitness
+float64 mean_residual
+uint32 num_inliers
+uint32 num_source
+int32 iterations
+bool converged
+float64 correction_delta_trans
+float64 correction_delta_rot
+bool accepted

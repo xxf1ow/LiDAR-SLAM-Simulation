@@ -1,0 +1,20 @@
+gicp_localization:
+  ros__parameters:
+    map_frame: "map"
+    odom_frame: "camera_init"
+    base_frame: "body"
+    cloud_topic: "/cloud_registered"
+    odom_topic: "/Odometry"
+    prior_map_path: "~/result/GlobalMap.pcd"
+    map_voxel_size: 0.4
+    scan_voxel_size: 0.1
+    localization_freq: 0.5
+    tf_pub_freq: 50.0
+    gicp_max_corr_dist: 1.0
+    gicp_num_neighbors: 20
+    gicp_num_threads: 4
+    gicp_max_iterations: 20
+    fitness_threshold: 0.8
+    min_scan_points: 100
+    initial_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    use_sim_time: true
