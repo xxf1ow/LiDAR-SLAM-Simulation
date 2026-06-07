@@ -16,5 +16,8 @@ gicp_localization:
     gicp_max_iterations: 20
     fitness_threshold: 0.8
     min_scan_points: 100
+    # 启动初值 = 机器人在 map 中的起始位姿 [x, y, z, yaw, pitch, roll]（米 / 弧度）。
+    # 本仿真从原点起步，map/camera_init 原点≈出生点 → 默认单位阵即可。
+    # 运行中可用 RViz「2D Pose Estimate」(/initialpose) 覆盖（该话题按 map→body 解释并自动换算）。
     initial_pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
     use_sim_time: true

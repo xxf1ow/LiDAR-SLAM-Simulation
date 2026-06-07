@@ -149,6 +149,7 @@ void GicpLocalizationNode::gicpTimerCb() {
   m.iterations = out.iterations;
   m.converged = out.converged;
   m.accepted = ok;
+  std::size_t rejected_snapshot = 0;
   {
     std::lock_guard<std::mutex> lk(mtx_);
     auto d = correctionDelta(T_map_odom_, out.T_map_odom);
@@ -157,12 +158,12 @@ void GicpLocalizationNode::gicpTimerCb() {
     if (ok) {
       T_map_odom_ = out.T_map_odom;
     } else {
-      ++rejected_;
+      rejected_snapshot = ++rejected_;
     }
   }
   if (!ok) {
     RCLCPP_WARN(get_logger(), "配准被拒 fitness=%.3f converged=%d (累计 %zu)",
-                out.fitness, out.converged, rejected_);
+                out.fitness, out.converged, rejected_snapshot);
   }
   diag_->report(m);
 }
