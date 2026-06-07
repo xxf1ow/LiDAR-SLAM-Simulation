@@ -189,11 +189,16 @@ ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap "{resolution: 0.1, desti
 # 1. 安装 perception_pcl 依赖库
 sudo apt install ros-${ROS_DISTRO}-perception-pcl
 
-# 2. 克隆 FAST_LIO2 并应用补丁
+# 2. 克隆 FAST_LIO2
 git clone https://github.com/hku-mars/FAST_LIO.git -b ROS2 --single-branch --depth 1 --filter=blob:none
 cd FAST_LIO
 git fetch origin a4743b095409588842a5b30ddfa27e29d2f99164 --depth 1
 git checkout a4743b095409588842a5b30ddfa27e29d2f99164
+
+# 3. 拉取 ikd-Tree 子模块
+git submodule update --init --recursive
+
+# 4. 应用补丁
 # 应用补丁: 仿真配置 + (仅仿真) 关闭快照点云去畸变
 git apply ../fast-lio2-patch/01-add-gazebo-velodyne-config.patch
 git apply ../fast-lio2-patch/sim-only/disable-deskew-snapshot-lidar.patch
@@ -201,6 +206,12 @@ cd ..
 
 # 注: 消息桩包 livox_ros_driver2 (src/livox_ros_driver2) 已随仓库提供，仅用于满足
 #     FAST-LIO 的编译期依赖 (velodyne-only 场景无需安装 Livox-SDK)。
+
+
+# 5. 克隆 small_gicp
+export GIT_LFS_SKIP_SMUDGE=1    # linux (跳过 LFS 文件下载)
+$env:GIT_LFS_SKIP_SMUDGE=1	    # Windows PowerShell (跳过 LFS 文件下载)
+git clone https://github.com/koide3/small_gicp.git --depth 1 --filter=blob:none
 ```
 
 ### 编译运行
@@ -232,6 +243,59 @@ ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim
 - **建图质量**：RViz2（Fixed Frame = `camera_init`）给 `/cloud_registered` 显示项设较大 `Decay Time` 后，累积点云**单层、不重影、不发散**；`/Odometry` 轨迹形状正确、绕圈回到起点附近。
 - **旋转无拖影**：原地转圈不再产生拖影/发散（依赖已应用仅仿真去畸变补丁 `disable-deskew-snapshot-lidar.patch`）。
 - **漂移有界**：长时间缓慢漂移可接受，但**无突跳、不发散**。
+
+---
+
+## 定位增强 GICP（small_gicp）
+
+> [!NOTE]
+> 阶段 2：在 LIO-SAM 先验地图中用 GICP 校正 FAST-LIO2 里程计漂移（A 模式，手动初值）。需先用 LIO-SAM 的 `save_map` 生成先验地图 PCD（`~/result`）。
+
+### 准备项目文件
+
+```bash
+# 1. 安装依赖 (OpenMP；Eigen/PCL 随 ROS-desktop / perception-pcl 已装)
+sudo apt install libomp-dev
+
+# 2. 手动克隆 small_gicp 到 src/small_gicp 并 pin 提交 (跳过 LFS 大文件不影响编译)
+GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/koide3/small_gicp.git --depth 1 --filter=blob:none
+# (可选) pin 到已验证提交: cd small_gicp && git fetch origin <SHA> --depth 1 && git checkout <SHA> && cd ..
+```
+
+### 编译运行
+
+```bash
+# 1. 编译 (定位节点依赖 small_gicp，colcon 自动先建 small_gicp)
+cd src
+colcon build --packages-up-to gicp_localization
+# 调试带诊断话题:
+# colcon build --packages-up-to gicp_localization --cmake-args -DGICP_DIAGNOSTICS=ON
+
+# 2. 终端一: Gazebo
+ros2 launch robot_gazebo robot_sim.launch.py
+
+# 3. 终端二: FAST-LIO2 里程计
+ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true
+
+# 4. 终端三: GICP 定位 (先验地图路径按实际)
+ros2 launch gicp_localization localization.launch.py prior_map_path:=~/result/GlobalMap.pcd
+```
+
+### 验收标准
+
+> [!NOTE]
+> 阶段 2 验收：A（漂移钉住）为硬标准，C（可量化诊断）为硬标准。RViz Fixed Frame 设 `map`。
+
+- **编译**：默认 `colcon build --packages-up-to gicp_localization` 通过；`-DGICP_DIAGNOSTICS=ON` 也通过。
+- **A 漂移钉住**：RViz Fixed=`map`，叠加先验地图与 `/cloud_registered`；给初值后当前帧云**持续贴合先验地图、不随时间漂走**，绕场一圈回原点仍对齐。
+- **C 可量化**：`-DGICP_DIAGNOSTICS=ON` 构建下 `ros2 topic echo /gicp_localization/diagnostics` 或 `rqt_plot` 看到 `fitness`（≳0.8）稳定、`correction_delta_*` 有界；与阶段 1 纯里程计对比漂移改善。
+- **扰动恢复（演示）**：对小车施加温和撞击/连续偏移（Gazebo `apply_wrench` 或缓推），定位应自动跟住、不丢。
+
+### 已知限制（GICP 定位）
+
+- **velodyne16 单帧稀疏**：单帧 GICP 若不稳，退路是用里程计攒最近 N 帧成局部子图再配（本阶段未实现）。
+- **硬"绑架"不自动恢复**：温和/连续偏移能自动跟住；瞬间大幅 teleport 或偏移超出 GICP 收敛域（约 > `gicp_max_corr_dist≈1m` / 大角度）时**单帧 GICP 局部配准无法恢复**，需在 RViz 重给 `/initialpose`；全自动全局重定位属后续阶段（Quatro 前端）。
+- **非严格时间同步**：50Hz 融合用校正与里程计各自最新值。
 
 ---
 
