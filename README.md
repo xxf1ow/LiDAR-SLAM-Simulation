@@ -268,6 +268,7 @@ cd src
 colcon build --packages-up-to gicp_localization
 # 调试带诊断话题:
 # colcon build --packages-up-to gicp_localization --cmake-args -DGICP_DIAGNOSTICS=ON
+# colcon build --packages-select gicp_localization --cmake-args -DGICP_DIAGNOSTICS=ON
 
 # 2. 终端一: Gazebo
 ros2 launch robot_gazebo robot_sim.launch.py
@@ -276,7 +277,35 @@ ros2 launch robot_gazebo robot_sim.launch.py
 ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true
 
 # 4. 终端三: GICP 定位 (先验地图路径按实际)
+cd LiDAR-SLAM-Simulation/src
+source install/setup.bash
 ros2 launch gicp_localization localization.launch.py prior_map_path:=~/result/GlobalMap.pcd
+
+# 5. 终端四：查看 GICP 日志打印
+cd LiDAR-SLAM-Simulation/src
+source install/setup.bash
+ros2 topic echo /gicp_localization/diagnostics
+
+# 6. Rviz2 使用手册
+#    - 左下 Global Options → Fixed Frame 改成 map。
+#    - 左下 Add → By topic → /gicp_localization/prior_map 的 PointCloud2 → OK。
+#    - 把 /gicp_localization/prior_map 的 PointCloud2 的 Topic → Durability Policy 改成 Transient Local（否则订阅不到 latched 的地图）。 颜色建议设成灰/白（Color Transformer = FlatColor）。
+#    - 左下 Add → By topic → /cloud_registered 的 PointCloud2。 把它的 Decay Time 设大（如 0 表示一直留；或 5）、颜色设成醒目色（按 intensity 或 红）。
+#    - 现在画面里：灰色=先验地图，彩色=当前帧云。 A 达标 = 开车时彩色云始终贴在灰色地图上、不漂走。
+#    - 设置初始位姿 `/initialpose` 就是顶部工具栏的「2D Pose Estimate」按钮（不是单独叫 initialpose）。点它 → 在地图上按住左键点机器人应在的位置、拖动定朝向、松开，就发出 /initialpose。默认话题即 /initialpose（菜单 Panels → Tool Properties 里可确认 "2D Pose Estimate" 的 Topic）。
+
+# 7. 模拟撞击机器人
+#    - 先看仿真提供了哪些服务：
+#        - ros2 service list | grep -iE "wrench|entity|state"
+#    - 温和撞击 / 连续推移（演示阶段 2 正向能力——能自动跟住）：对车体施加一个短促的力。
+#        - 若有 /apply_link_wrench（gazebo_msgs/ApplyLinkWrench）：
+#        - ros2 service call /apply_link_wrench gazebo_msgs/srv/ApplyLinkWrench "{link_name: 'base_link', wrench: {force: {x: 300.0, y: 0.0, z: 0.0}}, start_time: {sec: 0, nanosec: 0}, duration: {sec: 1, nanosec: 0}}"
+#        - link_name 若报找不到，换成全限定名，如 机器人模型名::base_link；力大小按车重微调。
+#    - 硬"绑架"（演示能力边界——阶段 2 不自动恢复、需重给 /initialpose）：直接瞬移。
+#        - 若有 /set_entity_state（gazebo_msgs/SetEntityState）：
+#        - ros2 service call /set_entity_state gazebo_msgs/srv/SetEntityState "{state: {name: '机器人模型名', pose: {position: {x: 3.0, y: 2.0, z: 0.1}}}}"
+#        - 服务名/模型名按 ros2 service list 与 ros2 topic echo /... 实测为准——不同 Gazebo（Classic 11 / Fortress）插件不一样。
+#    - 核心 A 验收其实只要开车看贴合即可，撞击是加分演示。
 ```
 
 ### 验收标准

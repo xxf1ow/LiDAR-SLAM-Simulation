@@ -14,7 +14,8 @@ gicp_localization:
     gicp_num_neighbors: 20
     gicp_num_threads: 4
     gicp_max_iterations: 20
-    fitness_threshold: 0.8
+    # 0.9: 实测正确锁定 fitness≈1.0, 而 90° 旋转假解 fitness≈0.8 -> 0.9 可拒假解
+    fitness_threshold: 0.9
     min_scan_points: 100
     # 启动初值 = 机器人在 map 中的起始位姿 [x, y, z, yaw, pitch, roll]（米 / 弧度）。
     # 本仿真从原点起步，map/camera_init 原点≈出生点 → 默认单位阵即可。
