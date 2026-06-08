@@ -311,17 +311,19 @@ ros2 topic echo /gicp_localization/diagnostics
 ### 验收标准
 
 > [!NOTE]
-> 阶段 2 验收：A（漂移钉住）为硬标准，C（可量化诊断）为硬标准。RViz Fixed Frame 设 `map`。
+> 阶段 2 为 A 模式（手动初值的纯位姿跟踪）。本仿真特征丰富、FAST-LIO 受 LiDAR 扫描匹配强约束而**近乎无漂移**（见已知限制），故 A 验收**不以"纠正累积漂移"为判据**，改以"正确锁定 + 稳定跟踪 + 小偏差拉回"验证 GICP 定位有效；C（可量化诊断）为硬标准。RViz Fixed Frame 设 `map`。
 
 - **编译**：默认 `colcon build --packages-up-to gicp_localization` 通过；`-DGICP_DIAGNOSTICS=ON` 也通过。
-- **A 漂移钉住**：RViz Fixed=`map`，叠加先验地图与 `/cloud_registered`；给初值后当前帧云**持续贴合先验地图、不随时间漂走**，绕场一圈回原点仍对齐。
-- **C 可量化**：`-DGICP_DIAGNOSTICS=ON` 构建下 `ros2 topic echo /gicp_localization/diagnostics` 或 `rqt_plot` 看到 `fitness`（≳0.8）稳定、`correction_delta_*` 有界；与阶段 1 纯里程计对比漂移改善。
-- **扰动恢复（演示）**：对小车施加温和撞击/连续偏移（Gazebo `apply_wrench` 或缓推），定位应自动跟住、不丢。
+- **A 正确锁定与跟踪**：RViz Fixed=`map`，叠 `/gicp_localization/prior_map`(Durability=Transient Local) 与 `/cloud_registered`；用「2D Pose Estimate」给正确初值后当前帧云**贴合先验地图**，开车/绕场全程**持续贴合、不重影**。实测正确锁定 `fitness≈1.0`、`mean_residual≈0.05`、`iterations`1–2、`correction_delta_*` 小而稳。
+- **A 收敛拉回**：故意给一个**小偏差初值**（约 20–30cm / 10–20°），GICP 应在 1–2 周期内把点云**拉回贴合**（`fitness→1.0`）。
+- **C 可量化**：`-DGICP_DIAGNOSTICS=ON` 下 `ros2 topic echo /gicp_localization/diagnostics`，看到锁定时 `fitness≈1.0`、`accepted: true`、`mean_residual≈0.05`、`correction_delta_*` 有界、`iterations`1–2 —— 即配准质量的量化证据。
 
 ### 已知限制（GICP 定位）
 
+- **本仿真无可演示的漂移**：特征丰富的工厂环境下 FAST-LIO 受 LiDAR 扫描匹配强约束、近乎无漂移；即使把 IMU 噪声调到极大也诱发不出漂移（LiDAR 几何约束会把 IMU 误差纠回）。故 GICP "纠正累积里程计漂移" 的收益在本仿真里**无法直观演示**——属仿真环境性质、非 GICP 缺陷；真实/退化场景（长走廊、空旷无特征）下漂移才会显现。
+- **大偏差不自动恢复 + 环境伪对称假解**：GICP 为局部配准，初值偏差超出收敛域（约 > `gicp_max_corr_dist≈1m` / 大角度）无法恢复；且工厂存在 **90° 旋转伪对称**，会形成 `fitness≈0.8` 的强假解。`fitness_threshold` 默认 **0.9** 即用于拒绝该假解（正确锁定 `fitness≈1.0`）。全自动从任意位姿恢复属阶段 3 全局重定位（Quatro 前端）。
+- **bootstrap 需正确初值**：须在机器人实际所在的 map 位姿附近给 `/initialpose`（或在出生点即时启动定位节点）；启动太晚、机器人已驶离初值处，会导致首次配准 0 对应点（`fitness=0`）。
 - **velodyne16 单帧稀疏**：单帧 GICP 若不稳，退路是用里程计攒最近 N 帧成局部子图再配（本阶段未实现）。
-- **硬"绑架"不自动恢复**：温和/连续偏移能自动跟住；瞬间大幅 teleport 或偏移超出 GICP 收敛域（约 > `gicp_max_corr_dist≈1m` / 大角度）时**单帧 GICP 局部配准无法恢复**，需在 RViz 重给 `/initialpose`；全自动全局重定位属后续阶段（Quatro 前端）。
 - **非严格时间同步**：50Hz 融合用校正与里程计各自最新值。
 
 ---
