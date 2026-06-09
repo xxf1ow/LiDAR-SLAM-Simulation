@@ -67,14 +67,14 @@ def generate_launch_description():
         Node(
             package='nav2_costmap_2d', executable='nav2_costmap_2d',
             name='global_costmap', namespace='global_costmap',
-            output='screen', parameters=[params_file],
+            output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
         ),
 
         # 4) local costmap（standalone，camera_init 系，3D voxel 点云层）
         Node(
             package='nav2_costmap_2d', executable='nav2_costmap_2d',
             name='local_costmap', namespace='local_costmap',
-            output='screen', parameters=[params_file],
+            output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
         ),
 
         # 5) lifecycle_manager：autostart 把上面三个生命周期节点 configure→activate
