@@ -350,3 +350,67 @@ ros2 topic echo /gicp_localization/diagnostics
 > **影响范围**：抖动会污染 IMU，剧烈运动下定位/建图质量下降；**轻柔驾驶下 FAST-LIO / LIO-SAM 仍可正常工作，不阻断里程计与建图**。
 >
 > **根治方向**：重建/清理 robot 模型（合理的连杆质量与惯量、基元（box/cylinder）碰撞、带阻尼或直接固定的关节），或全局收紧物理求解器（减小 `max_step_size`，代价是 RTF 下降）。属独立任务，本项目暂未实现。
+
+## nav2 导航（阶段一：打通链路 + costmap）
+
+阶段一只验证「TF 单树 + 2D 先验图 + 3D 点云 costmap」，**不起 planner/controller、不发目标**。
+压在完整现有栈之上（robot_sim + FAST-LIO + gicp_localization）。
+
+### A. 离线生成 2D 占据栅格（build 机，需 open3d；产物不进 git）
+
+```bash
+pip install open3d
+python src/robot_navigation/tools/pcd_to_occupancy.py \
+  --pcd ~/result/GlobalMap.pcd --out ~/result/map.yaml \
+  --resolution 0.05 --z-min 0.2 --z-max 1.5 --min-pts 2
+# 看 RViz 里 /map 效果调 z-min/z-max/min-pts/resolution
+```
+
+### B. 应用 robot_gazebo 补丁 + 编译
+
+```bash
+# robot_gazebo 是 clone 上游，use_teleop 开关以补丁交付（导航时屏蔽手动控制）
+cd src/robot_gazebo && git apply ../robot_gazebo-patch/01-add-use-teleop-switch.patch && cd ..
+# 编译本包（robot_navigation 是纯资源包）
+colcon build --packages-select robot_navigation
+source install/setup.bash
+```
+
+### C. 校正 body→base_footprint 静态变换（关键）
+
+launch 默认 `tf_z=-0.297322, tf_pitch=π`（按 URDF base_link→imu_link 推算的暂定值）。
+全栈起来后用 tf2_echo 实测核正：
+
+```bash
+# 读 URDF 真实 base_footprint→imu_link（robot_state_publisher 已发布）
+ros2 run tf2_ros tf2_echo base_footprint imu_link
+# 确认 FAST-LIO 的 body 是否与 imu_link 重合（位姿应一致）
+ros2 run tf2_ros tf2_echo camera_init body
+```
+
+若实测值与默认不符，启动时用 `tf_x/tf_y/tf_z/tf_roll/tf_pitch/tf_yaw` 覆盖（值 = base_footprint→body 变换的逆）。
+
+### D. 运行（四个终端，每个先 `cd src && source install/setup.bash`）
+
+```bash
+ros2 launch robot_gazebo robot_sim.launch.py
+ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true
+ros2 launch gicp_localization localization.launch.py prior_map_path:=~/result/GlobalMap.pcd
+ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml
+```
+
+### E. 验收
+
+```bash
+ros2 run tf2_tools view_frames     # 应是一棵根在 map 的树，base_footprint 经 body 连到 camera_init/map，无悬空岛
+ros2 node list                     # 确认 map_server / global_costmap / local_costmap 节点全名（核对 lifecycle node_names）
+ros2 topic echo /map --once        # map_server 发布 2D 先验图
+ros2 topic hz /local_costmap/costmap
+```
+
+RViz（stage1.rviz）应看到：2D 先验图（/map）；global/local costmap；local costmap 在真实障碍处出现 voxel 标记、障碍移开后清除、地面被滤掉。
+
+### F. 可配置切换（验证可配置性）
+
+- 切障碍源：改 `config/nav2_costmaps.yaml` 的 `local_costmap.voxel_layer.pointcloud.topic`（`/points_raw`↔`/cloud_registered`），重启 launch。
+- 切 STVL：`sudo apt install ros-humble-spatio-temporal-voxel-layer`，把 local_costmap 的 `voxel_layer` 块换成 STVL 插件块（`spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer`），改 `plugins` 列表，重启。
