@@ -21,6 +21,7 @@ global_costmap:
       track_unknown_space: true
       footprint: "[ [0.45, 0.28], [0.45, -0.28], [-0.45, -0.28], [-0.45, 0.28] ]"
       resolution: 0.05
+      # 仅静态先验图 + 膨胀（spec §13 故意不加实时障碍层；动态障碍交给 local costmap）
       plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
@@ -57,15 +58,16 @@ local_costmap:
         observation_sources: pointcloud
         pointcloud:
           topic: /points_raw            # 默认原始 velodyne 系云（光迹清除原点正确）
+          sensor_frame: "velodyne"      # 显式指定传感器系，供光迹清除取原点
           data_type: "PointCloud2"
           marking: true
           clearing: true
           min_obstacle_height: 0.1      # 滤地面（build 机按雷达离地高度调）
           max_obstacle_height: 2.0
           obstacle_max_range: 20.0
-          obstacle_min_range: 0.0
+          obstacle_min_range: 0.9       # 匹配 VLP-16 min_range=0.9，避免近距盲区误清/误标
           raytrace_max_range: 25.0
-          raytrace_min_range: 0.0
+          raytrace_min_range: 0.9       # 同上：不在 <0.9m 盲锥内光迹清除
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
