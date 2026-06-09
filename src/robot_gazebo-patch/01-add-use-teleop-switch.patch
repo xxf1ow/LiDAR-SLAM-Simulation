@@ -1,0 +1,48 @@
+# Purpose: robot_sim.launch.py 新增 use_teleop 开关；导航时置 false 屏蔽手动遥控
+#          (nav2 独占 /cmd_vel，避免 teleop_twist_keyboard 与导航抢 /cmd_vel)。
+#          独立跑仿真默认 use_teleop:=true，行为不变。
+# Base:    robot_gazebo (clone，见 README 钉版本)
+# Apply:   cd src/robot_gazebo && git apply ../robot_gazebo-patch/01-add-use-teleop-switch.patch
+# File:    launch/robot_sim.launch.py (1 处：加 DeclareLaunchArgument + IfCondition 包裹 teleop 节点)
+#
+diff --git a/launch/robot_sim.launch.py b/launch/robot_sim.launch.py
+index 052ff1e..b4e3688 100644
+--- a/launch/robot_sim.launch.py
++++ b/launch/robot_sim.launch.py
+@@ -4,13 +4,15 @@ import os
+
+ from ament_index_python.packages import get_package_share_directory
+ from launch import LaunchDescription
+-from launch.actions import IncludeLaunchDescription, ExecuteProcess
++from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
++from launch.conditions import IfCondition
+ from launch.launch_description_sources import PythonLaunchDescriptionSource
+ from launch.substitutions import LaunchConfiguration
+ from launch_ros.actions import Node
+
+ def generate_launch_description():
+     use_sim_time = LaunchConfiguration('use_sim_time', default='true')
++    use_teleop = LaunchConfiguration('use_teleop')
+     world_file_name = 'lio_world.model'
+     world = os.path.join(get_package_share_directory('robot_gazebo'),'worlds', world_file_name)
+     launch_file_dir = os.path.join(get_package_share_directory('robot_gazebo'), 'launch')
+@@ -18,6 +20,10 @@ def generate_launch_description():
+     pkg_cart_pole_control = get_package_share_directory('robot_control')
+
+     return LaunchDescription([
++        DeclareLaunchArgument(
++            'use_teleop', default_value='true',
++            description='起键盘遥控。导航时置 false 以屏蔽手动控制（nav2 独占 /cmd_vel）。'),
++
+         IncludeLaunchDescription(
+             PythonLaunchDescriptionSource(
+                 os.path.join(pkg_gazebo_ros, 'launch', 'gzserver.launch.py')
+@@ -47,6 +53,7 @@ def generate_launch_description():
+             executable='teleop_twist_keyboard',
+             output='screen',
+             prefix='xterm -e',
+-            name='teleop_keyboard'
++            name='teleop_keyboard',
++            condition=IfCondition(use_teleop),
+         ),
+     ])
