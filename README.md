@@ -369,8 +369,9 @@ python src/robot_navigation/tools/pcd_to_occupancy.py \
 ### B. 应用 robot_gazebo 补丁 + 编译
 
 ```bash
+cd src    # colcon 工作区根（后续命令都在此执行）
 # robot_gazebo 是 clone 上游，use_teleop 开关以补丁交付（导航时屏蔽手动控制）
-cd src/robot_gazebo && git apply ../robot_gazebo-patch/01-add-use-teleop-switch.patch && cd ..
+(cd robot_gazebo && git apply ../robot_gazebo-patch/01-add-use-teleop-switch.patch)
 # 编译本包（robot_navigation 是纯资源包）
 colcon build --packages-select robot_navigation
 source install/setup.bash
