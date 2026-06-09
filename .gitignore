@@ -16,4 +16,3 @@ src/small_gicp/*
 
 # nav2 离线生成的 2D 占据栅格产物（按约定不进 git，用工具在 build 机生成）
 src/robot_navigation/maps/
-*.pgm
