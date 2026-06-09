@@ -32,7 +32,10 @@ def generate_launch_description():
     tf_pitch = LaunchConfiguration('tf_pitch')
     tf_yaw = LaunchConfiguration('tf_yaw')
 
-    lifecycle_nodes = ['map_server', 'global_costmap', 'local_costmap']
+    # 命名空间节点的 lifecycle 名须含命名空间前缀（FQN /global_costmap/global_costmap）；
+    # 否则 lifecycle_manager 找不到 get_state 服务、节点停在 unconfigured。
+    # 若 build 机上 standalone nav2_costmap_2d 的实际节点全名不同，按 `ros2 node list` 调整。
+    lifecycle_nodes = ['map_server', 'global_costmap/global_costmap', 'local_costmap/local_costmap']
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
