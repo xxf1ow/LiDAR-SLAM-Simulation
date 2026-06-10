@@ -1,4 +1,4 @@
-# nav2 阶段一 costmap 参数 —— 仅验证 costmap，不含 planner/controller。
+# nav2 阶段一 costmap 参数 —— planner_server(托管 global_costmap) / controller_server(托管 local_costmap)。
 # 可配置原则（spec §2）：障碍层插件 / 障碍源话题 / 高度阈值都在本文件，切换不改代码。
 #   - 切障碍源：改 local_costmap.voxel_layer.pointcloud.topic（默认 /points_raw，可改 /cloud_registered）
 #   - 切 STVL：把 plugins 的 voxel_layer 换成 spatio_temporal_voxel_layer 插件块（见 README 备选块），并 apt 装包
@@ -21,7 +21,7 @@ global_costmap:
       track_unknown_space: true
       footprint: "[ [0.45, 0.28], [0.45, -0.28], [-0.45, -0.28], [-0.45, 0.28] ]"
       resolution: 0.05
-      # 仅静态先验图 + 膨胀（spec §13 故意不加实时障碍层；动态障碍交给 local costmap）
+      # 仅静态先验图 + 膨胀（故意不加实时障碍层；动态障碍交给 local costmap）
       plugins: ["static_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"

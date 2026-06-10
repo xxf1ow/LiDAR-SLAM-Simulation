@@ -407,7 +407,7 @@ ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml
 - `ros2 run tf2_tools view_frames`：一棵根在 `map` 的 TF 树，`base_footprint` 经 `body` 连到 `camera_init`/`map`，无悬空岛。
 - `ros2 node list`：可见 `/map_server`、`/planner_server`、`/controller_server`、`/global_costmap/global_costmap`、`/local_costmap/local_costmap`，无重名警告。
 - `ros2 lifecycle get /planner_server`、`/controller_server`、`/map_server` 均为 `active`。
-- `ros2 topic echo /map --once` 有数据；RViz 正确显示 2D 先验图（`/global_costmap/costmap`）。
+- `ros2 topic echo /map --once` 有数据；`ros2 topic hz /global_costmap/costmap` 有输出；RViz 正确显示 2D 先验图。
 - `ros2 topic hz /local_costmap/costmap` 有输出；手动 teleop 驱动机器人，local costmap 在真实障碍上标记体素、障碍移开能清除、地面被滤掉。
 - 切 `voxel_layer`↔STVL、切障碍源话题，只改 `config/nav2_costmaps.yaml` 即生效。
 - 全过程机器人不自主移动（无目标点 / 无 BT）。
