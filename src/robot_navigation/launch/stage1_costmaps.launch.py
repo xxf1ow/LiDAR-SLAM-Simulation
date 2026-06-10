@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""nav2 阶段一：把两座 TF 岛焊成单树 + 起 map_server 与 global/local 两张 costmap。
+"""nav2 阶段一：把两座 TF 岛焊成单树 + 起 map_server / planner_server / controller_server。
 
-依赖完整现有栈已运行（robot_sim + fast_lio + gicp_localization），否则 TF 有断边。
-不起 planner/controller（阶段二）。
+costmap 由 planner_server(global_costmap) 与 controller_server(local_costmap) 托管
+(nav2 官方架构；standalone nav2_costmap_2d 会撞名 /costmap/costmap、不可用)。
+不起 bt_navigator/behavior、不发目标点 —— 两个服务器空转、不发 cmd_vel、机器人不动。
+依赖完整现有栈已运行(robot_sim + fast_lio + gicp_localization)，否则 TF 有断边。
 """
 import os
 
@@ -23,8 +25,7 @@ def generate_launch_description():
     map_yaml = LaunchConfiguration('map')
     use_rviz = LaunchConfiguration('use_rviz')
 
-    # body->base_footprint 静态焊接：URDF 推算暂定值（base_link→imu_link 的逆），
-    # 务必 build 机 tf2_echo 核正（见 plan Task 7）。
+    # body->base_footprint 静态焊接：URDF 推算暂定值，build 机 tf2_echo 核正。
     tf_x = LaunchConfiguration('tf_x')
     tf_y = LaunchConfiguration('tf_y')
     tf_z = LaunchConfiguration('tf_z')
@@ -32,14 +33,14 @@ def generate_launch_description():
     tf_pitch = LaunchConfiguration('tf_pitch')
     tf_yaw = LaunchConfiguration('tf_yaw')
 
-    # 命名空间节点的 lifecycle 名须含命名空间前缀（FQN /global_costmap/global_costmap）；
-    # 否则 lifecycle_manager 找不到 get_state 服务、节点停在 unconfigured。
-    # 若 build 机上 standalone nav2_costmap_2d 的实际节点全名不同，按 `ros2 node list` 调整。
-    lifecycle_nodes = ['map_server', 'global_costmap/global_costmap', 'local_costmap/local_costmap']
+    # costmap 由服务器托管：global_costmap 在 planner_server、local_costmap 在 controller_server
+    # (源码：planner_server.cpp/controller_server.cpp 各 new Costmap2DROS("global_costmap"/"local_costmap"))。
+    # lifecycle_manager 管这三个【服务器】，costmap 作为子节点随服务器转生命周期。
+    lifecycle_nodes = ['map_server', 'planner_server', 'controller_server']
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument('map', description='2D 占据栅格 .yaml 路径（pcd_to_occupancy 生成）'),
+        DeclareLaunchArgument('map', description='2D 占据栅格 .yaml 路径(pcd_to_occupancy 生成)'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
         DeclareLaunchArgument('tf_x', default_value='0.0'),
         DeclareLaunchArgument('tf_y', default_value='0.0'),
@@ -59,28 +60,26 @@ def generate_launch_description():
             ],
         ),
 
-        # 2) map_server：发 2D 先验图（latched）
+        # 2) map_server：发 2D 先验图(latched)
         Node(
             package='nav2_map_server', executable='map_server', name='map_server',
             output='screen',
             parameters=[params_file, {'use_sim_time': use_sim_time, 'yaml_filename': map_yaml}],
         ),
 
-        # 3) global costmap（standalone，map 系）
+        # 3) planner_server：托管 global_costmap(map 系，static 先验图 + 膨胀)
         Node(
-            package='nav2_costmap_2d', executable='nav2_costmap_2d',
-            name='global_costmap', namespace='global_costmap',
+            package='nav2_planner', executable='planner_server', name='planner_server',
             output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
         ),
 
-        # 4) local costmap（standalone，camera_init 系，3D voxel 点云层）
+        # 4) controller_server：托管 local_costmap(camera_init 系，3D voxel 点云层 + 膨胀)
         Node(
-            package='nav2_costmap_2d', executable='nav2_costmap_2d',
-            name='local_costmap', namespace='local_costmap',
+            package='nav2_controller', executable='controller_server', name='controller_server',
             output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
         ),
 
-        # 5) lifecycle_manager：autostart 把上面三个生命周期节点 configure→activate
+        # 5) lifecycle_manager：autostart 把上面三个服务器 configure->activate
         Node(
             package='nav2_lifecycle_manager', executable='lifecycle_manager',
             name='lifecycle_manager_costmaps', output='screen',
