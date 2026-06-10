@@ -451,3 +451,72 @@ ros2 run tf2_ros tf2_echo imu_link body
   ```
   STVL 的清除模型项（`voxel_decay` / `decay_acceleration` / FOV）为经验值，按清除快慢在该文件里调。
 - **切障碍源话题**：改所用 params 文件里 `local_costmap → local_costmap` 障碍层的 `topic`（`/points_raw` ↔ `/cloud_registered`），重启终端四。
+
+## nav2 导航（阶段二：完整自主导航）
+
+阶段二在阶段一之上加 `behavior_server` + `bt_navigator` + `waypoint_follower`，机器人可从
+RViz 发目标自主导航：单点（NavigateToPose）、穿点不停（NavigateThroughPoses）、逐点停靠（FollowWaypoints）。
+
+> **odom 速度源**：bt_navigator/controller_server 的 `odom_topic=/odom`（diff_drive 真实 twist）；
+> FAST-LIO `/Odometry` 的 twist 恒为零，只用于 TF pose。pose 一律走 TF `map→base_footprint`。
+
+### 准备
+
+阶段二需 nav2 导航包，编译前在 build 机装齐：
+
+```bash
+sudo apt install ros-humble-nav2-bt-navigator ros-humble-nav2-behaviors \
+  ros-humble-nav2-waypoint-follower ros-humble-nav2-rviz-plugins
+```
+
+`robot_gazebo` 须已 apply use_teleop 开关补丁（导航时关 teleop，避免抢 /cmd_vel）：
+
+```bash
+cd src/robot_gazebo && git apply ../robot_gazebo-patch/01-add-use-teleop-switch.patch
+```
+
+### 编译运行
+
+```bash
+cd src && colcon build --packages-select robot_navigation && source install/setup.bash
+```
+
+**一键启动（单终端）**：
+
+```bash
+ros2 launch robot_navigation bringup_all.launch.py \
+  prior_map_path:=~/result/GlobalMap.pcd map:=~/result/<2D图>.yaml
+```
+
+错峰默认 sim→5s→FAST-LIO→8s→GICP→12s→nav2；机器慢可加 `delay_lio:=/delay_gicp:=/delay_nav:=` 调大。
+
+**四终端（调试用，每个 `cd src && source install/setup.bash`）**：
+
+```bash
+ros2 launch robot_gazebo robot_sim.launch.py use_teleop:=false
+ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true rviz:=false
+ros2 launch gicp_localization localization.launch.py prior_map_path:=~/result/GlobalMap.pcd
+ros2 launch robot_navigation stage2_navigation.launch.py map:=~/result/<2D图>.yaml
+```
+
+### 验收
+
+1. **先 bootstrap 定位**（工厂 90° 伪对称有 fitness≈0.8 假极小）：RViz `2D Pose Estimate`
+   点在机器人真实位姿附近 → GICP 锁定（fitness≥0.9）、机器人贴合先验图。
+2. **单目标**：`Nav2 Goal` 点可达点 → 全局路径（map 系）出现、机器人跟踪、绕静态障碍、
+   到达后在 `xy_goal_tolerance`(0.25) 内停。
+3. **恢复行为**：让机器人卡住 → progress_checker 超时触发 spin/backup/wait。
+4. **穿点**：Navigation 2 面板切 "Nav Through Poses"，连点多点 → 不停顿掠过。
+5. **逐点停靠**：面板切 "Waypoint" 模式，连点 → 逐点停（每点停 `waypoint_pause_duration`/1000 秒）。
+
+**客观检查**：
+- `ros2 action list` 见 `/navigate_to_pose`、`/navigate_through_poses`、`/follow_waypoints`。
+- 6 节点 `ros2 lifecycle get /<node>` 均 `active`。
+- 导航中 `ros2 topic echo /cmd_vel` 非零；`ros2 topic hz /plan` 有输出。
+
+### 调参（全在 params，不改码）
+
+- ⚠️ **速度**：DWB `max_vel_x=0.26`（TB3 级）对 `wheel_separation=0.66` 的大车偏慢，
+  在 `nav2_costmaps.yaml` 的 FollowPath 块按实测调（速度/加速度上限）。
+- footprint、`inflation_radius`、goal tolerance、`behavior_server` 旋转速度按实测模型核。
+- 抖动模型（病态 robot.sdf）→ 速度别给太猛。
