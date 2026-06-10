@@ -397,7 +397,9 @@ FAST-LIO 的 `body` 帧和机器人 URDF 的 `base_footprint` 分属两棵互不
 ros2 run tf2_ros tf2_echo imu_link base_footprint
 ```
 把它打印的 `Translation: [x, y, z]` 与 `RPY (radian): [roll, pitch, yaw]` **原样**填入 launch 的 `tf_x tf_y tf_z tf_roll tf_pitch tf_yaw`（同一旋转的 RPY 表示可能不唯一，原样填即正确）。
-本模型实测约 `Translation [0, 0, -0.297]`、旋转为绕 Y 轴 180°——launch 默认 `tf_z=-0.297322, tf_pitch=3.14159274` 即等价于此。**机器人模型没改过，就直接用默认，跳过覆盖。**
+本模型实测约 `Translation [0, 0, -0.297]`、旋转为绕 Y 轴 180°（RPY `[π, 0, π]`）——launch 默认 `tf_z=-0.297322, tf_pitch=3.14159274` 即等价于此。**机器人模型没改过，就直接用默认，跳过覆盖。**
+
+> 启动瞬间若打印一行 `[INFO] ... Waiting for transform ... Invalid frame ID "imu_link" ... frame does not exist`，是 tf2_echo 监听器尚未收到 latched 静态 TF 的一次性竞态（INFO 非 ERROR），紧接着就会正常打出变换，**不是错误**。结果显示 `At time 0.0` 也正常（静态 TF 时间戳恒为 0）。
 
 **3. 四个终端依次启动**（每个终端先 `cd src && source install/setup.bash`）
 
