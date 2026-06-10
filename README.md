@@ -350,3 +350,104 @@ ros2 topic echo /gicp_localization/diagnostics
 > **影响范围**：抖动会污染 IMU，剧烈运动下定位/建图质量下降；**轻柔驾驶下 FAST-LIO / LIO-SAM 仍可正常工作，不阻断里程计与建图**。
 >
 > **根治方向**：重建/清理 robot 模型（合理的连杆质量与惯量、基元（box/cylinder）碰撞、带阻尼或直接固定的关节），或全局收紧物理求解器（减小 `max_step_size`，代价是 RTF 下降）。属独立任务，本项目暂未实现。
+
+## nav2 导航（阶段一：打通链路 + costmap）
+
+> [!NOTE]
+> 阶段一只验证三件事：**TF 焊成单树**、**2D 先验图（全局 costmap）**、**3D 点云障碍层（局部 costmap）**正确。**不发目标点、不接行为树、机器人不自主移动**。
+> 必须压在完整现有栈之上（robot_sim + FAST-LIO + gicp_localization），缺任一则 TF 有断边、costmap 取不到坐标。
+> costmap 按 nav2 官方方式托管：`planner_server` 托管 global_costmap（`map` 系，2D 先验图）、`controller_server` 托管 local_costmap（`camera_init` 系，3D 点云）。阶段一**不调用**这两个服务器，只借它们把两张图跑起来。
+
+### 准备项目文件
+
+```bash
+# 1. 离线把 LIO-SAM 先验地图 PCD 投影成 2D 占据栅格（需 open3d；产物 ~/result/map.* 不进 git）
+pip install open3d
+python src/robot_navigation/tools/pcd_to_occupancy.py \
+  --pcd ~/result/GlobalMap.pcd --out ~/result/map.yaml \
+  --resolution 0.05 --z-min 0.2 --z-max 1.5 --min-pts 2
+# 取 0.2~1.5m 高度带投影成墙体障碍；之后看 RViz /map 效果再调 z-min/z-max/min-pts/resolution
+
+# 2. 给 robot_gazebo 打 use_teleop 开关补丁
+#    （robot_gazebo 是 clone 上游、改动一律走补丁。该开关供后续导航阶段从源头关掉手动遥控；
+#      阶段一保持默认 use_teleop:=true，仍用遥控驱动机器人去看 costmap）
+(cd src/robot_gazebo && git apply ../robot_gazebo-patch/01-add-use-teleop-switch.patch)
+```
+
+### 编译运行
+
+```bash
+# 1. 编译本包（robot_navigation 是纯 launch/config/tools 资源包，无 C++ 编译目标）
+cd src    # colcon 工作区根，后续命令都在此执行
+colcon build --packages-select robot_navigation
+source install/setup.bash
+# 若报缺 nav2 组件，补装后重编：
+# sudo apt install ros-humble-nav2-planner ros-humble-nav2-controller \
+#     ros-humble-nav2-costmap-2d ros-humble-nav2-map-server ros-humble-nav2-lifecycle-manager
+```
+
+**2. 校正 `body→base_footprint` 静态焊接（关键，先做一次）**
+
+FAST-LIO 的 `body` 帧和机器人 URDF 的 `base_footprint` 分属两棵互不相连的 TF 树，本 launch 用一条静态变换把它们焊成单树。这条变换数值必须对，否则两张 costmap 整体错位。
+
+- **原理**：FAST-LIO 配置里 extrinsic 置零、IMU 与传感器共位，所以 `body` 帧物理上就等于 `imu_link`。于是 `body→base_footprint` 的焊接值 = URDF 里 `imu_link→base_footprint` 的值。
+- **直接读出要填的值**（只要终端一的 robot_sim 起来即可，robot_state_publisher 已在发 URDF 的 TF）：
+
+```bash
+ros2 run tf2_ros tf2_echo imu_link base_footprint
+```
+把它打印的 `Translation: [x, y, z]` 与 `RPY (radian): [roll, pitch, yaw]` **原样**填入 launch 的 `tf_x tf_y tf_z tf_roll tf_pitch tf_yaw`（同一旋转的 RPY 表示可能不唯一，原样填即正确）。
+本模型实测约 `Translation [0, 0, -0.297]`、旋转为绕 Y 轴 180°（RPY `[π, 0, π]`）——launch 默认 `tf_z=-0.297322, tf_pitch=3.14159274` 即等价于此。**机器人模型没改过，就直接用默认，跳过覆盖。**
+
+> 启动瞬间若打印一行 `[INFO] ... Waiting for transform ... Invalid frame ID "imu_link" ... frame does not exist`，是 tf2_echo 监听器尚未收到 latched 静态 TF 的一次性竞态（INFO 非 ERROR），紧接着就会正常打出变换，**不是错误**。结果显示 `At time 0.0` 也正常（静态 TF 时间戳恒为 0）。
+
+**3. 四个终端依次启动**（每个终端先 `cd src && source install/setup.bash`）
+
+```bash
+# 终端一：Gazebo 仿真
+ros2 launch robot_gazebo robot_sim.launch.py
+# 终端二：FAST-LIO2 里程计（仿真时间）
+ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true
+# 终端三：GICP 先验地图定位（启动后在 RViz 用「2D Pose Estimate」给正确初值，详见上方 GICP 小节）
+ros2 launch gicp_localization localization.launch.py prior_map_path:=~/result/GlobalMap.pcd
+# 终端四：nav2 阶段一 costmap。TF 默认值不适用你的模型时，用上一步读到的值追加 tf_*:= 覆盖
+ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml
+#   覆盖示例：ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml \
+#               tf_x:=0.0 tf_y:=0.0 tf_z:=-0.297 tf_roll:=0.0 tf_pitch:=3.14159 tf_yaw:=0.0
+```
+
+终端四的 launch 起 `map_server` + `planner_server`（托管 global_costmap）+ `controller_server`（托管 local_costmap），由 `lifecycle_manager` 自动 configure→activate 三者。阶段一不发目标点、不接 BT，planner/controller 仅作 costmap 宿主空转、不驱动机器人。
+
+> `map:=` 支持 `~` / 相对 / 绝对路径——launch 内部已 `expanduser+abspath` 成绝对路径再交给 map_server（nav2 map_io 对 yaml 展开 `~` 但拼接 image 路径时不展开，直接传 `~/...` 会因找不到 `.pgm` 而 `map_server` configure 失败、lifecycle 全程 `unconfigured`）。
+
+**4. 验证焊接成功**（四个终端都起来后，body 应正好落在 imu_link 上）
+
+```bash
+ros2 run tf2_ros tf2_echo imu_link body
+```
+预期 `Translation ≈ [0, 0, 0]`、`RPY ≈ [0, 0, 0]`（两帧重合）。若明显非零，说明 `tf_*` 填错，回到第 2 步重新覆盖。
+
+### 验收标准
+
+> [!NOTE]
+> 阶段一为定性验收：链路通、两张图出得来、3D 障碍层标记/清除/滤地面正确即可。全程机器人不自主移动。
+
+- **TF 单树**：`ros2 run tf2_tools view_frames` 生成的图是一棵根在 `map` 的单树，`base_footprint` 经 `body` 连到 `camera_init`/`map`，无悬空孤岛。
+- **节点起齐、无重名**：`ros2 node list` 含 `/map_server`、`/planner_server`、`/controller_server`、`/global_costmap/global_costmap`、`/local_costmap/local_costmap`，且**无 “share an exact name” 警告**。
+- **生命周期激活**：`ros2 lifecycle get /map_server`、`/planner_server`、`/controller_server` 均返回 `active`（lifecycle_manager 日志不再反复打印 `Waiting for service ... get_state`）。
+- **全局图（2D 先验图）**：`ros2 topic echo /map --once` 有数据；`ros2 topic hz /global_costmap/costmap` 有输出；RViz（Fixed Frame=`map`）正确显示 2D 先验图。
+- **局部图（3D 点云障碍）**：`ros2 topic hz /local_costmap/costmap` 有输出；遥控驱动机器人靠近障碍，local costmap 在障碍处标记体素、障碍移开后能清除、**地面不被误标为障碍**。
+- **可配置**（见下）：换 STVL 障碍层只需换 `params_file`、切障碍源话题只改 params，均不改代码即生效。
+- **不自主移动**：全程无目标点、无行为树，机器人只在遥控下移动。
+
+#### 可配置切换（验证可配置性）
+
+- **换 STVL 障碍层（不改任何文件，已备好现成配置）**：装包后启动终端四时用 `params_file:=` 指向 STVL 版配置即可。该文件 `config/nav2_costmaps_stvl.yaml` 的 local_costmap 已换成 `spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer`，其余与默认完全一致。
+
+  ```bash
+  sudo apt install ros-humble-spatio-temporal-voxel-layer
+  ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml \
+    params_file:=$(ros2 pkg prefix robot_navigation)/share/robot_navigation/config/nav2_costmaps_stvl.yaml
+  ```
+  STVL 的清除模型项（`voxel_decay` / `decay_acceleration` / FOV）为经验值，按清除快慢在该文件里调。
+- **切障碍源话题**：改所用 params 文件里 `local_costmap → local_costmap` 障碍层的 `topic`（`/points_raw` ↔ `/cloud_registered`），重启终端四。

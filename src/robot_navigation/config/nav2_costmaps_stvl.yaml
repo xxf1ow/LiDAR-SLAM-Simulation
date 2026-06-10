@@ -1,0 +1,173 @@
+# nav2 阶段一 costmap 参数 —— STVL 版（local_costmap 用 spatio_temporal_voxel_layer 替代内置 voxel_layer）。
+# 用法（不改任何文件，启动时切换）：
+#   sudo apt install ros-humble-spatio-temporal-voxel-layer
+#   ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml \
+#       params_file:=<install 后的 share>/robot_navigation/config/nav2_costmaps_stvl.yaml
+#   （或直接指向源码树里的本文件绝对路径）
+# 与默认 nav2_costmaps.yaml 的唯一区别：local_costmap 的障碍层。其余 map_server / global_costmap /
+# planner_server / controller_server 完全一致。
+# STVL 参数取自官方 README 示例（SteveMacenski/spatio_temporal_voxel_layer，ros2 分支），
+# 并把 clear 源从「深度相机(model_type 0)」改为「3D 激光(model_type 1)」、FOV 填 VLP-16 实参；
+# 清除模型相关项（voxel_decay / decay_acceleration / FOV）属经验值，build 机按清除效果调。
+
+map_server:
+  ros__parameters:
+    use_sim_time: true
+    yaml_filename: ""   # 由 launch 的 map 参数覆盖
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 1.0
+      publish_frequency: 1.0
+      global_frame: map
+      robot_base_frame: base_footprint
+      rolling_window: false
+      track_unknown_space: true
+      footprint: "[ [0.45, 0.28], [0.45, -0.28], [-0.45, -0.28], [-0.45, 0.28] ]"
+      resolution: 0.05
+      # 仅静态先验图 + 膨胀（故意不加实时障碍层；动态障碍交给 local costmap）
+      plugins: ["static_layer", "inflation_layer"]
+      static_layer:
+        plugin: "nav2_costmap_2d::StaticLayer"
+        map_subscribe_transient_local: true
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+      always_send_full_costmap: true
+
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      use_sim_time: true
+      update_frequency: 5.0
+      publish_frequency: 2.0
+      global_frame: camera_init        # odom 角色：局部平滑、不随 gicp 跳变（spec §7）
+      robot_base_frame: base_footprint
+      rolling_window: true
+      width: 6
+      height: 6
+      resolution: 0.05
+      footprint: "[ [0.45, 0.28], [0.45, -0.28], [-0.45, -0.28], [-0.45, 0.28] ]"
+      plugins: ["stvl_layer", "inflation_layer"]
+      stvl_layer:
+        plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+        enabled: true
+        voxel_decay: 20.0            # 体素衰减时间(秒，linear)；STVL 靠时间衰减做动态清除，比 raytrace 鲁棒
+        decay_model: 0               # 0=linear 1=exponential 2=persistent
+        voxel_size: 0.05
+        track_unknown_space: true
+        max_obstacle_height: 2.0
+        unknown_threshold: 15
+        mark_threshold: 0
+        update_footprint_enabled: true
+        combination_method: 1        # 1=max 0=override
+        origin_z: 0.0
+        publish_voxel_map: true
+        transform_tolerance: 0.2
+        mapping_mode: false
+        map_save_duration: 60.0
+        observation_sources: pointcloud_mark pointcloud_clear
+        pointcloud_mark:
+          data_type: PointCloud2
+          topic: /points_raw           # 与 voxel_layer 版一致；可改 /cloud_registered
+          marking: true
+          clearing: false
+          min_obstacle_height: 0.1     # 滤地面（build 机按雷达离地高度调）
+          max_obstacle_height: 2.0
+          expected_update_rate: 0.0
+          observation_persistence: 0.0
+          inf_is_valid: false
+          clear_after_reading: true
+          filter: "voxel"
+          voxel_min_points: 0
+        pointcloud_clear:
+          data_type: PointCloud2
+          topic: /points_raw
+          marking: false
+          clearing: true
+          min_z: 0.1
+          max_z: 2.0
+          vertical_fov_angle: 0.5236   # VLP-16 垂直 FOV 30° = 0.5236 rad
+          horizontal_fov_angle: 6.2832 # 360° = 2π rad
+          decay_acceleration: 5.0      # 清除加速度，build 机按清除快慢调
+          model_type: 1                # 1=3D Lidar（本项目是 velodyne，非深度相机）
+      inflation_layer:
+        plugin: "nav2_costmap_2d::InflationLayer"
+        cost_scaling_factor: 3.0
+        inflation_radius: 0.55
+      always_send_full_costmap: true
+
+# ── 以下两块与默认 nav2_costmaps.yaml 完全相同（服务器托管 costmap 所需）──────────
+planner_server:
+  ros__parameters:
+    use_sim_time: true
+    expected_planner_frequency: 20.0
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_navfn_planner/NavfnPlanner"
+      tolerance: 0.5
+      use_astar: false
+      allow_unknown: true
+
+controller_server:
+  ros__parameters:
+    use_sim_time: true
+    controller_frequency: 20.0
+    min_x_velocity_threshold: 0.001
+    min_y_velocity_threshold: 0.5
+    min_theta_velocity_threshold: 0.001
+    failure_tolerance: 0.3
+    progress_checker_plugin: "progress_checker"
+    goal_checker_plugins: ["general_goal_checker"]
+    controller_plugins: ["FollowPath"]
+    progress_checker:
+      plugin: "nav2_controller::SimpleProgressChecker"
+      required_movement_radius: 0.5
+      movement_time_allowance: 10.0
+    general_goal_checker:
+      stateful: true
+      plugin: "nav2_controller::SimpleGoalChecker"
+      xy_goal_tolerance: 0.25
+      yaw_goal_tolerance: 0.25
+    FollowPath:
+      plugin: "dwb_core::DWBLocalPlanner"
+      debug_trajectory_details: true
+      min_vel_x: 0.0
+      min_vel_y: 0.0
+      max_vel_x: 0.26
+      max_vel_y: 0.0
+      max_vel_theta: 1.0
+      min_speed_xy: 0.0
+      max_speed_xy: 0.26
+      min_speed_theta: 0.0
+      acc_lim_x: 2.5
+      acc_lim_y: 0.0
+      acc_lim_theta: 3.2
+      decel_lim_x: -2.5
+      decel_lim_y: 0.0
+      decel_lim_theta: -3.2
+      vx_samples: 20
+      vy_samples: 5
+      vtheta_samples: 20
+      sim_time: 1.7
+      linear_granularity: 0.05
+      angular_granularity: 0.025
+      transform_tolerance: 0.2
+      xy_goal_tolerance: 0.25
+      trans_stopped_velocity: 0.25
+      short_circuit_trajectory_evaluation: true
+      stateful: true
+      critics: ["RotateToGoal", "Oscillation", "BaseObstacle", "GoalAlign", "PathAlign", "PathDist", "GoalDist"]
+      BaseObstacle.scale: 0.02
+      PathAlign.scale: 32.0
+      PathAlign.forward_point_distance: 0.1
+      GoalAlign.scale: 24.0
+      GoalAlign.forward_point_distance: 0.1
+      PathDist.scale: 32.0
+      GoalDist.scale: 24.0
+      RotateToGoal.scale: 32.0
+      RotateToGoal.slowing_factor: 5.0
+      RotateToGoal.lookahead_time: -1.0
