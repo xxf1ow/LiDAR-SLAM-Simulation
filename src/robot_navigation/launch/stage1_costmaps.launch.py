@@ -10,7 +10,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument
+from launch.actions import DeclareLaunchArgument, OpaqueFunction
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -22,7 +22,6 @@ def generate_launch_description():
     rviz_file = os.path.join(pkg, 'config', 'stage1.rviz')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
-    map_yaml = LaunchConfiguration('map')
     use_rviz = LaunchConfiguration('use_rviz')
 
     # body->base_footprint 静态焊接：URDF 推算暂定值，build 机 tf2_echo 核正。
@@ -37,6 +36,19 @@ def generate_launch_description():
     # (源码：planner_server.cpp/controller_server.cpp 各 new Costmap2DROS("global_costmap"/"local_costmap"))。
     # lifecycle_manager 管这三个【服务器】，costmap 作为子节点随服务器转生命周期。
     lifecycle_nodes = ['map_server', 'planner_server', 'controller_server']
+
+    def _map_server(context, *args, **kwargs):
+        # map_server 把 yaml 里相对的 image 名跟【未展开的 yaml 路径目录】拼接，且 image
+        # 加载器(Magick)不展开 '~'（nav2 map_io 的已知不一致：yaml 展开 ~ 但 image 不展开）。
+        # 故在此先把 map 路径 expanduser+abspath 成绝对路径，避免 map:=~/... 被拼成打不开的
+        # ~/result/map.pgm。用户写 ~ / 相对 / 绝对路径都能正确加载。
+        map_yaml = os.path.abspath(os.path.expanduser(
+            LaunchConfiguration('map').perform(context)))
+        return [Node(
+            package='nav2_map_server', executable='map_server', name='map_server',
+            output='screen',
+            parameters=[params_file, {'use_sim_time': use_sim_time, 'yaml_filename': map_yaml}],
+        )]
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
@@ -60,12 +72,8 @@ def generate_launch_description():
             ],
         ),
 
-        # 2) map_server：发 2D 先验图(latched)
-        Node(
-            package='nav2_map_server', executable='map_server', name='map_server',
-            output='screen',
-            parameters=[params_file, {'use_sim_time': use_sim_time, 'yaml_filename': map_yaml}],
-        ),
+        # 2) map_server：发 2D 先验图(latched)。OpaqueFunction 内把 map 路径展开成绝对路径
+        OpaqueFunction(function=_map_server),
 
         # 3) planner_server：托管 global_costmap(map 系，static 先验图 + 膨胀)
         Node(

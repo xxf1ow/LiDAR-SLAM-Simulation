@@ -418,6 +418,8 @@ ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml
 
 终端四的 launch 起 `map_server` + `planner_server`（托管 global_costmap）+ `controller_server`（托管 local_costmap），由 `lifecycle_manager` 自动 configure→activate 三者。阶段一不发目标点、不接 BT，planner/controller 仅作 costmap 宿主空转、不驱动机器人。
 
+> `map:=` 支持 `~` / 相对 / 绝对路径——launch 内部已 `expanduser+abspath` 成绝对路径再交给 map_server（nav2 map_io 对 yaml 展开 `~` 但拼接 image 路径时不展开，直接传 `~/...` 会因找不到 `.pgm` 而 `map_server` configure 失败、lifecycle 全程 `unconfigured`）。
+
 **4. 验证焊接成功**（四个终端都起来后，body 应正好落在 imu_link 上）
 
 ```bash
