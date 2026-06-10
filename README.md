@@ -437,10 +437,17 @@ ros2 run tf2_ros tf2_echo imu_link body
 - **生命周期激活**：`ros2 lifecycle get /map_server`、`/planner_server`、`/controller_server` 均返回 `active`（lifecycle_manager 日志不再反复打印 `Waiting for service ... get_state`）。
 - **全局图（2D 先验图）**：`ros2 topic echo /map --once` 有数据；`ros2 topic hz /global_costmap/costmap` 有输出；RViz（Fixed Frame=`map`）正确显示 2D 先验图。
 - **局部图（3D 点云障碍）**：`ros2 topic hz /local_costmap/costmap` 有输出；遥控驱动机器人靠近障碍，local costmap 在障碍处标记体素、障碍移开后能清除、**地面不被误标为障碍**。
-- **可配置**（见下）：切障碍源话题或换 STVL 插件，只改 `config/nav2_costmaps.yaml`、不改代码即生效。
+- **可配置**（见下）：换 STVL 障碍层只需换 `params_file`、切障碍源话题只改 params，均不改代码即生效。
 - **不自主移动**：全程无目标点、无行为树，机器人只在遥控下移动。
 
 #### 可配置切换（验证可配置性）
 
-- **切障碍源话题**：改 `config/nav2_costmaps.yaml` 中 `local_costmap → local_costmap → voxel_layer → pointcloud → topic`（`/points_raw` ↔ `/cloud_registered`），重启终端四。
-- **换 STVL 障碍层**：`sudo apt install ros-humble-spatio-temporal-voxel-layer`，把 `local_costmap` 的 `voxel_layer` 块换成 `spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer` 插件块、并相应改 `plugins` 列表，重启终端四。
+- **换 STVL 障碍层（不改任何文件，已备好现成配置）**：装包后启动终端四时用 `params_file:=` 指向 STVL 版配置即可。该文件 `config/nav2_costmaps_stvl.yaml` 的 local_costmap 已换成 `spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer`，其余与默认完全一致。
+
+  ```bash
+  sudo apt install ros-humble-spatio-temporal-voxel-layer
+  ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml \
+    params_file:=$(ros2 pkg prefix robot_navigation)/share/robot_navigation/config/nav2_costmaps_stvl.yaml
+  ```
+  STVL 的清除模型项（`voxel_decay` / `decay_acceleration` / FOV）为经验值，按清除快慢在该文件里调。
+- **切障碍源话题**：改所用 params 文件里 `local_costmap → local_costmap` 障碍层的 `topic`（`/points_raw` ↔ `/cloud_registered`），重启终端四。

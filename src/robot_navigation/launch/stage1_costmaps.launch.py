@@ -18,11 +18,12 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg = get_package_share_directory('robot_navigation')
-    params_file = os.path.join(pkg, 'config', 'nav2_costmaps.yaml')
+    default_params = os.path.join(pkg, 'config', 'nav2_costmaps.yaml')
     rviz_file = os.path.join(pkg, 'config', 'stage1.rviz')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
     use_rviz = LaunchConfiguration('use_rviz')
+    params_file = LaunchConfiguration('params_file')
 
     # body->base_footprint 静态焊接：URDF 推算暂定值，build 机 tf2_echo 核正。
     tf_x = LaunchConfiguration('tf_x')
@@ -54,6 +55,9 @@ def generate_launch_description():
         DeclareLaunchArgument('use_sim_time', default_value='true'),
         DeclareLaunchArgument('map', description='2D 占据栅格 .yaml 路径(pcd_to_occupancy 生成)'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
+        DeclareLaunchArgument(
+            'params_file', default_value=default_params,
+            description='costmap/server 参数 yaml(默认 voxel_layer 版；切 STVL 传 config/nav2_costmaps_stvl.yaml)'),
         DeclareLaunchArgument('tf_x', default_value='0.0'),
         DeclareLaunchArgument('tf_y', default_value='0.0'),
         DeclareLaunchArgument('tf_z', default_value='-0.297322'),
