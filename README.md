@@ -353,7 +353,7 @@ ros2 topic echo /gicp_localization/diagnostics
 
 ## nav2 导航（阶段一：打通链路 + costmap）
 
-阶段一只验证「TF 单树 + 2D 先验图 + 3D 点云 costmap」，**不起 planner/controller、不发目标**。
+阶段一只验证「TF 单树 + 2D 先验图 + 3D 点云 costmap」，**不发目标点、不接行为树**。
 压在完整现有栈之上（robot_sim + FAST-LIO + gicp_localization）。
 
 ### A. 离线生成 2D 占据栅格（build 机，需 open3d；产物不进 git）
@@ -400,16 +400,17 @@ ros2 launch gicp_localization localization.launch.py prior_map_path:=~/result/Gl
 ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml
 ```
 
+该 launch 起 `map_server` + `planner_server`（托管 global_costmap）+ `controller_server`（托管 local_costmap），并用 `lifecycle_manager` 自动激活三者。**阶段一不发目标点、不接行为树**，planner/controller 仅作为 costmap 宿主空转，不会驱动机器人。
+
 ### E. 验收
 
-```bash
-ros2 run tf2_tools view_frames     # 应是一棵根在 map 的树，base_footprint 经 body 连到 camera_init/map，无悬空岛
-ros2 node list                     # 确认 map_server / global_costmap / local_costmap 节点全名（核对 lifecycle node_names）
-ros2 topic echo /map --once        # map_server 发布 2D 先验图
-ros2 topic hz /local_costmap/costmap
-```
-
-RViz（stage1.rviz）应看到：2D 先验图（/map）；global/local costmap；local costmap 在真实障碍处出现 voxel 标记、障碍移开后清除、地面被滤掉。
+- `ros2 run tf2_tools view_frames`：一棵根在 `map` 的 TF 树，`base_footprint` 经 `body` 连到 `camera_init`/`map`，无悬空岛。
+- `ros2 node list`：可见 `/map_server`、`/planner_server`、`/controller_server`、`/global_costmap/global_costmap`、`/local_costmap/local_costmap`，无重名警告。
+- `ros2 lifecycle get /planner_server`、`/controller_server`、`/map_server` 均为 `active`。
+- `ros2 topic echo /map --once` 有数据；RViz 正确显示 2D 先验图（`/global_costmap/costmap`）。
+- `ros2 topic hz /local_costmap/costmap` 有输出；手动 teleop 驱动机器人，local costmap 在真实障碍上标记体素、障碍移开能清除、地面被滤掉。
+- 切 `voxel_layer`↔STVL、切障碍源话题，只改 `config/nav2_costmaps.yaml` 即生效。
+- 全过程机器人不自主移动（无目标点 / 无 BT）。
 
 ### F. 可配置切换（验证可配置性）
 
