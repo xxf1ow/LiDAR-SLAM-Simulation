@@ -115,11 +115,11 @@ controller_server:
       debug_trajectory_details: true
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.5         # 线速度上限(原 0.26 TB3 级，偏慢)；抖动模型别给太猛，可再上调
+      max_vel_x: 1.0         # 线速度上限(原 0.26 TB3 级，偏慢)；抖动模型别给太猛，可再上调
       max_vel_y: 0.0
-      max_vel_theta: 1.0     # 转向角速度上限；想转更快就调大(如 1.5)
+      max_vel_theta: 1.5     # 转向角速度上限；想转更快就调大(如 1.5)
       min_speed_xy: 0.0
-      max_speed_xy: 0.5      # 必须 ≥ max_vel_x，否则被钳住
+      max_speed_xy: 1.0      # 必须 ≥ max_vel_x，否则被钳住
       min_speed_theta: 0.0
       acc_lim_x: 2.5
       acc_lim_y: 0.0
