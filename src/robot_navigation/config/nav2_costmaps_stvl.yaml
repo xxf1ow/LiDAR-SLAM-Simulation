@@ -69,10 +69,14 @@ local_costmap:
         transform_tolerance: 0.2
         mapping_mode: false
         map_save_duration: 60.0
+        # ⚠️ 待重做：body→base_footprint 焊接改单位后，/points_raw 经 velodyne TF 链会转歪。
+        #    voxel_layer 版已改用 /cloud_registered + sensor_frame:body 规避；但 STVL 的清除模型
+        #    依赖【传感器系】原始云(取光迹原点)，直接换 camera_init 系的 /cloud_registered 会让清除原点错。
+        #    用 STVL 前需先解决(修 URDF velodyne 装姿，或为 STVL 找等效的传感器系正确云)。
         observation_sources: pointcloud_mark pointcloud_clear
         pointcloud_mark:
           data_type: PointCloud2
-          topic: /points_raw           # 与 voxel_layer 版一致；可改 /cloud_registered
+          topic: /points_raw           # 见上方 ⚠️：焊接改单位后此源会转歪，STVL 待重做
           marking: true
           clearing: false
           min_obstacle_height: 0.1     # 滤地面（build 机按雷达离地高度调）
@@ -115,6 +119,7 @@ planner_server:
 controller_server:
   ros__parameters:
     use_sim_time: true
+    odom_topic: /odom          # 取 diff_drive 真实 twist(FAST-LIO /Odometry twist 恒零)；spec §5
     controller_frequency: 20.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5

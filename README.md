@@ -451,3 +451,85 @@ ros2 run tf2_ros tf2_echo imu_link body
   ```
   STVL 的清除模型项（`voxel_decay` / `decay_acceleration` / FOV）为经验值，按清除快慢在该文件里调。
 - **切障碍源话题**：改所用 params 文件里 `local_costmap → local_costmap` 障碍层的 `topic`（`/points_raw` ↔ `/cloud_registered`），重启终端四。
+
+## nav2 导航（阶段二：完整自主导航）
+
+> [!NOTE]
+> 阶段二在阶段一之上加 `behavior_server`（恢复行为）+ `bt_navigator`（行为树大脑）+ `waypoint_follower`（多点停靠），机器人可从 RViz 发目标**自主导航**：单点（NavigateToPose）、穿点不停（NavigateThroughPoses）、逐点停靠（FollowWaypoints）。
+> 必须压在完整现有栈之上（robot_sim **`use_teleop:=false`** + FAST-LIO + gicp_localization），缺任一则 TF 有断边或抢 `/cmd_vel`。
+> **odom 速度源**：`bt_navigator`/`controller_server` 的 `odom_topic=/odom`（diff_drive 真实 twist）；FAST-LIO `/Odometry` 的 twist 恒为零，只驱动 TF pose。pose 一律走 TF `map→base_footprint`。
+
+### 准备
+
+```bash
+# 1. 装 nav2 导航包
+sudo apt install ros-humble-nav2-bt-navigator ros-humble-nav2-behaviors \
+  ros-humble-nav2-waypoint-follower ros-humble-nav2-rviz-plugins
+# 2. robot_gazebo 打 use_teleop 开关补丁（导航时关 teleop，nav2 独占 /cmd_vel；阶段一已打则跳过）
+(cd src/robot_gazebo && git apply ../robot_gazebo-patch/01-add-use-teleop-switch.patch)
+```
+
+2D 先验图 `~/result/map.*` 沿用阶段一已生成的，无需重做。
+
+### 编译运行
+
+```bash
+cd src && colcon build --packages-select robot_navigation && source install/setup.bash
+```
+
+**1. TF 焊接：阶段二用单位旋转，与阶段一暂定值不同（重要）**
+
+阶段一把 `body→base_footprint` 焊接暂定为绕 Y 轴 180°（`tf_pitch=π`），那是按「`body`=物理倒装 IMU 帧」推的纸面值。但运行时实测 FAST-LIO 的 `body` 帧是**重力对齐的（Z 朝上）**——`ros2 topic echo /localization --once` 的 `map→body` 旋转≈单位阵——所以 `base_footprint≈body`，焊接应为**单位旋转**。stage2 launch 默认已改为 `tf_pitch=0, tf_z=0.297322`，**直接用默认即可，无需覆盖**。
+
+> 若误用 pitch=π：base_footprint 会上下颠倒（Z 朝下）、车头朝后 → DWB 把「前进」当成 `map` 的反方向 → 小车往目标**反向跑**、不拐弯。
+
+**2. 一键启动（单终端，默认值已全部正确，无需覆盖）**
+
+```bash
+ros2 launch robot_navigation bringup_all.launch.py
+```
+
+默认 `prior_map_path:=~/result/GlobalMap.pcd`、`map:=~/result/map.yaml`；错峰默认 sim→20s→FAST-LIO→8s→GICP→12s→nav2，机器慢可加 `delay_lio:= / delay_gicp:= / delay_nav:=` 调大。切 STVL 加 `params_file:=`、换地图加 `map:=`。
+
+**四终端（调试用，每个 `cd src && source install/setup.bash`）**：
+
+```bash
+ros2 launch robot_gazebo robot_sim.launch.py use_teleop:=false
+ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true rviz:=false
+ros2 launch gicp_localization localization.launch.py prior_map_path:=~/result/GlobalMap.pcd
+ros2 launch robot_navigation stage2_navigation.launch.py map:=~/result/map.yaml
+```
+
+**3. 验证焊接**（起栈后）
+
+```bash
+ros2 run tf2_ros tf2_echo map base_footprint
+```
+
+矩阵第 3 行第 3 列应为 **`+1.000`**（base_footprint Z 朝上）。启动瞬间若打印一行 `Invalid frame ID "map" ... frame does not exist`，是 tf2_echo 监听器尚未收到 `map` 帧的一次性竞态（INFO 非 ERROR），紧接着就正常打出矩阵，**不是错误**。
+
+> **障碍源用 `/cloud_registered`（不是 `/points_raw`）**：焊接改单位旋转后，`/points_raw` 经 velodyne 的 URDF TF 链会随车转歪、在小车周围刷假障碍；`/cloud_registered` 由 FAST-LIO 配准到 `camera_init`，不依赖该链。local costmap 已默认用它（`sensor_frame: body`）。RViz 里 `/points_raw` 显示会看着转歪——纯视觉、costmap 不用它，无视即可。
+
+### 验收标准
+
+> [!NOTE]
+> 全程压在 robot_sim(`use_teleop:=false`) + FAST-LIO + gicp 之上。**先 bootstrap 定位再发目标**。
+
+1. **bootstrap 定位**（工厂 90° 伪对称有 fitness≈0.8 假极小）：RViz `2D Pose Estimate` 点在机器人真实位姿附近 → GICP 锁定（fitness≥0.9）、`/cloud_registered` 与机器人贴合先验图。
+2. **单目标**：`Nav2 Goal` 点可达点 → 全局路径（`map` 系）出现、机器人跟踪、绕静态障碍、到达后在 `xy_goal_tolerance`(0.25) 内停。
+3. **恢复行为**：让机器人卡住 → progress_checker 超时触发 spin/backup/wait。
+4. **穿点**：Navigation 2 面板切 "Nav Through Poses"，连点多点 → 不停顿掠过。
+5. **逐点停靠**：面板切 "Waypoint" 模式，连点 → 逐点停（每点停 `waypoint_pause_duration`/1000 秒）。
+
+**客观检查**：
+
+- `ros2 action list` 见 `/navigate_to_pose`、`/navigate_through_poses`、`/follow_waypoints`。
+- 6 节点 `ros2 lifecycle get /<node>`（map_server / planner_server / controller_server / behavior_server / bt_navigator / waypoint_follower）均 `active`。
+- 导航中 `ros2 topic echo /cmd_vel` 非零；`ros2 topic hz /plan` 有输出。
+- `ros2 param get /behavior_server global_frame` = `camera_init`、`ros2 param get /bt_navigator robot_base_frame` = `base_footprint`（确认 `nav2_navigation.yaml` 已加载、未吃默认）。
+
+### 调参（全在 params，不改码）
+
+- **速度**：`nav2_costmaps.yaml` 的 `FollowPath` 块——`max_vel_x` 与 `max_speed_xy`（两者须一致）调线速度，`max_vel_theta` 调转向。当前 `max_vel_x=1.0`、`max_vel_theta=1.5`；想更快继续上调，⚠️ 抖动模型（病态 robot.sdf）别给太猛。
+- **`Sensor origin out of map bounds`（导致车假性卡死、刷屏）**：`/cloud_registered` 的传感器原点 `body` 在 `camera_init` 系 z≈0，voxel_layer 的 `origin_z` 须下探含住它（已设 `origin_z=-1.0`、`z_voxels=30`，覆盖 -1.0~+2.0），否则无法光迹清除、局部障碍清不掉。
+- footprint、`inflation_radius`、goal tolerance、`behavior_server` 旋转速度按实测模型核。
