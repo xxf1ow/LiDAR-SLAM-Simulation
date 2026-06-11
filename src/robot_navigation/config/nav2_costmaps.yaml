@@ -1,6 +1,7 @@
 # nav2 阶段一 costmap 参数 —— planner_server(托管 global_costmap) / controller_server(托管 local_costmap)。
 # 可配置原则（spec §2）：障碍层插件 / 障碍源话题 / 高度阈值都在本文件，切换不改代码。
-#   - 切障碍源：改 local_costmap.voxel_layer.pointcloud.topic（默认 /points_raw，可改 /cloud_registered）
+#   - 障碍源用 /cloud_registered(camera_init 系，FAST-LIO 配准好)。勿用 /points_raw——
+#     body→base_footprint 焊接为单位旋转后，velodyne 的 URDF TF 链会随车转歪、刷出假障碍(见调试记录)。
 #   - 切 STVL：用现成的 nav2_costmaps_stvl.yaml（启动加 params_file:=...），无需手改本文件；详见 README
 # footprint / 高度阈值为暂定值，build 机按实际模型与雷达高度调（见 plan Task 7）。
 
@@ -57,8 +58,8 @@ local_costmap:
         mark_threshold: 0
         observation_sources: pointcloud
         pointcloud:
-          topic: /points_raw            # 默认原始 velodyne 系云（光迹清除原点正确）
-          sensor_frame: "velodyne"      # 显式指定传感器系，供光迹清除取原点
+          topic: /cloud_registered      # FAST-LIO 已配准到 camera_init 的云；不走 velodyne TF 链
+          sensor_frame: "body"          # 光迹清除原点取 FAST-LIO body(≈雷达，camera_init 子帧)
           data_type: "PointCloud2"
           marking: true
           clearing: true

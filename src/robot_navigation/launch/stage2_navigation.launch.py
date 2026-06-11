@@ -43,15 +43,31 @@ def generate_launch_description():
         'behavior_server', 'bt_navigator', 'waypoint_follower',
     ]
 
-    def _map_server(context, *args, **kwargs):
-        # 沿用阶段一：map 路径先 expanduser+abspath，绕开 nav2 map_io 对 image 不展开 '~' 的坑。
+    def _map_server_and_planner_controller(context, *args, **kwargs):
+        # 使用绝对路径处理 map_yaml 和 params_path, 确保能正确加载到文件
         map_yaml = os.path.abspath(os.path.expanduser(
             LaunchConfiguration('map').perform(context)))
-        return [Node(
-            package='nav2_map_server', executable='map_server', name='map_server',
-            output='screen',
-            parameters=[params_file, {'use_sim_time': use_sim_time, 'yaml_filename': map_yaml}],
-        )]
+        params_path = os.path.abspath(os.path.expanduser(
+            LaunchConfiguration('params_file').perform(context)))
+        return [
+            # 1) map_server：发 2D 先验图(latched)
+            Node(
+                package='nav2_map_server', executable='map_server', name='map_server',
+                output='screen',
+                parameters=[params_file, {'use_sim_time': use_sim_time, 'yaml_filename': map_yaml}],
+            ),
+            # 2) planner_server：托管 global_costmap
+            Node(
+                package='nav2_planner', executable='planner_server', name='planner_server',
+                output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
+            ),
+
+            # 3) controller_server：托管 local_costmap + 跑 DWB，发 /cmd_vel
+            Node(
+                package='nav2_controller', executable='controller_server', name='controller_server',
+                output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
+            )
+        ]
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
@@ -65,9 +81,11 @@ def generate_launch_description():
             description='behavior/bt/waypoint 导航参数 yaml'),
         DeclareLaunchArgument('tf_x', default_value='0.0'),
         DeclareLaunchArgument('tf_y', default_value='0.0'),
-        DeclareLaunchArgument('tf_z', default_value='-0.297322'),
+        # 焊接旋转=单位：FAST-LIO 的 body 已重力对齐(Z 上)，base_footprint≈body。
+        # (早期 pitch=π 是误把 body 当成物理倒装 IMU 帧；运行时 /localization 证明 body 是正的。)
+        DeclareLaunchArgument('tf_z', default_value='0.297322'),
         DeclareLaunchArgument('tf_roll', default_value='0.0'),
-        DeclareLaunchArgument('tf_pitch', default_value='3.14159274'),
+        DeclareLaunchArgument('tf_pitch', default_value='0.0'),
         DeclareLaunchArgument('tf_yaw', default_value='0.0'),
 
         # 1) TF 焊接：body(FAST-LIO) -> base_footprint(URDF 根)
@@ -82,39 +100,27 @@ def generate_launch_description():
         ),
 
         # 2) map_server：发 2D 先验图(latched)
-        OpaqueFunction(function=_map_server),
+        OpaqueFunction(function=_map_server_and_planner_controller),
 
-        # 3) planner_server：托管 global_costmap
-        Node(
-            package='nav2_planner', executable='planner_server', name='planner_server',
-            output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
-        ),
-
-        # 4) controller_server：托管 local_costmap + 跑 DWB，发 /cmd_vel
-        Node(
-            package='nav2_controller', executable='controller_server', name='controller_server',
-            output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
-        ),
-
-        # 5) behavior_server：恢复行为(spin/backup/drive_on_heading/wait)
+        # 3) behavior_server：恢复行为(spin/backup/drive_on_heading/wait)
         Node(
             package='nav2_behaviors', executable='behavior_server', name='behavior_server',
             output='screen', parameters=[nav_params_file, {'use_sim_time': use_sim_time}],
         ),
 
-        # 6) bt_navigator：行为树大脑(单点 + 穿点)
+        # 4) bt_navigator：行为树大脑(单点 + 穿点)
         Node(
             package='nav2_bt_navigator', executable='bt_navigator', name='bt_navigator',
             output='screen', parameters=[nav_params_file, {'use_sim_time': use_sim_time}],
         ),
 
-        # 7) waypoint_follower：逐点停靠巡航
+        # 5) waypoint_follower：逐点停靠巡航
         Node(
             package='nav2_waypoint_follower', executable='waypoint_follower', name='waypoint_follower',
             output='screen', parameters=[nav_params_file, {'use_sim_time': use_sim_time}],
         ),
 
-        # 8) lifecycle_manager：autostart 六节点 configure->activate
+        # 6) lifecycle_manager：autostart 六节点 configure->activate
         Node(
             package='nav2_lifecycle_manager', executable='lifecycle_manager',
             name='lifecycle_manager_navigation', output='screen',
@@ -125,7 +131,7 @@ def generate_launch_description():
             }],
         ),
 
-        # 9) 可选 RViz(带 Nav2 面板)
+        # 7) 可选 RViz(带 Nav2 面板)
         Node(
             package='rviz2', executable='rviz2', name='rviz2',
             arguments=['-d', rviz_file],

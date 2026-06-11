@@ -4,11 +4,11 @@
 TimerAction 错峰，留建图/定位预热时间；一个 Ctrl-C 全清。
 排查问题时仍可手动分四终端跑各子 launch(本文件只是把它们串起来)。
 
-子 launch 参数适配：
-  - robot_sim: use_teleop:=false(nav2 独占 /cmd_vel)、use_sim_time:=true
-  - fast_lio:  config_file:=gazebo_velodyne.yaml use_sim_time:=true rviz:=false(只留 stage2 RViz)
-  - gicp:      prior_map_path:=<arg>
-  - stage2:    map:=<arg>、use_rviz:=<arg>、params_file:=<arg>
+参数转发要点(踩过的坑)：
+  - fast_lio 的 config_file 传【裸名】(它内部会自己 PathJoinSubstitution 拼 config 目录)；
+  - stage2 的 params_file / nav_params_file 都传【绝对路径】(用 get_package_share_directory)，
+    且两个都要转发——params_file 给 costmap/planner/controller，nav_params_file 给
+    behavior/bt/waypoint(漏传则 behavior_server 吃默认 global_frame=odom)。
 """
 import os
 
@@ -28,9 +28,10 @@ def generate_launch_description():
 
     prior_map_path = LaunchConfiguration('prior_map_path')
     map_yaml = LaunchConfiguration('map')
-    config_file = LaunchConfiguration('config_file')
+    lio_config_file = LaunchConfiguration('lio_config_file')   # 裸名，传给 fast_lio
     use_rviz = LaunchConfiguration('use_rviz')
-    params_file = LaunchConfiguration('params_file')
+    params_file = LaunchConfiguration('params_file')           # 绝对路径，costmap/planner/controller
+    nav_params_file = LaunchConfiguration('nav_params_file')   # 绝对路径，behavior/bt/waypoint
     delay_lio = LaunchConfiguration('delay_lio')
     delay_gicp = LaunchConfiguration('delay_gicp')
     delay_nav = LaunchConfiguration('delay_nav')
@@ -44,24 +45,27 @@ def generate_launch_description():
     sim = inc(sim_pkg, 'robot_sim.launch.py',
               use_sim_time='true', use_teleop='false')
     lio = inc(lio_pkg, 'mapping.launch.py',
-              config_file=config_file, use_sim_time='true', rviz='false')
+              config_file=lio_config_file, use_sim_time='true', rviz='false')
     gicp = inc(gicp_pkg, 'localization.launch.py',
                prior_map_path=prior_map_path)
     nav = inc(nav_pkg, 'stage2_navigation.launch.py',
-              map=map_yaml, use_rviz=use_rviz, params_file=params_file)
+              map=map_yaml, use_rviz=use_rviz,
+              params_file=params_file, nav_params_file=nav_params_file)
 
     return LaunchDescription([
         DeclareLaunchArgument('prior_map_path', default_value='~/result/GlobalMap.pcd'),
-        DeclareLaunchArgument('map', description='2D 占据栅格 .yaml 路径'),
-        DeclareLaunchArgument('config_file', default_value='gazebo_velodyne.yaml'),
+        DeclareLaunchArgument('map', default_value='~/result/map.yaml'),
+        DeclareLaunchArgument('lio_config_file', default_value='gazebo_velodyne.yaml'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
         DeclareLaunchArgument(
             'params_file',
             default_value=os.path.join(nav_pkg, 'config', 'nav2_costmaps.yaml')),
-        DeclareLaunchArgument('delay_lio', default_value='5.0'),
+        DeclareLaunchArgument(
+            'nav_params_file',
+            default_value=os.path.join(nav_pkg, 'config', 'nav2_navigation.yaml')),
+        DeclareLaunchArgument('delay_lio', default_value='20.0'),
         DeclareLaunchArgument('delay_gicp', default_value='8.0'),
         DeclareLaunchArgument('delay_nav', default_value='12.0'),
-
         sim,
         TimerAction(period=delay_lio, actions=[lio]),
         TimerAction(period=delay_gicp, actions=[gicp]),
