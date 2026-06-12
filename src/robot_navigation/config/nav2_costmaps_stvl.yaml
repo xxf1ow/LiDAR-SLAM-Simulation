@@ -1,14 +1,16 @@
-# nav2 阶段一 costmap 参数 —— STVL 版（local_costmap 用 spatio_temporal_voxel_layer 替代内置 voxel_layer）。
+# nav2 costmap 参数 —— STVL 版（local_costmap 用 spatio_temporal_voxel_layer 替代内置 voxel_layer）。
 # 用法（不改任何文件，启动时切换）：
 #   sudo apt install ros-humble-spatio-temporal-voxel-layer
-#   ros2 launch robot_navigation stage1_costmaps.launch.py map:=~/result/map.yaml \
+#   ros2 launch robot_navigation stage2_navigation.launch.py map:=~/result/map.yaml \
 #       params_file:=<install 后的 share>/robot_navigation/config/nav2_costmaps_stvl.yaml
-#   （或直接指向源码树里的本文件绝对路径）
-# 与默认 nav2_costmaps.yaml 的唯一区别：local_costmap 的障碍层。其余 map_server / global_costmap /
-# planner_server / controller_server 完全一致。
-# STVL 参数取自官方 README 示例（SteveMacenski/spatio_temporal_voxel_layer，ros2 分支），
-# 并把 clear 源从「深度相机(model_type 0)」改为「3D 激光(model_type 1)」、FOV 填 VLP-16 实参；
-# 清除模型相关项（voxel_decay / decay_acceleration / FOV）属经验值，build 机按清除效果调。
+# 与默认 nav2_costmaps.yaml 的唯一结构差异：local_costmap 的障碍层。其余各段须逐字一致
+# （由 test_costmaps_stvl_sync.py 把关，改主 yaml 共享参数时同步改本文件）。
+#
+# 阶段三修复：观测源 /points_raw → /cloud_registered_body（FAST-LIO body 系当帧去畸变云）。
+#   为什么不用 raw：/points_raw 须经 URDF TF 链(velodyne→…→map)变换，链中 velodyne 姿态与
+#   SDF 实际安装不一致 → 点在 map 系落错位置(随车头旋转，阶段二实测)。/cloud_registered_body
+#   只走 SLAM 链(body→camera_init→map)，且 frame=body 与雷达原点仅差 1cm(extrinsic_T z=-0.0103)，
+#   STVL 视锥清除原点正确。清除模型参数(voxel_decay/decay_acceleration/FOV)属经验值，实测调。
 
 map_server:
   ros__parameters:
@@ -69,14 +71,12 @@ local_costmap:
         transform_tolerance: 0.2
         mapping_mode: false
         map_save_duration: 60.0
-        # ⚠️ 待重做：body→base_footprint 焊接改单位后，/points_raw 经 velodyne TF 链会转歪。
-        #    voxel_layer 版已改用 /cloud_registered + sensor_frame:body 规避；但 STVL 的清除模型
-        #    依赖【传感器系】原始云(取光迹原点)，直接换 camera_init 系的 /cloud_registered 会让清除原点错。
-        #    用 STVL 前需先解决(修 URDF velodyne 装姿，或为 STVL 找等效的传感器系正确云)。
+        # 观测源：/cloud_registered_body（frame=body，FAST-LIO 发布，scan_bodyframe_pub_en 默认开）。
+        # mark 与 clear 共用同一话题：mark 标记占据，clear 按 3D Lidar 视锥(model_type 1)做时间加速衰减。
         observation_sources: pointcloud_mark pointcloud_clear
         pointcloud_mark:
           data_type: PointCloud2
-          topic: /points_raw           # 见上方 ⚠️：焊接改单位后此源会转歪，STVL 待重做
+          topic: /cloud_registered_body
           marking: true
           clearing: false
           min_obstacle_height: 0.1     # 滤地面（build 机按雷达离地高度调）
@@ -89,7 +89,7 @@ local_costmap:
           voxel_min_points: 0
         pointcloud_clear:
           data_type: PointCloud2
-          topic: /points_raw
+          topic: /cloud_registered_body
           marking: false
           clearing: true
           min_z: 0.1
@@ -142,11 +142,11 @@ controller_server:
       debug_trajectory_details: true
       min_vel_x: 0.0
       min_vel_y: 0.0
-      max_vel_x: 0.26
+      max_vel_x: 1.0         # 线速度上限(原 0.26 TB3 级，偏慢)；抖动模型别给太猛，可再上调
       max_vel_y: 0.0
-      max_vel_theta: 1.0
+      max_vel_theta: 1.5     # 转向角速度上限；想转更快就调大(如 1.5)
       min_speed_xy: 0.0
-      max_speed_xy: 0.26
+      max_speed_xy: 1.0      # 必须 ≥ max_vel_x，否则被钳住
       min_speed_theta: 0.0
       acc_lim_x: 2.5
       acc_lim_y: 0.0
