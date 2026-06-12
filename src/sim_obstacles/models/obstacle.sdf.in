@@ -1,0 +1,44 @@
+<?xml version="1.0"?>
+<!-- 动态障碍圆柱模板：@NAME@ 由 launch 渲染注入（sim_obstacles/sdf_template.py）。
+     planar_move 每物理步直接设置模型线/角速度 → 碰撞冲量不累积，姿态近似锁定；
+     odom/TF 全关：障碍不进 TF 树，只被雷达看见。 -->
+<sdf version="1.6">
+  <model name="@NAME@">
+    <link name="link">
+      <inertial>
+        <mass>5.0</mass>
+        <inertia>
+          <ixx>0.4667</ixx>
+          <iyy>0.4667</iyy>
+          <izz>0.1</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry>
+          <cylinder><radius>0.2</radius><length>1.0</length></cylinder>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <cylinder><radius>0.2</radius><length>1.0</length></cylinder>
+        </geometry>
+        <material>
+          <ambient>0.8 0.2 0.1 1</ambient>
+          <diffuse>0.8 0.2 0.1 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <plugin name="planar_move" filename="libgazebo_ros_planar_move.so">
+      <ros>
+        <namespace>/@NAME@</namespace>
+      </ros>
+      <update_rate>100.0</update_rate>
+      <publish_odom>false</publish_odom>
+      <publish_odom_tf>false</publish_odom_tf>
+      <robot_base_frame>link</robot_base_frame>
+    </plugin>
+  </model>
+</sdf>
