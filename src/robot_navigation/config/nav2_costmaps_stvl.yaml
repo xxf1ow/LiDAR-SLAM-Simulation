@@ -81,7 +81,7 @@ local_costmap:
           clearing: false
           min_obstacle_height: 0.1     # 滤地面（build 机按雷达离地高度调）
           max_obstacle_height: 2.0
-          expected_update_rate: 0.0
+          expected_update_rate: 0.0    # 0.0=不做超时检查（非频率限制；源停发也不报错）
           observation_persistence: 0.0
           inf_is_valid: false
           clear_after_reading: true
