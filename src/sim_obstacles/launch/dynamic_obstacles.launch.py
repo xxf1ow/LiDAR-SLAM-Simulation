@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """一键动态障碍：按 obstacles.yaml 渲染 SDF → 逐个 spawn → 启动编排节点。
 
+前置：colcon build --packages-select sim_obstacles && source install/setup.bash
+（本文件顶层 import sim_obstacles 模块，未 build+source 会报 ModuleNotFoundError）
+
 用法（Gazebo 已在跑，第五个终端）：
     ros2 launch sim_obstacles dynamic_obstacles.launch.py
     # 换清单：config_file:=/abs/path/to/obstacles.yaml
