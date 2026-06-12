@@ -46,13 +46,15 @@ class ObstacleDriver(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = ObstacleDriver()
+    node = None
     try:
+        node = ObstacleDriver()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        node.destroy_node()
+        if node is not None:
+            node.destroy_node()
         rclpy.shutdown()
 
 
