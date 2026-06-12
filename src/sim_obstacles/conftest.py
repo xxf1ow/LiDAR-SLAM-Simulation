@@ -1,3 +1,4 @@
+# 让本机（无 colcon install）的 pytest 能直接 import sim_obstacles
 import os
 import sys
 
