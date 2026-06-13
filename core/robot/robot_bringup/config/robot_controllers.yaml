@@ -22,12 +22,14 @@ base_controller:
 
     publish_rate: 50.0
     odom_frame_id: odom
-    base_frame_id: base_link
+    base_frame_id: base_footprint
     pose_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
     twist_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
 
     open_loop: true
-    enable_odom_tf: true
+    # 本项目定位靠 SLAM(建图 LIO-SAM / 运行 FAST-LIO+GICP),odom→base_footprint
+    # 由 SLAM 独占;轮式里程计仍发 /base_controller/odom 话题供 Nav2,但不发 TF。
+    enable_odom_tf: false
 
     cmd_vel_timeout: 0.5
 
