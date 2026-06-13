@@ -1,5 +1,6 @@
-"""Gazebo Harmonic 仿真侧 bringup：gz_sim(empty.sdf) + clock 桥 + spawn + robot_state_publisher
-+ 控制器 spawner。controller_manager 由 URDF 里的 gz_ros2_control 插件提供(无独立 ros2_control_node)。"""
+"""Gazebo Harmonic 仿真侧 bringup：起带传感器系统插件的测试世界 + spawn 机器人(自带 gpu_lidar/imu)
++ robot_state_publisher + 控制器 spawner + ros_gz_bridge(clock/lidar/imu) + ring/time 适配节点。
+controller_manager 由 URDF 里的 gz_ros2_control 插件提供(无独立 ros2_control_node)。"""
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
@@ -19,6 +20,9 @@ def generate_launch_description():
     gui = LaunchConfiguration("gui")
     prefix = LaunchConfiguration("prefix")
 
+    pkg_gz = FindPackageShare("robot_gz_bringup")
+    world = PathJoinSubstitution([pkg_gz, "worlds", "test_world.sdf"])
+    bridge_cfg = PathJoinSubstitution([pkg_gz, "config", "bridge.yaml"])
     gz_controllers_file = PathJoinSubstitution(
         [FindPackageShare("robot_bringup"), "config", "robot_controllers.yaml"])
 
@@ -36,21 +40,36 @@ def generate_launch_description():
     gz = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             [FindPackageShare("ros_gz_sim"), "/launch/gz_sim.launch.py"]),
-        launch_arguments=[("gz_args", " -r -v 3 empty.sdf")],
+        launch_arguments=[("gz_args", [" -r -v 3 ", world])],
         condition=IfCondition(gui),
     )
     gz_headless = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             [FindPackageShare("ros_gz_sim"), "/launch/gz_sim.launch.py"]),
-        launch_arguments=[("gz_args", " --headless-rendering -s -r -v 3 empty.sdf")],
+        launch_arguments=[("gz_args", [" --headless-rendering -s -r -v 3 ", world])],
         condition=UnlessCondition(gui),
     )
 
-    clock_bridge = Node(
+    # 桥接：clock + /lidar/points + /imu→/imu_plugin/out
+    bridge = Node(
         package="ros_gz_bridge", executable="parameter_bridge",
-        arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
-        output="screen",
+        name="ros_gz_bridge", output="screen",
+        parameters=[{"config_file": bridge_cfg, "use_sim_time": True}],
     )
+
+    # ring/time 适配：Gz 组织化点云 → Velodyne 风格 /points_raw(补 time、透传 native ring)
+    lidar_adapter = Node(
+        package="lidar_pointcloud_adapter", executable="adapter_node",
+        name="lidar_pointcloud_adapter", output="screen",
+        parameters=[{
+            "input_topic": "/lidar/points",
+            "output_topic": "/points_raw",
+            "output_frame": "velodyne",
+            "scan_period": 0.1,
+            "use_sim_time": True,
+        }],
+    )
+
     gz_spawn_entity = Node(
         package="ros_gz_sim", executable="create", output="screen",
         arguments=["-topic", "/robot_description", "-name", "robot", "-allow_renaming", "true",
@@ -78,7 +97,8 @@ def generate_launch_description():
     nodes = [
         gz,
         gz_headless,
-        clock_bridge,
+        bridge,
+        lidar_adapter,
         robot_state_pub_node,
         gz_spawn_entity,
         joint_state_broadcaster_spawner,
