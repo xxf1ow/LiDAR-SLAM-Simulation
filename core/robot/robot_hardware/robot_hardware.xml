@@ -1,0 +1,9 @@
+<library path="robot_hardware">
+  <class name="robot_hardware/DiffDriveSystem"
+         type="robot_hardware::DiffDriveSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>
+      差速移动机器人的 ros2_control system 硬件接口(velocity 命令接口 + position/velocity 状态接口)。真机侧实现的起点。
+    </description>
+  </class>
+</library>
