@@ -39,6 +39,9 @@ def test_xacro_expands_to_valid_urdf(use_gazebo, use_mock_hardware):
     assert "<robot" in urdf
     assert "left_wheel_joint" in urdf
     assert "right_wheel_joint" in urdf
+    # Phase 2 新增顶置传感器挂载帧(根仍 base_link，未加 base_footprint)
+    assert 'link name="velodyne"' in urdf
+    assert 'link name="imu_link"' in urdf
 
     # gz 分支必含 gz 插件且不含 mock/真机插件；非 gz 分支反之
     if use_gazebo == "true":
