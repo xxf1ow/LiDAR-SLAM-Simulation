@@ -7,6 +7,7 @@ from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, FindExecutable, PathJoinSubstitution, LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 
 
@@ -33,7 +34,12 @@ def generate_launch_description():
         " ", "prefix:=", prefix,
         " ", "gz_controllers_file:=", gz_controllers_file,
     ])
-    robot_description = {"robot_description": robot_description_content, "use_sim_time": True}
+    # robot_description 必须显式声明为 str：含 <gazebo> 传感器块的 URDF 不是合法 YAML，
+    # launch_ros 默认会 yaml.safe_load 推断类型而报错(见 launch 报错提示)。
+    robot_description = {
+        "robot_description": ParameterValue(robot_description_content, value_type=str),
+        "use_sim_time": True,
+    }
     rviz_config_file = PathJoinSubstitution(
         [FindPackageShare("robot_description"), "rviz", "robot.rviz"])
 
