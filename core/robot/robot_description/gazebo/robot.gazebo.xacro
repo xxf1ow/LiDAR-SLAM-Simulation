@@ -1,8 +1,10 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- gz_controllers_file: gz_ros2_control 读取的控制器 yaml 绝对路径，由 launch 注入 -->
-  <xacro:macro name="robot_gazebo" params="gz_controllers_file">
+  <!-- prefix: link 名前缀(与本体宏一致)；gz_controllers_file: gz_ros2_control 读取的控制器 yaml 绝对路径，由 launch 注入 -->
+  <xacro:macro name="robot_gazebo" params="prefix gz_controllers_file">
+
+    <!-- gz_ros2_control：controller_manager 随 Gz 进程起 -->
     <gazebo>
       <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
         <parameters>${gz_controllers_file}</parameters>
@@ -11,5 +13,58 @@
         </ros>
       </plugin>
     </gazebo>
+
+    <!-- 保住传感器挂载 link：固定关节子 link 默认会被并入父 link，且挂其上的 sensor pose
+         历史上会被错置(sdformat #378/#1114)。preserveFixedJoint 保留 link、规避 bug。 -->
+    <gazebo reference="${prefix}velodyne_joint">
+      <preserveFixedJoint>true</preserveFixedJoint>
+    </gazebo>
+    <gazebo reference="${prefix}imu_joint">
+      <preserveFixedJoint>true</preserveFixedJoint>
+    </gazebo>
+
+    <!-- 雷达：Gz 原生 gpu_lidar，16 线 / ±15° / 1800 水平(对齐 N_SCAN=16、Horizon_SCAN=1800)。
+         参数取自已验证的 Phase 0 spike。显式 topic=lidar(点云在 lidar/points)，避免 spawn 模型作用域前缀。 -->
+    <gazebo reference="${prefix}velodyne">
+      <sensor name="gpu_lidar" type="gpu_lidar">
+        <topic>lidar</topic>
+        <gz_frame_id>${prefix}velodyne</gz_frame_id>
+        <update_rate>10</update_rate>
+        <always_on>1</always_on>
+        <visualize>true</visualize>
+        <lidar>
+          <scan>
+            <horizontal>
+              <samples>1800</samples>
+              <resolution>1</resolution>
+              <min_angle>-3.14159</min_angle>
+              <max_angle>3.14159</max_angle>
+            </horizontal>
+            <vertical>
+              <samples>16</samples>
+              <resolution>1</resolution>
+              <min_angle>-0.261799</min_angle>
+              <max_angle>0.261799</max_angle>
+            </vertical>
+          </scan>
+          <range>
+            <min>0.9</min>
+            <max>100.0</max>
+            <resolution>0.01</resolution>
+          </range>
+        </lidar>
+      </sensor>
+    </gazebo>
+
+    <!-- IMU：Gz 原生 imu，与 velodyne 共位。显式 topic=imu。 -->
+    <gazebo reference="${prefix}imu_link">
+      <sensor name="imu" type="imu">
+        <topic>imu</topic>
+        <gz_frame_id>${prefix}imu_link</gz_frame_id>
+        <update_rate>200</update_rate>
+        <always_on>1</always_on>
+      </sensor>
+    </gazebo>
+
   </xacro:macro>
 </robot>
