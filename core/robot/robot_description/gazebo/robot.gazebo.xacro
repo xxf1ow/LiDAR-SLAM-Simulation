@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- gz_controllers_file: gz_ros2_control 读取的控制器 yaml 绝对路径，由 launch 注入 -->
+  <xacro:macro name="robot_gazebo" params="gz_controllers_file">
+    <gazebo>
+      <plugin filename="gz_ros2_control-system" name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+        <parameters>${gz_controllers_file}</parameters>
+        <ros>
+          <remapping>/base_controller/cmd_vel:=/cmd_vel</remapping>
+        </ros>
+      </plugin>
+    </gazebo>
+  </xacro:macro>
+</robot>
