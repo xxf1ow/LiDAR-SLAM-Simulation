@@ -54,6 +54,14 @@ ros2 topic pub /cmd_vel geometry_msgs/msg/TwistStamped \
 - 控制器起不来:查 controller_manager 是否由 gz 插件起(`ros2 node list` 应有 `/controller_manager`)、`gz_controllers_file` 路径是否注入正确(看展开后的 URDF `<parameters>` 是否绝对路径)。
 - xacro 测试 FAIL:看 `colcon test-result --verbose` 的断言与 check_urdf 报错。
 
+### Phase 2 追加判据(参数化真车尺寸)
+跑 `ros2 launch robot_description view_robot.launch.py` 或 `robot_gz_bringup robot_gz.launch.py`,确认:
+6. 车体可见尺寸 ≈ 0.75(长)×0.55(宽)×0.40(高) m;两驱动轮在两侧、前后两万向球触地,车落在地面不下陷/不弹飞。
+7. **雷达 puck(黑色圆柱)完整露在车顶中央之上,未埋进车体**。
+8. TF:`ros2 run tf2_ros tf2_echo base_link velodyne` 与 `base_link imu_link` 的平移**完全相同**(共位,xyz=0 0 0.236)。
+9. 里程计:发 TwistStamped 后 `ros2 topic echo /base_controller/odom` 的 `child_frame_id` = `base_link`(本阶段未加 base_footprint);提速后(linear 可达 1.5 m/s)行驶不再"痛苦地慢"。
+10. 已知:`kdl_parser: root link base_link has an inertia` 警告**仍在**(根仍是 base_link,符合示例;base_footprint 留 Phase 5)——无害,勿误判为回归。
+
 ## 已知注意
 - Phase 1 用参考 DiffBot 的微小尺寸(轮距 0.10 m),Gz 里机器人很小、移动距离小,看 odom 数值确认即可;真车尺寸在 Phase 2。
 - Gz 模式 RTF 可能 <1,`/cmd_vel` 用持续发布(`-r 10`)而非 `--once`。
