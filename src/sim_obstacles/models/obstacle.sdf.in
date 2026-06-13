@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<!-- 动态障碍立方体模板：@NAME@ 由 launch 渲染注入（sim_obstacles/sdf_template.py）。
+     <gravity>false</gravity> + planar_move 每步重置 z/roll/pitch 速度 → 障碍恒定悬于 spawn 高度、
+     绝不翻倒。(实测反馈：细高刚体在 planar_move 100Hz 回调间的物理窗口里会渐进倾倒直到躺平，
+     躺平后主体塌到 z<0.1m 被 costmap 高度过滤丢弃→点云仍可见但不再标记障碍；关重力从根上消除翻倒力矩。)
+     碰撞被 planar_move 的目标速度覆盖：障碍按预定轨迹走、不被撞偏。odom/TF 全关：不进 TF 树，只被雷达看见。
+     边长 0.8m，spawn 须传 -z 0.4(=边长/2)：link 原点在立方体几何中心，z=0.4 才坐在地面上。 -->
+<sdf version="1.6">
+  <model name="@NAME@">
+    <link name="link">
+      <gravity>false</gravity>
+      <inertial>
+        <mass>5.0</mass>
+        <inertia>
+          <ixx>0.5333</ixx>
+          <iyy>0.5333</iyy>
+          <izz>0.5333</izz>
+          <ixy>0</ixy>
+          <ixz>0</ixz>
+          <iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry>
+          <box><size>0.8 0.8 0.8</size></box>
+        </geometry>
+      </collision>
+      <visual name="visual">
+        <geometry>
+          <box><size>0.8 0.8 0.8</size></box>
+        </geometry>
+        <material>
+          <ambient>0.8 0.2 0.1 1</ambient>
+          <diffuse>0.8 0.2 0.1 1</diffuse>
+        </material>
+      </visual>
+    </link>
+    <plugin name="planar_move" filename="libgazebo_ros_planar_move.so">
+      <ros>
+        <namespace>/@NAME@</namespace>
+      </ros>
+      <update_rate>100.0</update_rate>
+      <publish_odom>false</publish_odom>
+      <publish_odom_tf>false</publish_odom_tf>
+      <robot_base_frame>link</robot_base_frame>
+    </plugin>
+  </model>
+</sdf>

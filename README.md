@@ -533,3 +533,104 @@ ros2 run tf2_ros tf2_echo map base_footprint
 - **速度**：`nav2_costmaps.yaml` 的 `FollowPath` 块——`max_vel_x` 与 `max_speed_xy`（两者须一致）调线速度，`max_vel_theta` 调转向。当前 `max_vel_x=1.0`、`max_vel_theta=1.5`；想更快继续上调，⚠️ 抖动模型（病态 robot.sdf）别给太猛。
 - **`Sensor origin out of map bounds`（导致车假性卡死、刷屏）**：`/cloud_registered` 的传感器原点 `body` 在 `camera_init` 系 z≈0，voxel_layer 的 `origin_z` 须下探含住它（已设 `origin_z=-1.0`、`z_voxels=30`，覆盖 -1.0~+2.0），否则无法光迹清除、局部障碍清不掉。
 - footprint、`inflation_radius`、goal tolerance、`behavior_server` 旋转速度按实测模型核。
+
+## nav2 导航（阶段三：动态障碍物 + STVL 修复对比）
+
+> [!NOTE]
+> 阶段三在阶段二完整自主导航栈之上增加两件事：
+> 1. **动态障碍物实测**：新包 `sim_obstacles` 在仿真中生成 8 个往复运动的立方体障碍（边长 0.8m、关重力防翻倒），验证 local costmap 能正确标记移动障碍、机器人能避让/停-等-绕行全程无碰撞。
+> 2. **voxel_layer vs STVL 对比**：阶段二遗留的 STVL 配置（`nav2_costmaps_stvl.yaml`）存在观测源错误（用了 `/points_raw` 而非 `/cloud_registered_body`）并与主配置不同步，本阶段已修复，可与 voxel_layer 做同场景定性对比。
+>
+> 必须压在完整阶段二栈之上（robot_sim **`use_teleop:=false`** + FAST-LIO + gicp_localization + stage2_navigation）。
+
+### 准备项目文件
+
+```bash
+# 1. 编译新包（launch 文件 import sim_obstacles 的 Python 模块，必须先 build+source 才能被 ros2 launch 找到）
+cd src && colcon build --packages-select sim_obstacles robot_navigation && source install/setup.bash
+```
+
+### 编译运行
+
+**五个终端依次启动**（每个终端先 `cd src && source install/setup.bash`）：
+
+```bash
+# 终端一：Gazebo 仿真（关 teleop，nav2 独占 /cmd_vel）
+ros2 launch robot_gazebo robot_sim.launch.py use_teleop:=false
+# 终端二：FAST-LIO2 里程计
+ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true rviz:=false
+# 终端三：GICP 先验地图定位
+ros2 launch gicp_localization localization.launch.py prior_map_path:=~/result/GlobalMap.pcd
+# 终端四：nav2 完整导航栈（沿用阶段二）
+ros2 launch robot_navigation stage2_navigation.launch.py map:=~/result/map.yaml
+# 终端五：动态障碍物编排（仿真专用）
+ros2 launch sim_obstacles dynamic_obstacles.launch.py
+#   可选：ros2 launch sim_obstacles dynamic_obstacles.launch.py config_file:=<自定义清单路径>
+```
+
+**STVL 版导航（同场景换障碍层对比）**：
+
+```bash
+# 1. 安装 STVL 包（只需一次）
+sudo apt install ros-humble-spatio-temporal-voxel-layer
+
+# 2. 终端四改用 STVL 配置启动
+ros2 launch robot_navigation stage2_navigation.launch.py map:=~/result/map.yaml \
+  params_file:=$(ros2 pkg prefix robot_navigation)/share/robot_navigation/config/nav2_costmaps_stvl.yaml
+```
+
+> **为什么用 `/cloud_registered_body` 而不用 `/points_raw`**
+>
+> `/points_raw` 须经 URDF TF 链（`velodyne→base_link→base_footprint→body→camera_init→map`）变换到 `map` 系，而该链中 `velodyne` 的姿态与 SDF 实际安装不一致——点在 `map` 系会落到错误位置，并随车头旋转而漂移（阶段二实测已观察到此现象）。
+>
+> `/cloud_registered_body` 只走 SLAM 链（`body→camera_init→map`），`frame_id=body`，雷达安装原点与 `body` 帧仅差 1 cm（`extrinsic_T z=-0.0103`）。FAST-LIO 对该点云的预处理仅做：盲区滤除（`blind=1.0 m`，与 costmap `min_range=0.9` 同义）、1/4 抽稀（`point_filter_num=4`，单帧仍约 7000 点）、坐标系变换——**无任何平滑或形变**，每个保留的点仍是原始物理回波，用于 costmap 完全准确。
+
+### 调参
+
+- **障碍物参数**：密度/位置/速度/周期/相位全在 `src/sim_obstacles/config/obstacles.yaml`。
+  - 坐标为暂定值，应按工厂通道实测调整；单程行程 ≈ `speed × period / 2`。
+  - 若 GICP `fitness` 因动态点占比过高而下降，减少 `obstacles.yaml` 中的障碍条目数。
+- **障碍物尺寸/防翻倒**：障碍为边长 0.8m 立方体，在 `models/obstacle.sdf.in` 改 `<box><size>` 与 inertia（实心立方体 `I = m·s²/6`），spawn 高度常量 `BOX_HALF_SIZE`（=边长/2）随之同改。模板设 `<gravity>false</gravity>` 根除翻倒——圆柱/细高刚体在 planar_move 100Hz 回调间的物理窗口里会渐进倾倒，躺平后主体塌到 `z<0.1m` 被 costmap 高度过滤丢弃（点云仍可见但不再标记障碍）。
+- **STVL 清除速度**：调 `nav2_costmaps_stvl.yaml` 中的 `voxel_decay` 与 `decay_acceleration`（值越小清除越慢，值越大越激进）。
+- **避障/保距调参**（两份 costmap yaml 须保持同步，`test_costmaps_stvl_sync.py` 把关）：
+  - `local_costmap.inflation_layer.inflation_radius`（现 1.0）：机器人与障碍的保持距离。设得 **>0.9m 盲区**，才能在障碍尚可见时就停住、不冲进盲区顶障碍。太大则窄通道代价偏高。
+  - `inflation_layer.cost_scaling_factor`（现 2.5，global/local 同步）：越小代价铺得越远、越倾向走通道中央（治"贴墙走"）。
+  - `controller_server.FollowPath.BaseObstacle.scale`（现 0.1，原 nav2 默认 0.02 几乎不顾障碍代价）：越大越早避让、保距越明显；过大会摆动。
+  - `progress_checker.movement_time_allowance`（现 30s）：stop-and-wait 等障碍通过的最长容忍；超时才判失败走恢复行为。
+- 其余速度/footprint/goal tolerance 调参见阶段二。
+
+> **避障策略 = stop-and-wait（反应式栈的现实定位）**
+>
+> DWB 是纯反应式规划器、不预测障碍运动，无法流畅闪避快速移动的"墙"。本阶段定位为：机器人**提前保距、被挡就停下等障碍通过、再继续**（日志里 `No valid trajectories` 是 DWB 正确否决了会碰撞的轨迹，不是 bug）。配套把障碍速度下调到 0.15~0.3 m/s，使机器人来得及在障碍冲进 ~0.9m 盲区前停住。
+>
+> 残留情形：若某个移动障碍主动走进**已停稳**机器人的盲区，仍可能接触——这属障碍撞机器人（机器人已尽责停等），靠障碍布点/速度规避，或选择缩小盲区（见验收注记）。要真正流畅动态闪避需换预测型局部规划器（如 MPPI），属后续独立工作。
+
+### 验收标准
+
+> [!NOTE]
+> 本阶段验收在动态场景下进行，实测前以下各项为待办（TO-DO）。实测后回填结果。
+
+1. **动态障碍标记与 stop-and-wait**：密集动态障碍下多点巡航数圈——移动障碍正确进入 local costmap（体素标记出现）、障碍离开后轨迹残影被及时清除、无持续假障碍；机器人**提前保距、被挡时停下等障碍通过再继续**（不应再贴障碍走或冲进去顶翻障碍）。
+2. **voxel_layer vs STVL 对比**（实测后回填）：两套配置跑同一动态场景，记录定性对比——
+   - （实测后回填：标记延迟 / 残影清除速度 / CPU 体感）
+3. **回归**：静态场景多点导航不退化；GICP `fitness` 稳定在阈值（0.9）以上；6 个 lifecycle 节点全 `active`。
+
+### 构建机操作清单
+
+**需复制到构建机的文件**：
+
+```
+src/sim_obstacles/                                         ← 新包（整目录）
+src/robot_navigation/config/nav2_costmaps_stvl.yaml        ← STVL 配置修复
+src/robot_navigation/test/test_costmaps_stvl_sync.py       ← 同步测试
+src/robot_navigation/CMakeLists.txt                        ← 安装规则（含测试注册）
+README.md
+```
+
+**构建机执行命令**：
+
+```bash
+sudo apt install ros-humble-spatio-temporal-voxel-layer
+cd src && colcon build --packages-select sim_obstacles robot_navigation
+colcon test --packages-select sim_obstacles robot_navigation && colcon test-result --verbose
+```
