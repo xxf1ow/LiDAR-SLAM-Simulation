@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robot">
+  <xacro:arg name="prefix" default=""/>
+  <xacro:arg name="use_gazebo" default="false"/>
+  <xacro:arg name="use_mock_hardware" default="false"/>
+  <xacro:arg name="disable_commands" default="false"/>
+  <!-- 仅 Gz 模式用：gz_ros2_control 读取的控制器 yaml 绝对路径 -->
+  <xacro:arg name="gz_controllers_file" default=""/>
+
+  <xacro:include filename="$(find robot_description)/urdf/robot_macro.urdf.xacro"/>
+  <xacro:include filename="$(find robot_description)/urdf/robot.materials.xacro"/>
+  <xacro:include filename="$(find robot_description)/ros2_control/robot.ros2_control.xacro"/>
+
+  <xacro:robot_body prefix="$(arg prefix)"/>
+
+  <xacro:robot_ros2_control
+    name="RobotSystem"
+    prefix="$(arg prefix)"
+    use_gazebo="$(arg use_gazebo)"
+    use_mock_hardware="$(arg use_mock_hardware)"
+    disable_commands="$(arg disable_commands)"/>
+
+  <xacro:if value="$(arg use_gazebo)">
+    <xacro:include filename="$(find robot_description)/gazebo/robot.gazebo.xacro"/>
+    <xacro:robot_gazebo gz_controllers_file="$(arg gz_controllers_file)"/>
+  </xacro:if>
+</robot>
