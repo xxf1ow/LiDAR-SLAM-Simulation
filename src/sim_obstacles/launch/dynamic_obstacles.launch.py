@@ -20,7 +20,7 @@ from launch_ros.actions import Node
 from sim_obstacles.config_loader import load_obstacles
 from sim_obstacles.sdf_template import render_sdf
 
-CYLINDER_HALF_HEIGHT = '0.5'   # 圆柱中心离地高（h=1.0m），z=0.5 才落地不嵌地
+BOX_HALF_SIZE = '0.4'   # 立方体中心离地高（边长 0.8m），z=0.4 才坐在地面上
 
 
 def _spawn_and_drive(context, *args, **kwargs):
@@ -45,7 +45,7 @@ def _spawn_and_drive(context, *args, **kwargs):
             arguments=[
                 '-entity', ob['name'], '-file', sdf_path,
                 '-x', str(ob['x']), '-y', str(ob['y']),
-                '-z', CYLINDER_HALF_HEIGHT, '-Y', str(ob['yaw']),
+                '-z', BOX_HALF_SIZE, '-Y', str(ob['yaw']),
             ],
         ))
 

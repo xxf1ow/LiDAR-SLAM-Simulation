@@ -30,3 +30,20 @@ def test_planar_move_plugin_publishes_nothing():
     assert plugin.get("filename") == "libgazebo_ros_planar_move.so"
     assert plugin.find("publish_odom").text == "false"
     assert plugin.find("publish_odom_tf").text == "false"
+
+
+def test_uses_box_geometry():
+    """障碍是立方体（非圆柱）：实测圆柱细高易翻倒，改矮胖立方体。"""
+    root = ET.fromstring(_rendered())
+    assert root.find("model/link/collision/geometry/cylinder") is None
+    box = root.find("model/link/collision/geometry/box")
+    assert box is not None
+    assert box.find("size").text == "0.8 0.8 0.8"
+    vbox = root.find("model/link/visual/geometry/box")
+    assert vbox.find("size").text == "0.8 0.8 0.8"
+
+
+def test_gravity_disabled():
+    """关重力：根除 planar_move 100Hz 插值窗口内的渐进翻倒（实测反馈）。"""
+    root = ET.fromstring(_rendered())
+    assert root.find("model/link/gravity").text == "false"

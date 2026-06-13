@@ -538,7 +538,7 @@ ros2 run tf2_ros tf2_echo map base_footprint
 
 > [!NOTE]
 > 阶段三在阶段二完整自主导航栈之上增加两件事：
-> 1. **动态障碍物实测**：新包 `sim_obstacles` 在仿真中生成 8 个往复运动的圆柱障碍，验证 local costmap 能正确标记移动障碍、机器人能避让/停-等-绕行全程无碰撞。
+> 1. **动态障碍物实测**：新包 `sim_obstacles` 在仿真中生成 8 个往复运动的立方体障碍（边长 0.8m、关重力防翻倒），验证 local costmap 能正确标记移动障碍、机器人能避让/停-等-绕行全程无碰撞。
 > 2. **voxel_layer vs STVL 对比**：阶段二遗留的 STVL 配置（`nav2_costmaps_stvl.yaml`）存在观测源错误（用了 `/points_raw` 而非 `/cloud_registered_body`）并与主配置不同步，本阶段已修复，可与 voxel_layer 做同场景定性对比。
 >
 > 必须压在完整阶段二栈之上（robot_sim **`use_teleop:=false`** + FAST-LIO + gicp_localization + stage2_navigation）。
@@ -590,6 +590,7 @@ ros2 launch robot_navigation stage2_navigation.launch.py map:=~/result/map.yaml 
 - **障碍物参数**：密度/位置/速度/周期/相位全在 `src/sim_obstacles/config/obstacles.yaml`。
   - 坐标为暂定值，应按工厂通道实测调整；单程行程 ≈ `speed × period / 2`。
   - 若 GICP `fitness` 因动态点占比过高而下降，减少 `obstacles.yaml` 中的障碍条目数。
+- **障碍物尺寸/防翻倒**：障碍为边长 0.8m 立方体，在 `models/obstacle.sdf.in` 改 `<box><size>` 与 inertia（实心立方体 `I = m·s²/6`），spawn 高度常量 `BOX_HALF_SIZE`（=边长/2）随之同改。模板设 `<gravity>false</gravity>` 根除翻倒——圆柱/细高刚体在 planar_move 100Hz 回调间的物理窗口里会渐进倾倒，躺平后主体塌到 `z<0.1m` 被 costmap 高度过滤丢弃（点云仍可见但不再标记障碍）。
 - **STVL 清除速度**：调 `nav2_costmaps_stvl.yaml` 中的 `voxel_decay` 与 `decay_acceleration`（值越小清除越慢，值越大越激进）。
 - 其余速度/footprint/goal tolerance 调参见阶段二。
 
