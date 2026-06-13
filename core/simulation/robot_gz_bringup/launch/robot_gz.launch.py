@@ -24,7 +24,8 @@ def generate_launch_description():
                                           "为空则依赖已 export 的 GZ_SIM_RESOURCE_PATH。"),
         DeclareLaunchArgument("spawn_x", default_value="4.0", description="机器人 spawn X(避开原点 workcell)。"),
         DeclareLaunchArgument("spawn_y", default_value="0.0", description="机器人 spawn Y。"),
-        DeclareLaunchArgument("spawn_z", default_value="0.33", description="机器人 spawn Z。"),
+        DeclareLaunchArgument("spawn_z", default_value="0.05",
+                              description="机器人 spawn Z(根=base_footprint 在地面，留 5cm 落地余量)。"),
     ]
     gui = LaunchConfiguration("gui")
     prefix = LaunchConfiguration("prefix")
