@@ -1,148 +1,215 @@
 <?xml version="1.0"?>
-<!-- 差速移动底盘本体：盒身 + 左右驱动轮 + 前后万向轮。尺寸沿用参考 DiffBot，Phase 2 参数化成真车值。 -->
+<!-- 差速移动底盘本体(真实尺寸 0.75x0.55x0.40 m，根=base_link，照示例)：盒身 + 左右驱动轮
+     + 前后球形万向轮(半径=驱动轮、同高) + 车顶中央共位的 velodyne / imu_link 挂载帧。
+     碰撞用基本几何(box/cylinder/sphere)。Gz 传感器插件在 Phase 3 的 gazebo.xacro 加。
+     注：根 base_link 带 inertial，会触发 kdl_parser "root link has an inertia" 告警(无害)；
+         base_footprint 留待 Phase 5(Nav2/SLAM 需要时)再加。 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <xacro:macro name="robot_body" params="prefix">
 
   <xacro:property name="PI" value="3.1415926535897931"/>
-  <xacro:property name="base_mass" value="0.3"/>
-  <xacro:property name="base_width" value="0.1"/>
-  <xacro:property name="base_length" value="0.1"/>
-  <xacro:property name="base_height" value="0.05"/>
-  <xacro:property name="wheel_mass" value="0.3"/>
-  <xacro:property name="wheel_len" value="0.020"/>
-  <xacro:property name="wheel_radius" value="0.015"/>
-  <xacro:property name="caster_wheel_mass" value="0.1"/>
-  <xacro:property name="caster_wheel_radius" value="0.015"/>
-  <xacro:property name="z_offset" value="-${base_height/2}"/>
 
+  <!-- 车体(X=长 Y=宽 Z=高) -->
+  <xacro:property name="base_length" value="0.75"/>
+  <xacro:property name="base_width"  value="0.55"/>
+  <xacro:property name="base_height" value="0.40"/>
+  <xacro:property name="base_mass"   value="30.0"/>
+
+  <!-- 驱动轮 -->
+  <xacro:property name="wheel_radius" value="0.12"/>
+  <xacro:property name="wheel_width"  value="0.06"/>
+  <xacro:property name="wheel_mass"   value="2.0"/>
+
+  <!-- 球形万向轮：照示例，半径=驱动轮半径、与驱动轮同高 -->
+  <xacro:property name="caster_radius" value="${wheel_radius}"/>
+  <xacro:property name="caster_mass"   value="0.2"/>
+
+  <!-- 顶部传感器(VLP-16 外形 puck) -->
+  <xacro:property name="lidar_radius" value="0.0516"/>
+  <xacro:property name="lidar_height" value="0.072"/>
+  <xacro:property name="lidar_mass"   value="0.83"/>
+  <xacro:property name="imu_mass"     value="0.01"/>
+
+  <!-- 派生量 -->
+  <xacro:property name="wheel_z"  value="${-base_height/2}"/>                  <!-- 轮中心在车体底缘 -->
+  <xacro:property name="caster_x" value="${base_length/2 - caster_radius}"/>
+  <xacro:property name="sensor_z" value="${base_height/2 + lidar_height/2}"/>  <!-- puck 底贴车顶、完全外露 -->
+
+  <!-- 车体(根 link) -->
   <link name="${prefix}base_link">
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><box size="${base_width} ${base_length} ${base_height}"/></geometry>
+      <geometry><box size="${base_length} ${base_width} ${base_height}"/></geometry>
     </collision>
     <visual>
-      <origin xyz="0 0 ${base_height/2}" rpy="0 0 0"/>
-      <geometry><box size="${base_width} ${base_length} ${base_height}"/></geometry>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><box size="${base_length} ${base_width} ${base_height}"/></geometry>
       <material name="orange"/>
     </visual>
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <mass value="${base_mass}"/>
       <inertia
-        ixx="${base_mass / 12.0 * (base_length*base_length + base_height*base_height)}" ixy="0.0" ixz="0.0"
-        iyy="${base_mass / 12.0 * (base_height*base_height + base_width*base_width)}" iyz="0.0"
-        izz="${base_mass / 12.0 * (base_width*base_width + base_length*base_length)}"/>
+        ixx="${base_mass / 12.0 * (base_width*base_width + base_height*base_height)}" ixy="0.0" ixz="0.0"
+        iyy="${base_mass / 12.0 * (base_length*base_length + base_height*base_height)}" iyz="0.0"
+        izz="${base_mass / 12.0 * (base_length*base_length + base_width*base_width)}"/>
     </inertial>
   </link>
 
+  <!-- 左驱动轮 -->
   <joint name="${prefix}left_wheel_joint" type="continuous">
     <parent link="${prefix}base_link"/>
-    <child link="${prefix}left_wheel"/>
-    <origin xyz="0 -${base_width/2} ${z_offset}" rpy="0 0 0"/>
+    <child  link="${prefix}left_wheel"/>
+    <origin xyz="0 ${base_width/2} ${wheel_z}" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <dynamics damping="0.2"/>
-    <limit effort="100" velocity="1.0"/>
+    <limit effort="100" velocity="20.0"/>
   </joint>
 
   <link name="${prefix}left_wheel">
     <collision>
       <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
-      <geometry><cylinder length="${wheel_len}" radius="${wheel_radius}"/></geometry>
+      <geometry><cylinder length="${wheel_width}" radius="${wheel_radius}"/></geometry>
     </collision>
     <visual>
       <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
-      <geometry><cylinder length="${wheel_len}" radius="${wheel_radius}"/></geometry>
+      <geometry><cylinder length="${wheel_width}" radius="${wheel_radius}"/></geometry>
       <material name="black"/>
     </visual>
     <inertial>
       <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
       <mass value="${wheel_mass}"/>
       <inertia
-        ixx="${wheel_mass / 12.0 * (3*wheel_radius*wheel_radius + wheel_len*wheel_len)}" ixy="0.0" ixz="0.0"
-        iyy="${wheel_mass / 12.0 * (3*wheel_radius*wheel_radius + wheel_len*wheel_len)}" iyz="0.0"
+        ixx="${wheel_mass / 12.0 * (3*wheel_radius*wheel_radius + wheel_width*wheel_width)}" ixy="0.0" ixz="0.0"
+        iyy="${wheel_mass / 12.0 * (3*wheel_radius*wheel_radius + wheel_width*wheel_width)}" iyz="0.0"
         izz="${wheel_mass / 2.0 * wheel_radius*wheel_radius}"/>
     </inertial>
   </link>
 
+  <!-- 右驱动轮 -->
   <joint name="${prefix}right_wheel_joint" type="continuous">
     <parent link="${prefix}base_link"/>
-    <child link="${prefix}right_wheel"/>
-    <origin xyz="0 ${base_width/2} ${z_offset}" rpy="0 0 0"/>
+    <child  link="${prefix}right_wheel"/>
+    <origin xyz="0 ${-base_width/2} ${wheel_z}" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <dynamics damping="0.2"/>
-    <limit effort="100" velocity="1.0"/>
+    <limit effort="100" velocity="20.0"/>
   </joint>
 
   <link name="${prefix}right_wheel">
     <collision>
       <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
-      <geometry><cylinder length="${wheel_len}" radius="${wheel_radius}"/></geometry>
+      <geometry><cylinder length="${wheel_width}" radius="${wheel_radius}"/></geometry>
     </collision>
     <visual>
       <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
-      <geometry><cylinder length="${wheel_len}" radius="${wheel_radius}"/></geometry>
+      <geometry><cylinder length="${wheel_width}" radius="${wheel_radius}"/></geometry>
       <material name="black"/>
     </visual>
     <inertial>
       <origin xyz="0 0 0" rpy="${PI/2} 0 0"/>
       <mass value="${wheel_mass}"/>
       <inertia
-        ixx="${wheel_mass / 12.0 * (3*wheel_radius*wheel_radius + wheel_len*wheel_len)}" ixy="0.0" ixz="0.0"
-        iyy="${wheel_mass / 12.0 * (3*wheel_radius*wheel_radius + wheel_len*wheel_len)}" iyz="0.0"
+        ixx="${wheel_mass / 12.0 * (3*wheel_radius*wheel_radius + wheel_width*wheel_width)}" ixy="0.0" ixz="0.0"
+        iyy="${wheel_mass / 12.0 * (3*wheel_radius*wheel_radius + wheel_width*wheel_width)}" iyz="0.0"
         izz="${wheel_mass / 2.0 * wheel_radius*wheel_radius}"/>
     </inertial>
   </link>
 
+  <!-- 前万向轮(半径=驱动轮、与驱动轮同高，照示例) -->
   <joint name="${prefix}caster_frontal_wheel_joint" type="fixed">
     <parent link="${prefix}base_link"/>
-    <child link="${prefix}caster_frontal_wheel"/>
-    <origin xyz="${base_width/2 - caster_wheel_radius} 0 ${z_offset}" rpy="0 0 0"/>
+    <child  link="${prefix}caster_frontal_wheel"/>
+    <origin xyz="${caster_x} 0 ${wheel_z}" rpy="0 0 0"/>
   </joint>
 
   <link name="${prefix}caster_frontal_wheel">
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><sphere radius="${caster_wheel_radius}"/></geometry>
+      <geometry><sphere radius="${caster_radius}"/></geometry>
     </collision>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><sphere radius="${caster_wheel_radius}"/></geometry>
+      <geometry><sphere radius="${caster_radius}"/></geometry>
       <material name="white"/>
     </visual>
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="${caster_wheel_mass}"/>
+      <mass value="${caster_mass}"/>
       <inertia
-        ixx="${caster_wheel_mass * 0.4 * (caster_wheel_radius * caster_wheel_radius)}" ixy="0.0" ixz="0.0"
-        iyy="${caster_wheel_mass * 0.4 * (caster_wheel_radius * caster_wheel_radius)}" iyz="0.0"
-        izz="${caster_wheel_mass * 0.4 * (caster_wheel_radius * caster_wheel_radius)}"/>
+        ixx="${caster_mass * 0.4 * (caster_radius * caster_radius)}" ixy="0.0" ixz="0.0"
+        iyy="${caster_mass * 0.4 * (caster_radius * caster_radius)}" iyz="0.0"
+        izz="${caster_mass * 0.4 * (caster_radius * caster_radius)}"/>
     </inertial>
   </link>
 
+  <!-- 后万向轮 -->
   <joint name="${prefix}caster_rear_wheel_joint" type="fixed">
     <parent link="${prefix}base_link"/>
-    <child link="${prefix}caster_rear_wheel"/>
-    <origin xyz="${-base_width/2 + caster_wheel_radius} 0 ${z_offset}" rpy="0 0 0"/>
+    <child  link="${prefix}caster_rear_wheel"/>
+    <origin xyz="${-caster_x} 0 ${wheel_z}" rpy="0 0 0"/>
   </joint>
 
   <link name="${prefix}caster_rear_wheel">
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><sphere radius="${caster_wheel_radius}"/></geometry>
+      <geometry><sphere radius="${caster_radius}"/></geometry>
     </collision>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <geometry><sphere radius="${caster_wheel_radius}"/></geometry>
+      <geometry><sphere radius="${caster_radius}"/></geometry>
       <material name="white"/>
     </visual>
     <inertial>
       <origin xyz="0 0 0" rpy="0 0 0"/>
-      <mass value="${caster_wheel_mass}"/>
+      <mass value="${caster_mass}"/>
       <inertia
-        ixx="${caster_wheel_mass * 0.4 * (caster_wheel_radius * caster_wheel_radius)}" ixy="0.0" ixz="0.0"
-        iyy="${caster_wheel_mass * 0.4 * (caster_wheel_radius * caster_wheel_radius)}" iyz="0.0"
-        izz="${caster_wheel_mass * 0.4 * (caster_wheel_radius * caster_wheel_radius)}"/>
+        ixx="${caster_mass * 0.4 * (caster_radius * caster_radius)}" ixy="0.0" ixz="0.0"
+        iyy="${caster_mass * 0.4 * (caster_radius * caster_radius)}" iyz="0.0"
+        izz="${caster_mass * 0.4 * (caster_radius * caster_radius)}"/>
+    </inertial>
+  </link>
+
+  <!-- 雷达挂载帧 velodyne：车顶中央、puck 底贴车顶、完全外露。Phase 3 在此挂 Gz gpu_lidar。 -->
+  <joint name="${prefix}velodyne_joint" type="fixed">
+    <parent link="${prefix}base_link"/>
+    <child  link="${prefix}velodyne"/>
+    <origin xyz="0 0 ${sensor_z}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="${prefix}velodyne">
+    <collision>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder length="${lidar_height}" radius="${lidar_radius}"/></geometry>
+    </collision>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry><cylinder length="${lidar_height}" radius="${lidar_radius}"/></geometry>
+      <material name="black"/>
+    </visual>
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${lidar_mass}"/>
+      <inertia
+        ixx="${lidar_mass / 12.0 * (3*lidar_radius*lidar_radius + lidar_height*lidar_height)}" ixy="0.0" ixz="0.0"
+        iyy="${lidar_mass / 12.0 * (3*lidar_radius*lidar_radius + lidar_height*lidar_height)}" iyz="0.0"
+        izz="${lidar_mass / 2.0 * lidar_radius*lidar_radius}"/>
+    </inertial>
+  </link>
+
+  <!-- IMU 挂载帧 imu_link：与 velodyne 同位置(外参归零)。Phase 3 在此挂 Gz imu。 -->
+  <joint name="${prefix}imu_joint" type="fixed">
+    <parent link="${prefix}base_link"/>
+    <child  link="${prefix}imu_link"/>
+    <origin xyz="0 0 ${sensor_z}" rpy="0 0 0"/>
+  </joint>
+
+  <link name="${prefix}imu_link">
+    <inertial>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <mass value="${imu_mass}"/>
+      <inertia ixx="1e-6" ixy="0.0" ixz="0.0" iyy="1e-6" iyz="0.0" izz="1e-6"/>
     </inertial>
   </link>
 
