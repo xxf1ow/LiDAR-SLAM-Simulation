@@ -1,0 +1,76 @@
+<?xml version="1.0"?>
+<!-- Phase 3 传感器测试世界：地面 + 4 面外墙 + 7 个高低/位置散开的障碍(给雷达丰富特征)
+     + 物理/传感器/IMU 系统插件。机器人由 launch spawn 进来(自带 gpu_lidar/imu)。
+     原点附近 (~半径 1.5m) 留空给机器人 spawn。完整工厂世界在 Phase 4。
+     系统插件名为 Harmonic 的 gz-sim-*-system；若 build 机版本不同(gz sim 版本查)，按报错调整。 -->
+<sdf version="1.9">
+  <world name="robot_test">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+
+    <light type="directional" name="sun">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <model name="ground"><static>true</static><link name="l">
+      <collision name="c"><geometry><plane><normal>0 0 1</normal><size>50 50</size></plane></geometry></collision>
+      <visual name="v"><geometry><plane><normal>0 0 1</normal><size>50 50</size></plane></geometry></visual>
+    </link></model>
+
+    <!-- 4 面外墙(围成 ~12x12 场地) -->
+    <model name="wall_east"><static>true</static><pose>6 0 1 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>0.2 12 2</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.2 12 2</size></box></geometry></visual>
+    </link></model>
+    <model name="wall_west"><static>true</static><pose>-6 0 1 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>0.2 12 2</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.2 12 2</size></box></geometry></visual>
+    </link></model>
+    <model name="wall_north"><static>true</static><pose>0 6 1 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>12 0.2 2</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>12 0.2 2</size></box></geometry></visual>
+    </link></model>
+    <model name="wall_south"><static>true</static><pose>0 -6 1 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>12 0.2 2</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>12 0.2 2</size></box></geometry></visual>
+    </link></model>
+
+    <!-- 7 个散开障碍(高低/形状/位置各异，原点附近留空) -->
+    <model name="obs_1"><static>true</static><pose>3 2 0.75 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>0.5 0.5 1.5</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.5 0.5 1.5</size></box></geometry></visual>
+    </link></model>
+    <model name="obs_2"><static>true</static><pose>-3 3 0.5 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>0.4 0.4 1.0</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.4 0.4 1.0</size></box></geometry></visual>
+    </link></model>
+    <model name="obs_3"><static>true</static><pose>2 -3 1.0 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>0.6 0.6 2.0</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.6 0.6 2.0</size></box></geometry></visual>
+    </link></model>
+    <model name="obs_4"><static>true</static><pose>-2.5 -2.5 0.6 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><cylinder><radius>0.3</radius><length>1.2</length></cylinder></geometry></collision>
+      <visual name="v"><geometry><cylinder><radius>0.3</radius><length>1.2</length></cylinder></geometry></visual>
+    </link></model>
+    <model name="obs_5"><static>true</static><pose>4 -1 0.4 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>1.0 0.5 0.8</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>1.0 0.5 0.8</size></box></geometry></visual>
+    </link></model>
+    <model name="obs_6"><static>true</static><pose>-4 1 0.5 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><box><size>0.5 1.0 1.0</size></box></geometry></collision>
+      <visual name="v"><geometry><box><size>0.5 1.0 1.0</size></box></geometry></visual>
+    </link></model>
+    <model name="obs_7"><static>true</static><pose>1 4 0.9 0 0 0</pose><link name="l">
+      <collision name="c"><geometry><cylinder><radius>0.25</radius><length>1.8</length></cylinder></geometry></collision>
+      <visual name="v"><geometry><cylinder><radius>0.25</radius><length>1.8</length></cylinder></geometry></visual>
+    </link></model>
+  </world>
+</sdf>
