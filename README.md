@@ -592,14 +592,25 @@ ros2 launch robot_navigation stage2_navigation.launch.py map:=~/result/map.yaml 
   - 若 GICP `fitness` 因动态点占比过高而下降，减少 `obstacles.yaml` 中的障碍条目数。
 - **障碍物尺寸/防翻倒**：障碍为边长 0.8m 立方体，在 `models/obstacle.sdf.in` 改 `<box><size>` 与 inertia（实心立方体 `I = m·s²/6`），spawn 高度常量 `BOX_HALF_SIZE`（=边长/2）随之同改。模板设 `<gravity>false</gravity>` 根除翻倒——圆柱/细高刚体在 planar_move 100Hz 回调间的物理窗口里会渐进倾倒，躺平后主体塌到 `z<0.1m` 被 costmap 高度过滤丢弃（点云仍可见但不再标记障碍）。
 - **STVL 清除速度**：调 `nav2_costmaps_stvl.yaml` 中的 `voxel_decay` 与 `decay_acceleration`（值越小清除越慢，值越大越激进）。
+- **避障/保距调参**（两份 costmap yaml 须保持同步，`test_costmaps_stvl_sync.py` 把关）：
+  - `local_costmap.inflation_layer.inflation_radius`（现 1.0）：机器人与障碍的保持距离。设得 **>0.9m 盲区**，才能在障碍尚可见时就停住、不冲进盲区顶障碍。太大则窄通道代价偏高。
+  - `inflation_layer.cost_scaling_factor`（现 2.5，global/local 同步）：越小代价铺得越远、越倾向走通道中央（治"贴墙走"）。
+  - `controller_server.FollowPath.BaseObstacle.scale`（现 0.1，原 nav2 默认 0.02 几乎不顾障碍代价）：越大越早避让、保距越明显；过大会摆动。
+  - `progress_checker.movement_time_allowance`（现 30s）：stop-and-wait 等障碍通过的最长容忍；超时才判失败走恢复行为。
 - 其余速度/footprint/goal tolerance 调参见阶段二。
+
+> **避障策略 = stop-and-wait（反应式栈的现实定位）**
+>
+> DWB 是纯反应式规划器、不预测障碍运动，无法流畅闪避快速移动的"墙"。本阶段定位为：机器人**提前保距、被挡就停下等障碍通过、再继续**（日志里 `No valid trajectories` 是 DWB 正确否决了会碰撞的轨迹，不是 bug）。配套把障碍速度下调到 0.15~0.3 m/s，使机器人来得及在障碍冲进 ~0.9m 盲区前停住。
+>
+> 残留情形：若某个移动障碍主动走进**已停稳**机器人的盲区，仍可能接触——这属障碍撞机器人（机器人已尽责停等），靠障碍布点/速度规避，或选择缩小盲区（见验收注记）。要真正流畅动态闪避需换预测型局部规划器（如 MPPI），属后续独立工作。
 
 ### 验收标准
 
 > [!NOTE]
 > 本阶段验收在动态场景下进行，实测前以下各项为待办（TO-DO）。实测后回填结果。
 
-1. **动态障碍标记与清除**：密集动态障碍下多点巡航数圈——移动障碍正确进入 local costmap（体素标记出现）、障碍离开后轨迹残影被及时清除、无持续假障碍；机器人在障碍前能避让/停-等-绕行，全程无碰撞。
+1. **动态障碍标记与 stop-and-wait**：密集动态障碍下多点巡航数圈——移动障碍正确进入 local costmap（体素标记出现）、障碍离开后轨迹残影被及时清除、无持续假障碍；机器人**提前保距、被挡时停下等障碍通过再继续**（不应再贴障碍走或冲进去顶翻障碍）。
 2. **voxel_layer vs STVL 对比**（实测后回填）：两套配置跑同一动态场景，记录定性对比——
    - （实测后回填：标记延迟 / 残影清除速度 / CPU 体感）
 3. **回归**：静态场景多点导航不退化；GICP `fitness` 稳定在阈值（0.9）以上；6 个 lifecycle 节点全 `active`。
