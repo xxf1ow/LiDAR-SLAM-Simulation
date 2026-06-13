@@ -40,6 +40,32 @@ def drop_classic_plugin_models(world):
                 break
 
 
+def drop_includes(world):
+    """删除世界里的 <include>(本世界仅嵌了老 robot 模型;新机器人由 launch spawn)。"""
+    for inc in world.findall("include"):
+        world.remove(inc)
+
+
+def ensure_ground(world):
+    """若世界无地面(无 plane 几何),追加一个 Harmonic 地面平面(机器人需落地)。
+    100x100 覆盖整个工厂(x∈[-6,30], y∈[-9.5,8])。"""
+    if world.find(".//plane") is not None:
+        return
+    ground_xml = (
+        '<model name="ground"><static>true</static><link name="link">'
+        '<collision name="collision"><geometry>'
+        '<plane><normal>0 0 1</normal><size>100 100</size></plane>'
+        '</geometry></collision>'
+        '<visual name="visual"><geometry>'
+        '<plane><normal>0 0 1</normal><size>100 100</size></plane>'
+        '</geometry><material>'
+        '<ambient>0.8 0.8 0.8 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse>'
+        '</material></visual>'
+        '</link></model>'
+    )
+    world.append(ET.fromstring(ground_xml))
+
+
 def strip_frame_attrs(elem):
     """剥掉所有元素上的 frame='' 属性(Classic 遗留,Harmonic 解析告警)。"""
     for node in elem.iter():
@@ -90,7 +116,9 @@ def convert_string(xml_str):
     world = get_world(tree)
     drop_state(world)
     drop_classic_plugin_models(world)
+    drop_includes(world)
     neutralize_script_materials(world)
+    ensure_ground(world)
     apply_harmonic_header(world)
     strip_frame_attrs(root)          # 最后剥,确保新插入节点也干净
     return serialize(root)

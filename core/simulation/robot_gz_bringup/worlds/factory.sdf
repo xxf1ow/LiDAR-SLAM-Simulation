@@ -8195,10 +8195,5 @@
         <falloff>1</falloff>
       </spot>
     </light>
-    <include>
-      <uri>model://robot</uri>
-      <pose>0 3.5 0.36 0 3.14 0</pose>
-      <static>false</static>
-    </include>
-  </world>
+    <model name="ground"><static>true</static><link name="link"><collision name="collision"><geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry></collision><visual name="visual"><geometry><plane><normal>0 0 1</normal><size>100 100</size></plane></geometry><material><ambient>0.8 0.8 0.8 1</ambient><diffuse>0.8 0.8 0.8 1</diffuse></material></visual></link></model></world>
 </sdf>

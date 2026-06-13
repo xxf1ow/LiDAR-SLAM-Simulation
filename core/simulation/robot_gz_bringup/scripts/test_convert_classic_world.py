@@ -40,6 +40,12 @@ FULL = """<sdf version='1.6'><world name='default'>
   <model name='grey_wall'><static>1</static><link name='l'><pose frame=''>0 0 1 0 0 0</pose>
     <visual name='v'><material><script><name>vrc/grey_wall</name></script></material></visual>
   </link></model>
+  <include><uri>model://robot</uri></include>
+</world></sdf>"""
+
+ROBOT_INCLUDE_WORLD = """<sdf version='1.6'><world name='default'>
+  <model name='grey_wall'><static>1</static><link name='l'/></model>
+  <include><uri>model://robot</uri><pose>0 3.5 0.36 0 3.14 0</pose></include>
 </world></sdf>"""
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
@@ -104,6 +110,31 @@ def test_convert_pipeline_end_to_end():
     assert 'name="factory"' in out
     assert "gz-sim-sensors-system" in out
     assert "grey_wall" in out
+    assert "model://robot" not in out      # 老机器人 include 已删
+    assert "<plane" in out                  # 地面已补
+
+
+def test_drop_includes_removes_embedded_robot():
+    world = cc.get_world(ET.ElementTree(ET.fromstring(ROBOT_INCLUDE_WORLD)))
+    cc.drop_includes(world)
+    assert world.find("include") is None
+    assert world.find("model[@name='grey_wall']") is not None
+
+
+def test_ensure_ground_adds_plane_when_missing():
+    world = cc.get_world(ET.ElementTree(ET.fromstring(MINIMAL)))
+    cc.ensure_ground(world)
+    assert world.find(".//plane") is not None
+
+
+def test_ensure_ground_idempotent_when_present():
+    world = ET.fromstring(
+        "<world name='d'><model name='ground'><link name='l'><visual name='v'>"
+        "<geometry><plane><normal>0 0 1</normal><size>10 10</size></plane></geometry>"
+        "</visual></link></model></world>"
+    )
+    cc.ensure_ground(world)
+    assert len(world.findall(".//plane")) == 1
 
 
 def test_generated_factory_sdf_is_sane():
@@ -117,3 +148,6 @@ def test_generated_factory_sdf_is_sane():
     assert world.find("state") is None
     assert "ObjectDisposalPlugin" not in ET.tostring(tree.getroot(), encoding="unicode")
     assert len(world.findall("model")) >= 55
+    serialized = ET.tostring(tree.getroot(), encoding="unicode")
+    assert "model://robot" not in serialized   # 不嵌老机器人
+    assert world.find(".//plane") is not None   # 有地面
