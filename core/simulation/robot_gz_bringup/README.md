@@ -103,3 +103,46 @@ ros2 topic list | grep -E "Odometry|cloud_registered"
 - Phase 1 用参考 DiffBot 的微小尺寸(轮距 0.10 m),Gz 里机器人很小、移动距离小,看 odom 数值确认即可;真车尺寸在 Phase 2。
 - Gz 模式 RTF 可能 <1,`/cmd_vel` 用持续发布(`-r 10`)而非 `--once`。
 - 若 Gz 里轮子打滑导致直线跑偏,记为 Phase 2 摩擦/惯量调参项,不在 Phase 1 阻塞判据(只要能被驱动移动即 PASS)。
+
+## Phase 4 — 工厂世界(Classic → Harmonic 迁移)
+
+### 资产前置(构建机)
+`lio_world.model` 引用的 mesh 资产是 Classic 模型库(ARIAC/gazebo_models),按依赖惯例 **不入库**(`.gitignore: models/*`)。构建机需备好 `models/factory_model/`(整套 `model.config`+`model.sdf`+meshes,~30MB),并让 Gz 能解析 `model://`:
+```bash
+# 把 models/factory_model 的绝对路径告诉 Gz(二选一)
+export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:/abs/path/to/models/factory_model
+# 或启动时传 arg(见下),launch 会 AppendEnvironmentVariable
+```
+
+### 重新生成世界(本机/任意机,纯 Python)
+`worlds/factory.sdf` 是由 `scripts/convert_classic_world.py` 从 `src/robot_gazebo/worlds/lio_world.model` 机械生成并入库的(删 `<state>`、删带 ObjectDisposalPlugin 的模型、删内嵌老 robot include、剥 `frame=''`、中和 Ogre1 script 材质为纯色、补地面、注入 Harmonic 系统插件)。源世界变了就重跑:
+```bash
+python core/simulation/robot_gz_bringup/scripts/convert_classic_world.py \
+  src/robot_gazebo/worlds/lio_world.model \
+  core/simulation/robot_gz_bringup/worlds/factory.sdf
+python -m pytest core/simulation/robot_gz_bringup/scripts/test_convert_classic_world.py -v
+```
+
+### 构建 & 启动
+```bash
+colcon build --packages-select lidar_pointcloud_adapter robot_description robot_bringup robot_gz_bringup
+source install/setup.bash
+# factory 世界(默认);资产路径用 arg 传(或已 export GZ_SIM_RESOURCE_PATH)
+ros2 launch robot_gz_bringup robot_gz.launch.py \
+  factory_models_path:=/abs/path/to/models/factory_model
+# 回退冒烟:world:=test_world.sdf
+# 机器人 spawn 默认 x=4,y=0,z=0.33;若落在结构里,调 spawn_x:= / spawn_y:=
+```
+
+### PASS(进 Phase 5)需:
+14. Gz GUI 里**工厂完整加载**:墙体/workcell/集装箱/货架/托盘/管材等就位,布局与老 Classic 工厂一致(90° 伪对称在);控制台无 "unable to find model"(资产路径正确)、无致命解析错。
+15. 机器人 spawn 在空旷过道、不与结构重叠、落地不下陷/弹飞(必要时调 `spawn_x/spawn_y`)。
+16. 传感器照常:`/points_raw` ~10Hz 含 ring+time、`/imu_plugin/out` ~200Hz;点云在 RViz 里勾勒出工厂结构(不是空场)。
+17. 开车跑一段:FAST-LIO `/Odometry` 持续、`/cloud_registered` 合理累积出工厂特征。
+
+### FAIL 排查:
+- "unable to find model [workcell]..." → `GZ_SIM_RESOURCE_PATH` 没指到 `models/factory_model`(父目录),或资产没拷到构建机。
+- 模型变灰/无纹理 → 基本体盒子的 Ogre1 script 已被中和成灰色(预期,对 LiDAR 无影响);带纹理 mesh(workcell/dumpster/集装箱等)仍应有色。
+- 世界加载极慢/卡 → workcell mesh 较大属正常;若超时先 `world:=test_world.sdf` 验证管线再排查。
+- spawn 进了某模型里 → 调 `spawn_x:= / spawn_y:=` 到 GUI 中可见的空地。
+- 机器人穿地坠落 → 确认 factory.sdf 含 ground model(转换器 ensure_ground 应已补);若用了旧的 factory.sdf 请重新生成。
