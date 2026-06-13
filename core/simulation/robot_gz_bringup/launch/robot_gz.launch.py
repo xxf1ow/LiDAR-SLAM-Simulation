@@ -2,7 +2,7 @@
 + robot_state_publisher + 控制器 spawner + ros_gz_bridge(clock/lidar/imu) + ring/time 适配节点。
 controller_manager 由 URDF 里的 gz_ros2_control 插件提供(无独立 ros2_control_node)。"""
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import AppendEnvironmentVariable, DeclareLaunchArgument, IncludeLaunchDescription
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, FindExecutable, PathJoinSubstitution, LaunchConfiguration
@@ -17,13 +17,25 @@ def generate_launch_description():
                               description="true=带 GUI 起 Gz 与 RViz；false=headless。"),
         DeclareLaunchArgument("prefix", default_value="",
                               description="link/joint 名前缀。"),
+        DeclareLaunchArgument("world", default_value="factory.sdf",
+                              description="worlds/ 下的世界文件名(factory.sdf=工厂; test_world.sdf=冒烟回退)。"),
+        DeclareLaunchArgument("factory_models_path", default_value="",
+                              description="model:// 资产父目录(.../models/factory_model)的绝对路径;"
+                                          "为空则依赖已 export 的 GZ_SIM_RESOURCE_PATH。"),
+        DeclareLaunchArgument("spawn_x", default_value="4.0", description="机器人 spawn X(避开原点 workcell)。"),
+        DeclareLaunchArgument("spawn_y", default_value="0.0", description="机器人 spawn Y。"),
+        DeclareLaunchArgument("spawn_z", default_value="0.33", description="机器人 spawn Z。"),
     ]
     gui = LaunchConfiguration("gui")
     prefix = LaunchConfiguration("prefix")
 
     pkg_gz = FindPackageShare("robot_gz_bringup")
-    world = PathJoinSubstitution([pkg_gz, "worlds", "test_world.sdf"])
+    world = PathJoinSubstitution([pkg_gz, "worlds", LaunchConfiguration("world")])
     bridge_cfg = PathJoinSubstitution([pkg_gz, "config", "bridge.yaml"])
+    set_resource_path = AppendEnvironmentVariable(
+        name="GZ_SIM_RESOURCE_PATH",
+        value=LaunchConfiguration("factory_models_path"),
+    )
     gz_controllers_file = PathJoinSubstitution(
         [FindPackageShare("robot_bringup"), "config", "robot_controllers.yaml"])
 
@@ -79,7 +91,9 @@ def generate_launch_description():
     gz_spawn_entity = Node(
         package="ros_gz_sim", executable="create", output="screen",
         arguments=["-topic", "/robot_description", "-name", "robot", "-allow_renaming", "true",
-                   "-z", "0.33"],
+                   "-x", LaunchConfiguration("spawn_x"),
+                   "-y", LaunchConfiguration("spawn_y"),
+                   "-z", LaunchConfiguration("spawn_z")],
     )
 
     robot_state_pub_node = Node(
@@ -101,6 +115,7 @@ def generate_launch_description():
     )
 
     nodes = [
+        set_resource_path,
         gz,
         gz_headless,
         bridge,
