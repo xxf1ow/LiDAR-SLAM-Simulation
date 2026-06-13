@@ -62,6 +62,43 @@ ros2 topic pub /cmd_vel geometry_msgs/msg/TwistStamped \
 9. 里程计:发 TwistStamped 后 `ros2 topic echo /base_controller/odom` 的 `child_frame_id` = `base_link`(本阶段未加 base_footprint);提速后(linear 可达 1.5 m/s)行驶不再"痛苦地慢"。
 10. 已知:`kdl_parser: root link base_link has an inertia` 警告**仍在**(根仍是 base_link,符合示例;base_footprint 留 Phase 5)——无害,勿误判为回归。
 
+### Phase 3 验收(Gz 原生传感器 + 桥接 + ring/time)
+构建(adapter 需一起):
+```bash
+colcon build --packages-select lidar_pointcloud_adapter robot_description robot_bringup robot_gz_bringup
+source install/setup.bash
+ros2 launch robot_gz_bringup robot_gz.launch.py
+```
+另一终端核验:
+```bash
+gz topic -l | grep -E "lidar|imu"          # 确认 Gz 侧实际话题名(预期 /lidar/points、/imu)
+ros2 topic list | grep -E "points_raw|imu_plugin|lidar"
+ros2 topic echo /lidar/points --once --field height   # 16(组织化)
+ros2 topic echo /lidar/points --once --field width    # ~1800
+ros2 topic echo /points_raw --once --field fields      # 含 x y z intensity ring time
+ros2 topic hz /points_raw                              # ~10 Hz(sim 时钟下显示约一半正常)
+ros2 topic hz /imu_plugin/out                          # ~200 Hz
+ros2 run tf2_ros tf2_echo base_link velodyne           # 平移 0 0 0.236(preserveFixedJoint 保住了帧)
+```
+喂 FAST-LIO:
+```bash
+ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true
+ros2 topic hz /Odometry                                # 持续发布、不崩
+ros2 topic list | grep -E "Odometry|cloud_registered"
+```
+开车看跟踪:发 TwistStamped 驱动,RViz 里 /cloud_registered 随运动累积、/Odometry 跟随。
+
+**PASS(进 Phase 4)需:**
+11. `gz topic -l` 能看到 lidar/imu 话题;`/points_raw` 字段含 `ring`+`time`、稳定 ~10 Hz;`/imu_plugin/out` ~200 Hz。
+12. `base_link→velodyne`/`imu_link` TF 在(preserveFixedJoint 生效,帧未被并掉)。
+13. FAST-LIO 无 preprocess 崩溃,持续发 `/Odometry`;开车时位姿跟随、`/cloud_registered` 合理累积。
+
+**FAIL 排查:**
+- `gz topic -l` 无 lidar 点云 / `/points_raw` 不发:查 Gz 实际 sensor 话题名是否被加了模型作用域前缀(spawn 模型可能)——若是,改 `config/bridge.yaml` 的 `gz_topic_name` 与 launch 里 adapter 的 `input_topic` 为实际名(**不改算法**)。
+- 点云 `height!=16`:查 gpu_lidar 的 vertical samples;`fields` 无 `ring` 时 adapter 仍按 ring=i//width 重算。
+- TF 无 `base_link→velodyne`:preserveFixedJoint 未生效 → 查展开 URDF 是否含该 `<gazebo reference="velodyne_joint">` 段、版本是否支持。
+- 传感器无数据但话题在:多半世界缺 `gz-sim-sensors-system`/`ogre2`(headless 要 `--headless-rendering`)。
+
 ## 已知注意
 - Phase 1 用参考 DiffBot 的微小尺寸(轮距 0.10 m),Gz 里机器人很小、移动距离小,看 odom 数值确认即可;真车尺寸在 Phase 2。
 - Gz 模式 RTF 可能 <1,`/cmd_vel` 用持续发布(`-r 10`)而非 `--once`。
