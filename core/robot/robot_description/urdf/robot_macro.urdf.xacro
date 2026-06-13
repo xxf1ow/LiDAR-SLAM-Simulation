@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
-<!-- 差速移动底盘本体(真实尺寸 0.75x0.55x0.40 m，根=base_link，照示例)：盒身 + 左右驱动轮
+<!-- 差速移动底盘本体(真实尺寸 0.75x0.55x0.40 m，根=base_footprint(REP-105 地面投影帧，Phase 5a 加)，其下 base_link 为车体)：盒身 + 左右驱动轮
      + 前后球形万向轮(半径=驱动轮、同高) + 车顶中央共位的 velodyne / imu_link 挂载帧。
      碰撞用基本几何(box/cylinder/sphere)。Gz 传感器插件在 Phase 3 的 gazebo.xacro 加。
-     注：根 base_link 带 inertial，会触发 kdl_parser "root link has an inertia" 告警(无害)；
-         base_footprint 留待 Phase 5(Nav2/SLAM 需要时)再加。 -->
+     注：base_footprint 无 inertial 作根，base_link(带 inertial)为其固定子，
+         不再触发 kdl_parser root-inertia 告警。 -->
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <xacro:macro name="robot_body" params="prefix">
@@ -36,7 +36,17 @@
   <xacro:property name="caster_x" value="${base_length/2 - caster_radius}"/>
   <xacro:property name="sensor_z" value="${base_height/2 + lidar_height/2}"/>  <!-- puck 底贴车顶、完全外露 -->
 
-  <!-- 车体(根 link) -->
+  <!-- base_footprint：REP-105 地面投影根帧(无质量)。LIO-SAM baselinkFrame / Nav2 用。
+       base_link 在其上方 0.32m(驱动轮中心 -0.20 + 轮半径 0.12 = 触地 -0.32)。 -->
+  <link name="${prefix}base_footprint"/>
+
+  <joint name="${prefix}base_footprint_joint" type="fixed">
+    <parent link="${prefix}base_footprint"/>
+    <child  link="${prefix}base_link"/>
+    <origin xyz="0 0 ${base_height/2 + wheel_radius}" rpy="0 0 0"/>
+  </joint>
+
+  <!-- 车体 base_link(base_footprint 的固定子) -->
   <link name="${prefix}base_link">
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
