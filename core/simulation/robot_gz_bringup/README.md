@@ -22,7 +22,9 @@ ros2 launch robot_description view_robot.launch.py
 ros2 launch robot_bringup robot.launch.py use_mock_hardware:=true gui:=false
 # 另一终端：
 ros2 control list_controllers      # base_controller、joint_state_broadcaster = active
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.2}}' -r 10
+# Humble 的 diff_drive_controller 默认收 TwistStamped(发 Twist 会被忽略、车不动)
+ros2 topic pub /cmd_vel geometry_msgs/msg/TwistStamped \
+  '{header: {frame_id: base_link}, twist: {linear: {x: 0.2}}}' -r 10
 ros2 run tf2_ros tf2_echo odom base_link     # odom->base_link 随命令前进
 ```
 
@@ -31,9 +33,12 @@ ros2 run tf2_ros tf2_echo odom base_link     # odom->base_link 随命令前进
 ros2 launch robot_gz_bringup robot_gz.launch.py
 # 另一终端：
 ros2 control list_controllers      # 两控制器 active(controller_manager 由 gz 插件提供)
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.3}, angular: {z: 0.4}}' -r 10
+# Humble 的 diff_drive_controller 默认收 TwistStamped(发 Twist 会被忽略、车不动)
+ros2 topic pub /cmd_vel geometry_msgs/msg/TwistStamped \
+  '{header: {frame_id: base_link}, twist: {linear: {x: 0.3}, angular: {z: 0.4}}}' -r 10
 ```
-预期:Gz GUI 里机器人沿弧线前进;RViz 里 odom->base_link 随动;`ros2 topic echo /base_controller/odom` 有数据。
+预期:Gz GUI 3D 窗口里机器人沿弧线前进;`ros2 topic echo /base_controller/odom --field pose.pose.position` 数值变化。
+> RViz 的 Fixed Frame 默认是 `base_link`(跟车),看不出平移;要在 RViz 看运动把 Fixed Frame 改成 `odom`。
 
 ## 5. 裁决
 
@@ -45,7 +50,7 @@ ros2 topic pub /cmd_vel geometry_msgs/msg/Twist '{linear: {x: 0.3}, angular: {z:
 5. 同一 `robot.urdf.xacro` 仅靠 arg 完成 gz/mock/real 三态切换(real 分支编译且插件登记,真机通信留作后续)。
 
 **FAIL(回流程，按 systematic-debugging):**
-- Gz 模式机器人不动:查 `/cmd_vel` 是否到 `base_controller`(remap 是否生效)、轮子是否打滑(empty.sdf 地面摩擦)、关节命令接口是否 velocity。记录 `ros2 control list_hardware_interfaces` 与 `gz topic -l` 回报。
+- Gz 模式机器人不动:**先确认发的是 `TwistStamped` 不是 `Twist`**(Humble 默认,发错类型会被静默忽略);再查 `/cmd_vel` 是否到 `base_controller`(remap 是否生效)、Gz 是否暂停(左下 RTF>0)、轮子是否打滑(empty.sdf 地面摩擦)、关节命令接口是否 velocity。记录 `ros2 topic info /cmd_vel -v`、`ros2 control list_hardware_interfaces` 回报。
 - 控制器起不来:查 controller_manager 是否由 gz 插件起(`ros2 node list` 应有 `/controller_manager`)、`gz_controllers_file` 路径是否注入正确(看展开后的 URDF `<parameters>` 是否绝对路径)。
 - xacro 测试 FAIL:看 `colcon test-result --verbose` 的断言与 check_urdf 报错。
 
