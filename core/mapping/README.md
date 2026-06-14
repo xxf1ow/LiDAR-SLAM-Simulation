@@ -35,7 +35,7 @@ source install/setup.bash
 cd core && source install/setup.bash
 ros2 launch robot_gz_bringup robot_gz.launch.py
 #（factory_models_path 默认 ~/LiDAR-SLAM-Simulation/models/factory_model,路径不同才传该 arg；
-#  必要时 spawn_x:=/spawn_y:= 调到空旷过道）
+#  必要时 spawn_x:=/spawn_y:= 调到空旷过道；默认不起看模型的 RViz——建图看终端 2 LIO-SAM 自带 RViz 即可）
 
 # 终端 2：起 LIO-SAM 建图
 cd core && source install/setup.bash

@@ -18,7 +18,11 @@ from launch_ros.substitutions import FindPackageShare
 def generate_launch_description():
     declared_arguments = [
         DeclareLaunchArgument("gui", default_value="true",
-                              description="true=带 GUI 起 Gz 与 RViz；false=headless。"),
+                              description="true=带 GUI 起 Gz；false=headless。"),
+        DeclareLaunchArgument("rviz", default_value="false",
+                              description="是否起一个看机器人模型的 RViz；默认 false。"
+                                          "建图/定位各自的 launch 已带专用 RViz,此处只看裸 URDF,"
+                                          "通常多余;单独验机器人模型时传 rviz:=true。"),
         DeclareLaunchArgument("prefix", default_value="",
                               description="link/joint 名前缀。"),
         DeclareLaunchArgument("world", default_value="factory.sdf",
@@ -129,7 +133,7 @@ def generate_launch_description():
     rviz_node = Node(
         package="rviz2", executable="rviz2", name="rviz2", output="log",
         arguments=["-d", rviz_config_file], parameters=[{"use_sim_time": True}],
-        condition=IfCondition(gui),
+        condition=IfCondition(LaunchConfiguration("rviz")),
     )
 
     nodes = [

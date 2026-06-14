@@ -80,7 +80,7 @@ Phase 4 `models/factory_model` + `GZ_SIM_RESOURCE_PATH` 就位;**5b 先验图在
 ### 5c — FAST-LIO 里程计(已通过)
 ```bash
 cd core && colcon build --packages-up-to fast_lio robot_gz_bringup && source install/setup.bash
-ros2 launch robot_gz_bringup robot_gz.launch.py                                   # 终端1 仿真
+ros2 launch robot_gz_bringup robot_gz.launch.py                                   # 终端1 仿真(默认不起看模型的 RViz;要看传 rviz:=true)
 ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true  # 终端2 里程计
 ros2 run robot_gz_bringup sticky_teleop.py                                        # 终端3 开车
 ```
