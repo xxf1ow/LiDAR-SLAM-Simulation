@@ -107,21 +107,20 @@ ros2 topic list | grep -E "Odometry|cloud_registered"
 ## Phase 4 — 工厂世界(Classic → Harmonic 迁移)
 
 ### 资产前置(构建机)
-`lio_world.model` 引用的 mesh 资产是 Classic 模型库(ARIAC/gazebo_models),按依赖惯例 **不入库**(`.gitignore: models/*`)。构建机需备好 `models/factory_model/`(整套 `model.config`+`model.sdf`+meshes,~30MB),并让 Gz 能解析 `model://`:
+`factory.sdf` 的 mesh 视觉引用 Classic 模型库(ARIAC/gazebo_models)资产,按依赖惯例 **不入库**(`.gitignore: models/*`)。构建机需备好 `models/factory_model/`(整套 `model.config`+`model.sdf`+meshes,~30MB),并让 Gz 能解析 `model://`:
 ```bash
 # 把 models/factory_model 的绝对路径告诉 Gz(二选一)
 export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:/abs/path/to/models/factory_model
 # 或启动时传 arg(见下),launch 会 AppendEnvironmentVariable
 ```
 
-### 重新生成世界(本机/任意机,纯 Python)
-`worlds/factory.sdf` 是由 `scripts/convert_classic_world.py` 从 **Classic 源 `worlds/lio_world.classic.model`(已迁入本模块、入库,不再依赖 src)** 机械生成的:**先用 `<state>` 块的最终位姿覆盖顶层 `<model><pose>`(Classic 存盘后真实布局在 state 里,顶层 pose 多为过时初始值——本工厂 62 个里 47 个不一致,不修则物体全摆错位)**,再删 state、删带 ObjectDisposalPlugin 的模型、删内嵌老 robot include、剥 `frame=''`、link 内 collision/visual 重名去重、中和 Ogre1 script 材质、删多余聚光灯/`<gui>`、补地面、注入 Harmonic 系统插件。源世界变了就重跑:
-```bash
-python core/simulation/robot_gz_bringup/scripts/convert_classic_world.py \
-  core/simulation/robot_gz_bringup/worlds/lio_world.classic.model \
-  core/simulation/robot_gz_bringup/worlds/factory.sdf
-python -m pytest core/simulation/robot_gz_bringup/scripts/test_convert_classic_world.py -v
-```
+### 关于 `worlds/factory.sdf`
+`worlds/factory.sdf` 是**一次性**由老 Classic 工厂世界转换 + 手工优化后入库的**最终成品**,不再由脚本生成(原转换器 `convert_classic_world.py` 及其 Classic 源 `lio_world.classic.model` 已删除——一次转换后不会再跑)。它在 Classic→Harmonic 转换基础上做了仿真性能优化(实测 RTF 大幅提升,且不影响点云/IMU):
+- 全部世界道具置为 `<static>`(机器人/动态障碍由 launch 在运行时 spawn,不在世界文件内);
+- mesh 碰撞体 → 简单几何盒(**gpu_lidar 渲染的是 visual,点云/SLAM/costmap 不受影响**;碰撞盒仅用于机器人物理撞击);
+- 关阴影(`<shadows>0</shadows>` + 各灯 `cast_shadows=0`);
+- 显式 `<physics type="dart">`:`max_step_size=0.005` / `real_time_update_rate=200`(目标 RTF=1.0,IMU 上限 200Hz 够 LIO-SAM 用)。
+> mesh **视觉**仍引用 `model://` 资产,故下面的「资产前置」仍然必需。要改世界直接编辑 `factory.sdf`。
 
 ### 构建 & 启动
 ```bash
@@ -146,4 +145,4 @@ ros2 launch robot_gz_bringup robot_gz.launch.py \
 - 模型变灰/无纹理 → 基本体盒子的 Ogre1 script 已被中和成灰色(预期,对 LiDAR 无影响);带纹理 mesh(workcell/dumpster/集装箱等)仍应有色。
 - 世界加载极慢/卡 → workcell mesh 较大属正常;若超时先 `world:=test_world.sdf` 验证管线再排查。
 - spawn 进了某模型里 → 调 `spawn_x:= / spawn_y:=` 到 GUI 中可见的空地。
-- 机器人穿地坠落 → 确认 factory.sdf 含 ground model(转换器 ensure_ground 应已补);若用了旧的 factory.sdf 请重新生成。
+- 机器人穿地坠落 → 确认 factory.sdf 末尾含 `<model name="ground">`(下沉 1cm 防 z-fighting)。
