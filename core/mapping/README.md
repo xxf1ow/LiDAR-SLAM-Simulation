@@ -40,10 +40,12 @@ ros2 launch robot_gz_bringup robot_gz.launch.py factory_models_path:=/abs/.../mo
 cd core && source install/setup.bash
 ros2 launch lio_sam run.launch.py
 
-# 终端 3：缓慢遍历工厂(Humble diff_drive 收 TwistStamped！发 Twist 会被忽略)
-ros2 topic pub /cmd_vel geometry_msgs/msg/TwistStamped \
-  '{header: {frame_id: base_footprint}, twist: {linear: {x: 0.4}, angular: {z: 0.0}}}' -r 10
-# 转弯/绕行用 angular.z；把工厂主要通道、墙面、货架都扫到,回环走一圈利于回环检测
+# 终端 3：sticky 键盘遥控,缓慢遍历工厂
+ros2 run robot_gz_bringup sticky_teleop.py --ros-args -p use_sim_time:=true
+#   i/, = 前进/后退   j/l = 左/右转   k或空格 = 停   s = 回正   q = 退出
+#   按一下即设定速度并持续生效(松手照走,不用一直按),再按才改;先按一两下 i 慢速起步即可
+#   把工厂主要通道、墙面、货架都扫到,回环走一圈利于回环检测
+#   (节点以 ~20Hz 持续重发 TwistStamped,压过 diff_drive 的 0.5s cmd_vel_timeout)
 
 # 建够后存图(写到 ~/result，与主文档定位阶段读取路径一致)
 ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap "{resolution: 0.2, destination: '/result'}"
@@ -58,5 +60,5 @@ ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap "{resolution: 0.2, desti
 ## FAIL 排查
 - LIO-SAM 起来即报 `extrinsic`/`frame` 或点云方向错乱 → 确认补丁已是最新(`lidarFrame:velodyne`、`extrinsicTrans:[0,0,0]`),且构建机重新 apply 并 `colcon build lio_sam`。
 - `map→base_footprint` TF 断 → 查 `base_footprint` 是否在 URDF(5a)、`robot_state_publisher` 是否在跑、轮式 TF 是否已关(否则与 LIO-SAM 抢 odom→base)。
-- 地图发散/重影 → 多为驱动太快或转太急(雷达 10Hz、RTF<1),放慢 `linear.x`、减小 `angular.z`;或工厂特征不足处(空旷区)正常,回到特征区会收敛。
-- 车不动 → 八成发了 `Twist` 而非 `TwistStamped`(Humble diff_drive 默认)。
+- 地图发散/重影 → 多为驱动太快或转太急(雷达 10Hz、RTF<1),少按几下 `i`/`j`/`l` 降速、多用 `s` 回正;或工厂特征不足处(空旷区)正常,回到特征区会收敛。
+- 车不动 → ① 确认 teleop 终端处于焦点(cbreak 读的是该窗口键入);② teleop 必须带 `-p use_sim_time:=true`,否则 stamp 时基与控制器(sim 时钟)不符;③ diff_drive(Humble 默认)要 `TwistStamped`,sticky_teleop 默认即发 stamped,勿改 `-p stamped:=false`。
