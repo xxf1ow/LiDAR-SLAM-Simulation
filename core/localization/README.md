@@ -14,8 +14,11 @@ FAST-LIO 源码 **clone 到本模块目录 `core/localization/FAST_LIO`**(被 `.
 - `fast-lio2.patch`(**中性**,对真实无害):新增 `config/gazebo_velodyne.yaml`——话题
   `points_raw` / `/imu_plugin/out`、velodyne `lidar_type:2`、`scan_line:16`、blind 1.0、
   **lidar-IMU 外参归零** `extrinsic_T:[0,0,0]`(新模型 velodyne 与 imu_link 同位置,与 mapping 一致)。
-- `sim-only/disable-deskew-snapshot-lidar.patch`(**改核心行为,真实雷达勿用**):Gz velodyne 是
-  瞬时快照云、无帧内畸变,强制 `given_offset_time=true` 让去畸变成为恒等变换,消除旋转拖影/发散。
+
+> **去畸变说明**:`lidar_pointcloud_adapter` 已给点云补 `time` 字段(按列号合成 `(i%width)/width*0.1`),
+> FAST-LIO 检测到非零 time 即自动 `given_offset_time=true`、用该 time 去畸变。注意这是**合成**的方位角
+> 时间(Gz 是瞬时快照、无真实帧内畸变),FAST-LIO 仍会按它做一次去畸变。若构建机原地旋转测试(判据 25)
+> 出现拖影/发散,治本是让 adapter 发**常量 time**(令去畸变成恒等),而非在 FAST-LIO 侧打补丁。
 
 `livox_ros_driver2`(本目录内,**入库**)是仅含 `CustomMsg`/`CustomPoint` 的**消息桩包**,只为满足
 FAST-LIO 在 velodyne-only 配置下的编译期类型依赖——无驱动、不需 Livox-SDK。
@@ -28,11 +31,10 @@ cd core/localization/FAST_LIO
 git fetch origin a4743b095409588842a5b30ddfa27e29d2f99164 --depth 1
 git checkout a4743b095409588842a5b30ddfa27e29d2f99164
 git apply ../fast-lio2.patch
-git apply ../sim-only/disable-deskew-snapshot-lidar.patch   # 仿真专用,真实雷达勿应用
 ```
 
-**改 FAST-LIO 配置的正确姿势**:改 `core/localization/FAST_LIO` working tree → `git diff` 重生成对应
-补丁(中性改动进 `fast-lio2.patch`,改核心行为的进 `sim-only/`)→ 提交补丁。构建机重新 `git apply`。
+**改 FAST-LIO 配置的正确姿势**:改 `core/localization/FAST_LIO` working tree → `git diff > ../fast-lio2.patch`
+重生成 → 提交补丁。构建机重新 `git apply`。
 
 ## TF 约定:FAST-LIO 是**平行子树**,不接进 URDF 树
 ```
@@ -73,8 +75,9 @@ ros2 run robot_gz_bringup sticky_teleop.py
     勾勒出工厂结构、随行驶累积一致(不重影、不发散)。
 24. 里程计贴合真实运动:开一段已知路线(直线 + 转弯),FAST-LIO 轨迹与实际路径大致吻合、尺度正确
     (本仿真特征丰富,LiDAR 充分约束、基本不漂)。
-25. **原地旋转不发散**(deskew sim-only 补丁的目的):原地转一圈,点云/地图保持清晰、无拖影
-    ——若旋转时发散,多半是 `sim-only/disable-deskew-snapshot-lidar.patch` 未应用。
+25. **原地旋转点云保持清晰**:原地转一圈,`/cloud_registered`/地图无明显拖影、发散
+    ——若发散,根因是 FAST-LIO 按 adapter 合成的逐点 time 对快照云去畸变(见上"去畸变说明"),
+    治本在 adapter 侧(发常量 time)。
 
 ## FAIL 排查
 - FAST-LIO 起来即报 `extrinsic`/`frame` 或点云方向错乱 → 确认 `fast-lio2.patch` 已 apply、
@@ -83,5 +86,6 @@ ros2 run robot_gz_bringup sticky_teleop.py
   确认它在 `core/localization/` 下且被 colcon 发现。
 - `/Odometry` 不发 / 节点静默 → 查 `points_raw`(经 lidar_pointcloud_adapter 补 ring/time)与
   `/imu_plugin/out` 是否在发(`ros2 topic hz`),use_sim_time 是否 true(否则等不到 /clock)。
-- 旋转拖影/发散 → `sim-only` 去畸变补丁未应用(见判据 25)。
+- 旋转拖影/发散 → FAST-LIO 对 Gz 快照云按 adapter 合成 time 去畸变所致;治本=让 lidar_pointcloud_adapter
+  发常量 time(快照云无帧内畸变,令去畸变成恒等),而非改 FAST-LIO。
 - 车不动 → 见 mapping/README 同条(teleop 终端焦点 / 默认 stamped+sim_time)。
