@@ -115,23 +115,24 @@ export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:/abs/path/to/models/factory_mo
 ```
 
 ### 重新生成世界(本机/任意机,纯 Python)
-`worlds/factory.sdf` 是由 `scripts/convert_classic_world.py` 从 `src/robot_gazebo/worlds/lio_world.model` 机械生成并入库的(删 `<state>`、删带 ObjectDisposalPlugin 的模型、删内嵌老 robot include、剥 `frame=''`、中和 Ogre1 script 材质为纯色、补地面、注入 Harmonic 系统插件)。源世界变了就重跑:
+`worlds/factory.sdf` 是由 `scripts/convert_classic_world.py` 从 **Classic 源 `worlds/lio_world.classic.model`(已迁入本模块、入库,不再依赖 src)** 机械生成的(删 `<state>`、删带 ObjectDisposalPlugin 的模型、删内嵌老 robot include、剥 `frame=''`、中和 Ogre1 script 材质为纯色、补地面、注入 Harmonic 系统插件)。源世界变了就重跑:
 ```bash
 python core/simulation/robot_gz_bringup/scripts/convert_classic_world.py \
-  src/robot_gazebo/worlds/lio_world.model \
+  core/simulation/robot_gz_bringup/worlds/lio_world.classic.model \
   core/simulation/robot_gz_bringup/worlds/factory.sdf
 python -m pytest core/simulation/robot_gz_bringup/scripts/test_convert_classic_world.py -v
 ```
 
 ### 构建 & 启动
 ```bash
-colcon build --packages-select lidar_pointcloud_adapter robot_description robot_bringup robot_gz_bringup
+# 构建根 = core/(core 自成一体;build/install 落 core)
+cd core && colcon build --packages-select lidar_pointcloud_adapter robot_description robot_bringup robot_gz_bringup
 source install/setup.bash
 # factory 世界(默认);资产路径用 arg 传(或已 export GZ_SIM_RESOURCE_PATH)
 ros2 launch robot_gz_bringup robot_gz.launch.py \
   factory_models_path:=/abs/path/to/models/factory_model
 # 回退冒烟:world:=test_world.sdf
-# 机器人 spawn 默认 x=4,y=0,z=0.33;若落在结构里,调 spawn_x:= / spawn_y:=
+# 机器人 spawn 默认 x=4,y=0,z=0.05(Phase 5a 根改 base_footprint 在地面);若落在结构里,调 spawn_x:= / spawn_y:=
 ```
 
 ### PASS(进 Phase 5)需:

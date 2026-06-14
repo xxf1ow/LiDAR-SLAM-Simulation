@@ -2,13 +2,19 @@
 
 本模块负责用 **LIO-SAM** 在 Gz Harmonic 工厂世界里跑建图、保存先验地图 `GlobalMap.pcd`(供 localization 阶段的 GICP 用)。
 
-## 集成方式:clone + patch(不 fork)
-LIO-SAM **不纳入 core/、不被本仓库提交**,而是按 README 主文档的 pinned SHA `git clone` 到 `src/LIO-SAM`,再 `git apply` 本仓库跟踪的 `src/lio-sam.patch`。该补丁含全部 sim 适配:
+## 集成方式:clone + patch,落在本模块名下(core 自成一体)
+LIO-SAM 的源码 **clone 到本模块目录 `core/mapping/LIO-SAM`**(被 `.gitignore` 排除、不入库),再 `git apply` 本模块跟踪的 **`core/mapping/lio-sam.patch`**。**不放在 src 下**——core 是自成一体的完整 colcon 工作区,`colcon build` 从 `core/` 跑即可发现 `lio_sam` 包,无需 src。该补丁含全部 sim 适配:
 - `config/params.yaml`:话题 `points_raw` / `/imu_plugin/out`、帧 `lidarFrame=velodyne`、`baselinkFrame=base_footprint`、外参归零(雷达/IMU 共位)、VLP-16 16/1800、indoor leaf、`savePCD:true`。
 - `launch/run.launch.py`:发 `map→odom` 静态 TF、禁用 LIO-SAM 自带 robot_state_publisher(TF 由仿真侧提供)、起 4 个 lio_sam 节点 + RViz。
 - `src/mapOptmization.cpp`:存图/行为微调。
 
-**改 LIO-SAM 配置的正确姿势**:改 `src/LIO-SAM` working tree → `cd src/LIO-SAM && git diff > ../lio-sam.patch` 重生成 → 提交补丁。构建机重新 `git apply`(或 clone 重置后再 apply)。
+clone 命令(pinned SHA 见主文档,clone 到本模块):
+```bash
+git clone <LIO-SAM upstream> core/mapping/LIO-SAM && cd core/mapping/LIO-SAM && git checkout <pinned SHA>
+git apply ../lio-sam.patch
+```
+
+**改 LIO-SAM 配置的正确姿势**:改 `core/mapping/LIO-SAM` working tree → `cd core/mapping/LIO-SAM && git diff > ../lio-sam.patch` 重生成 → 提交 `core/mapping/lio-sam.patch`。构建机重新 `git apply`(或 clone 重置后再 apply)。
 
 ## TF 约定(REP-105)
 ```
@@ -18,16 +24,20 @@ map ─(run.launch.py 静态)→ odom ─(LIO-SAM 激光里程计,独占)→ bas
 轮式里程计 TF 已在 `robot_controllers.yaml` 关闭(`enable_odom_tf:false`),`odom→base_footprint` 由 LIO-SAM 独占,避免被轮式抖动污染。
 
 ## 构建机:建图流程
-前置:`core/` 已拷入工作区;`src/LIO-SAM` 已 clone + apply 最新 `lio-sam.patch` 并 `colcon build --packages-select lio_sam`;Phase 4 的 `models/factory_model` + `GZ_SIM_RESOURCE_PATH` 就位。
+前置:**构建根 = `core/`**(从 core 跑 colcon,build/install 落 core);`core/mapping/LIO-SAM` 已 clone + apply 最新 `lio-sam.patch`;Phase 4 的 `models/factory_model` + `GZ_SIM_RESOURCE_PATH` 就位。
 
 ```bash
+# 构建(从 core 工作区根,一次建全:本仓库包 + lio_sam clone)
+cd core && colcon build --packages-up-to lio_sam robot_gz_bringup
+source install/setup.bash
+
 # 终端 1：起仿真(工厂世界 + 机器人 + 传感器)
-cd src && source install/setup.bash
+cd core && source install/setup.bash
 ros2 launch robot_gz_bringup robot_gz.launch.py factory_models_path:=/abs/.../models/factory_model
 #（必要时 spawn_x:=/spawn_y:= 调到空旷过道）
 
 # 终端 2：起 LIO-SAM 建图
-cd src && source install/setup.bash
+cd core && source install/setup.bash
 ros2 launch lio_sam run.launch.py
 
 # 终端 3：缓慢遍历工厂(Humble diff_drive 收 TwistStamped！发 Twist 会被忽略)
