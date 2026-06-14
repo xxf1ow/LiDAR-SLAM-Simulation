@@ -115,7 +115,7 @@ export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:/abs/path/to/models/factory_mo
 ```
 
 ### 重新生成世界(本机/任意机,纯 Python)
-`worlds/factory.sdf` 是由 `scripts/convert_classic_world.py` 从 **Classic 源 `worlds/lio_world.classic.model`(已迁入本模块、入库,不再依赖 src)** 机械生成的(删 `<state>`、删带 ObjectDisposalPlugin 的模型、删内嵌老 robot include、剥 `frame=''`、中和 Ogre1 script 材质为纯色、补地面、注入 Harmonic 系统插件)。源世界变了就重跑:
+`worlds/factory.sdf` 是由 `scripts/convert_classic_world.py` 从 **Classic 源 `worlds/lio_world.classic.model`(已迁入本模块、入库,不再依赖 src)** 机械生成的:**先用 `<state>` 块的最终位姿覆盖顶层 `<model><pose>`(Classic 存盘后真实布局在 state 里,顶层 pose 多为过时初始值——本工厂 62 个里 47 个不一致,不修则物体全摆错位)**,再删 state、删带 ObjectDisposalPlugin 的模型、删内嵌老 robot include、剥 `frame=''`、link 内 collision/visual 重名去重、中和 Ogre1 script 材质、删多余聚光灯/`<gui>`、补地面、注入 Harmonic 系统插件。源世界变了就重跑:
 ```bash
 python core/simulation/robot_gz_bringup/scripts/convert_classic_world.py \
   core/simulation/robot_gz_bringup/worlds/lio_world.classic.model \

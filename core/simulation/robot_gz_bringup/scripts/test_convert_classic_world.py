@@ -51,6 +51,32 @@ ROBOT_INCLUDE_WORLD = """<sdf version='1.6'><world name='default'>
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
 
 
+def test_apply_state_poses_overrides_top_level_pose():
+    src = ("<sdf version='1.6'><world name='d'>"
+           "<model name='box'><pose>1 1 0 0 0 0</pose><link name='l'/></model>"
+           "<model name='nostate'><pose>9 9 0 0 0 0</pose><link name='l'/></model>"
+           "<state world_name='d'>"
+           "<model name='box'><pose>5 6 0 0 0 1.57</pose></model>"
+           "</state></world></sdf>")
+    world = cc.get_world(ET.ElementTree(ET.fromstring(src)))
+    cc.apply_state_poses(world)
+    assert world.find("model[@name='box']").findtext("pose").strip() == "5 6 0 0 0 1.57"
+    assert world.find("model[@name='nostate']").findtext("pose").strip() == "9 9 0 0 0 0"
+
+
+def test_drop_clutter_models_removes_listed_types():
+    src = ("<sdf version='1.6'><world name='d'>"
+           "<model name='coke_can'><link name='l'/></model>"
+           "<model name='coke_can_clone_0'><link name='l'/></model>"
+           "<model name='first_2015_trash_can_clone'><link name='l'/></model>"
+           "<model name='grey_wall'><link name='l'/></model>"
+           "</world></sdf>")
+    world = cc.get_world(ET.ElementTree(ET.fromstring(src)))
+    cc.drop_clutter_models(world)
+    names = [m.get("name") for m in world.findall("model")]
+    assert names == ["grey_wall"]      # coke_can/trash_can(含 clone)全删,墙保留
+
+
 def test_drop_state_removes_all_state_blocks():
     world = cc.get_world(ET.ElementTree(ET.fromstring(MINIMAL)))
     cc.drop_state(world)
@@ -72,6 +98,7 @@ def test_strip_frame_attrs_removes_every_frame_attribute():
 
 
 def test_neutralize_script_materials_replaces_script_with_color():
+    # 基本体(box)上的 script → 中性纯色
     world = cc.get_world(ET.ElementTree(ET.fromstring(SCRIPT_WORLD)))
     cc.neutralize_script_materials(world)
     mat = world.find(".//material")
@@ -80,13 +107,34 @@ def test_neutralize_script_materials_replaces_script_with_color():
     assert mat.find("diffuse") is not None
 
 
-def test_apply_harmonic_header_sets_name_plugins_and_physics():
+def test_neutralize_skips_mesh_visuals_removes_material_to_keep_texture():
+    # mesh visual 上的 script → 删整个 <material>,露出 mesh 自带纹理(勿误盖成灰)
+    src = ("<sdf version='1.6'><world name='d'><model name='dumpster'><link name='l'>"
+           "<visual name='v'><geometry><mesh><uri>model://dumpster/meshes/dumpster.dae</uri></mesh></geometry>"
+           "<material><script><name>Gazebo/Grey</name></script></material></visual>"
+           "</link></model></world></sdf>")
+    world = cc.get_world(ET.ElementTree(ET.fromstring(src)))
+    cc.neutralize_script_materials(world)
+    vis = world.find(".//visual")
+    assert vis.find("material") is None          # mesh 的材质被整体删除
+    assert vis.find(".//mesh") is not None        # 几何保留
+
+
+def test_ensure_ground_sinks_plane_below_zero():
+    world = cc.get_world(ET.ElementTree(ET.fromstring(MINIMAL)))
+    cc.ensure_ground(world)
+    g = world.find("model[@name='ground']")
+    assert g.findtext("pose").split()[2] == "-0.01"   # 地面下沉 1cm 防 z-fighting
+
+
+def test_apply_harmonic_header_sets_name_plugins_and_drops_physics():
     tree = ET.ElementTree(ET.fromstring(HEADER_WORLD))
     world = cc.get_world(tree)
     cc.apply_harmonic_header(world)
     assert world.get("name") == "factory"
-    physics = world.findall("physics")
-    assert len(physics) == 1 and physics[0].get("type") in (None, "")
+    # 不写 <physics>:gz-sim-physics-system 插件提供物理;SDF physics 需 type 属性,
+    # 显式写会在 Gz8 解析报错。与已验证的 test_world.sdf(无 physics 块)一致。
+    assert world.findall("physics") == []
     filenames = {p.get("filename") for p in world.findall("plugin")}
     assert filenames == {
         "gz-sim-physics-system", "gz-sim-sensors-system", "gz-sim-imu-system",
@@ -137,6 +185,51 @@ def test_ensure_ground_idempotent_when_present():
     assert len(world.findall(".//plane")) == 1
 
 
+def test_dedupe_link_geometry_names_makes_collisions_unique():
+    dup = ("<sdf version='1.6'><world name='d'><model name='m'><link name='l'>"
+           "<visual name='v1'/><collision name='c'/>"
+           "<visual name='v2'/><collision name='c'/><collision name='c'/>"
+           "</link></model></world></sdf>")
+    world = cc.get_world(ET.ElementTree(ET.fromstring(dup)))
+    cc.dedupe_link_geometry_names(world)
+    names = [c.get("name") for c in world.iter("collision")]
+    assert len(names) == len(set(names))            # 全唯一
+    assert {"c", "c_dup2", "c_dup3"} == set(names)
+
+
+def test_strip_use_parent_model_frame_removes_it():
+    upmf = ("<sdf version='1.6'><world name='d'><model name='m'><link name='l'/>"
+            "<joint name='j' type='revolute'><axis><xyz>0 0 1</xyz>"
+            "<use_parent_model_frame>1</use_parent_model_frame></axis></joint>"
+            "</model></world></sdf>")
+    world = cc.get_world(ET.ElementTree(ET.fromstring(upmf)))
+    cc.strip_use_parent_model_frame(world)
+    assert world.find(".//use_parent_model_frame") is None
+    assert world.find(".//axis/xyz") is not None    # axis 其它内容保留
+
+
+def test_strip_gui_removes_gui_block():
+    gui = ("<sdf version='1.6'><world name='d'>"
+           "<gui fullscreen='0'><camera name='user_camera'><pose>1 2 3 0 0 0</pose></camera></gui>"
+           "<model name='m'><link name='l'/></model></world></sdf>")
+    world = cc.get_world(ET.ElementTree(ET.fromstring(gui)))
+    cc.strip_gui(world)
+    assert world.find("gui") is None
+    assert world.find("model[@name='m']") is not None
+
+
+def test_strip_extra_lights_keeps_only_directional_sun():
+    w = ("<sdf version='1.6'><world name='d'>"
+         "<light name='sun' type='directional'/>"
+         "<light name='spot1' type='spot'/><light name='spot2' type='spot'/>"
+         "<model name='m'><link name='l'><light name='lamp' type='point'/></link></model>"
+         "</world></sdf>")
+    world = cc.get_world(ET.ElementTree(ET.fromstring(w)))
+    cc.strip_extra_lights(world)
+    lights = list(world.iter("light"))
+    assert len(lights) == 1 and lights[0].get("name") == "sun"   # 仅留 directional sun
+
+
 def test_generated_factory_sdf_is_sane():
     path = os.path.join(REPO, "core", "simulation", "robot_gz_bringup", "worlds", "factory.sdf")
     if not os.path.exists(path):
@@ -147,7 +240,17 @@ def test_generated_factory_sdf_is_sane():
     assert world.get("name") == "factory"
     assert world.find("state") is None
     assert "ObjectDisposalPlugin" not in ET.tostring(tree.getroot(), encoding="unicode")
-    assert len(world.findall("model")) >= 55
+    assert len(world.findall("model")) >= 50   # 62 - 2 插件 - 7 杂物(coke/trash)+ ground 余量
     serialized = ET.tostring(tree.getroot(), encoding="unicode")
     assert "model://robot" not in serialized   # 不嵌老机器人
     assert world.find(".//plane") is not None   # 有地面
+    assert "use_parent_model_frame" not in serialized   # Classic 元素已清
+    assert world.find("gui") is None                     # Classic <gui> 块已删
+    # 模型内光源已清,仅留世界级 sun
+    assert all(l.get("type") == "directional" for l in world.findall("light"))
+    assert len(list(world.iter("light"))) == len(world.findall("light"))  # 无模型内嵌 light
+    # 每个 link 内 collision/visual 名唯一(Gz Sim 严格)
+    for link in world.iter("link"):
+        for tag in ("collision", "visual"):
+            names = [e.get("name") for e in link.findall(tag)]
+            assert len(names) == len(set(names)), f"{tag} 重名 in link {link.get('name')}"

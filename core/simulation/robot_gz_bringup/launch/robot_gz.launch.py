@@ -1,8 +1,12 @@
 """Gazebo Harmonic 仿真侧 bringup：起带传感器系统插件的测试世界 + spawn 机器人(自带 gpu_lidar/imu)
 + robot_state_publisher + 控制器 spawner + ros_gz_bridge(clock/lidar/imu) + ring/time 适配节点。
 controller_manager 由 URDF 里的 gz_ros2_control 插件提供(无独立 ros2_control_node)。"""
+import glob
+import os
+
 from launch import LaunchDescription
-from launch.actions import AppendEnvironmentVariable, DeclareLaunchArgument, IncludeLaunchDescription
+from launch.actions import (AppendEnvironmentVariable, DeclareLaunchArgument,
+                            IncludeLaunchDescription, OpaqueFunction)
 from launch.conditions import IfCondition, UnlessCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command, FindExecutable, PathJoinSubstitution, LaunchConfiguration
@@ -33,10 +37,18 @@ def generate_launch_description():
     pkg_gz = FindPackageShare("robot_gz_bringup")
     world = PathJoinSubstitution([pkg_gz, "worlds", LaunchConfiguration("world")])
     bridge_cfg = PathJoinSubstitution([pkg_gz, "config", "bridge.yaml"])
-    set_resource_path = AppendEnvironmentVariable(
-        name="GZ_SIM_RESOURCE_PATH",
-        value=LaunchConfiguration("factory_models_path"),
-    )
+    # GZ_SIM_RESOURCE_PATH 需含:① model:// 资产父目录(解析 model://workcell 等),
+    # ② 各模型 materials/textures 目录(mesh 的 mtl/dae 用裸文件名引贴图 Floor.png 等,
+    #    否则 Gz 报 "Could not resolve file [...]"、模型无纹理)。后者在 launch 时按实际目录展开。
+    def _set_resource_paths(context, *args, **kwargs):
+        models = LaunchConfiguration("factory_models_path").perform(context)
+        if not models:
+            return []
+        paths = [models]
+        paths += sorted(glob.glob(os.path.join(models, "*", "materials", "textures")))
+        return [AppendEnvironmentVariable("GZ_SIM_RESOURCE_PATH", os.pathsep.join(paths))]
+
+    set_resource_path = OpaqueFunction(function=_set_resource_paths)
     gz_controllers_file = PathJoinSubstitution(
         [FindPackageShare("robot_bringup"), "config", "robot_controllers.yaml"])
 
