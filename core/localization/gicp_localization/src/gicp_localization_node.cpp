@@ -2,6 +2,7 @@
 #include "gicp_localization/pose_math.hpp"
 #include "gicp_localization/prior_map.hpp"
 
+#include <cmath>
 #include <cstdlib>
 #include <stdexcept>
 
@@ -105,7 +106,11 @@ void GicpLocalizationNode::cloudCb(const sensor_msgs::msg::PointCloud2::SharedPt
   pcl::fromROSMsg(*msg, cloud);
   std::vector<Eigen::Vector4f> pts;
   pts.reserve(cloud.size());
-  for (const auto& p : cloud.points) pts.emplace_back(p.x, p.y, p.z, 1.0f);
+  for (const auto& p : cloud.points) {
+    // 丢弃非有限点(同 loadPriorMapPcd):防 small_gicp voxelgrid_sampling 越界刷屏。
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) continue;
+    pts.emplace_back(p.x, p.y, p.z, 1.0f);
+  }
   std::lock_guard<std::mutex> lk(mtx_);
   latest_scan_ = std::move(pts);
 }
