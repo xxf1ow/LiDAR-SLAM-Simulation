@@ -22,12 +22,19 @@ import select
 
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from geometry_msgs.msg import Twist, TwistStamped
 
 
 class StickyTeleop(Node):
     def __init__(self):
-        super().__init__("sticky_teleop")
+        # 默认用 sim 时间:建图都在 Gz 仿真里,header.stamp 要对齐控制器(sim 时钟),
+        # 否则若 diff_drive 按 stamp 算超时会判指令过期→不动。仍可被 CLI/launch 的
+        # `-p use_sim_time:=false` 覆盖(命令行优先级高于此构造默认)。
+        super().__init__(
+            "sticky_teleop",
+            parameter_overrides=[Parameter("use_sim_time", Parameter.Type.BOOL, True)],
+        )
         # 话题/帧:launch 已把 /base_controller/cmd_vel remap 成 /cmd_vel
         self.declare_parameter("cmd_vel_topic", "/cmd_vel")
         self.declare_parameter("frame_id", "base_link")

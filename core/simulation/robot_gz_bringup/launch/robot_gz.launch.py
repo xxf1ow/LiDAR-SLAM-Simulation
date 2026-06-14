@@ -23,9 +23,14 @@ def generate_launch_description():
                               description="link/joint 名前缀。"),
         DeclareLaunchArgument("world", default_value="factory.sdf",
                               description="worlds/ 下的世界文件名(factory.sdf=工厂; test_world.sdf=冒烟回退)。"),
-        DeclareLaunchArgument("factory_models_path", default_value="",
-                              description="model:// 资产父目录(.../models/factory_model)的绝对路径;"
-                                          "为空则依赖已 export 的 GZ_SIM_RESOURCE_PATH。"),
+        DeclareLaunchArgument(
+            "factory_models_path",
+            # 默认指向构建机仓库布局 ~/LiDAR-SLAM-Simulation/models/factory_model(用 $HOME,
+            # 不写死用户名),免得每次手填;仓库不在此处就传 factory_models_path:= 覆盖,
+            # 或置空依赖已 export 的 GZ_SIM_RESOURCE_PATH。
+            default_value=os.path.expanduser("~/LiDAR-SLAM-Simulation/models/factory_model"),
+            description="model:// 资产父目录(.../models/factory_model)的绝对路径;"
+                        "默认 ~/LiDAR-SLAM-Simulation/models/factory_model,可覆盖或置空。"),
         DeclareLaunchArgument("spawn_x", default_value="4.0", description="机器人 spawn X(避开原点 workcell)。"),
         DeclareLaunchArgument("spawn_y", default_value="0.0", description="机器人 spawn Y。"),
         DeclareLaunchArgument("spawn_z", default_value="0.05",

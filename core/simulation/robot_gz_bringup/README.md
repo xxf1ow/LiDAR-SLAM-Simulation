@@ -107,12 +107,7 @@ ros2 topic list | grep -E "Odometry|cloud_registered"
 ## Phase 4 — 工厂世界(Classic → Harmonic 迁移)
 
 ### 资产前置(构建机)
-`factory.sdf` 的 mesh 视觉引用 Classic 模型库(ARIAC/gazebo_models)资产,按依赖惯例 **不入库**(`.gitignore: models/*`)。构建机需备好 `models/factory_model/`(整套 `model.config`+`model.sdf`+meshes,~30MB),并让 Gz 能解析 `model://`:
-```bash
-# 把 models/factory_model 的绝对路径告诉 Gz(二选一)
-export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:/abs/path/to/models/factory_model
-# 或启动时传 arg(见下),launch 会 AppendEnvironmentVariable
-```
+`factory.sdf` 的 mesh 视觉引用 Classic 模型库(ARIAC/gazebo_models)资产,按依赖惯例 **不入库**(`.gitignore: models/*`)。构建机需备好 `models/factory_model/`(整套 `model.config`+`model.sdf`+meshes,~30MB)。launch 的 `factory_models_path` **默认就是 `~/LiDAR-SLAM-Simulation/models/factory_model`**(按构建机仓库布局,用 `$HOME` 不写死用户名),会自动展开各 `materials/textures` 进 `GZ_SIM_RESOURCE_PATH` —— 资产放在该默认位置时**无需任何额外操作**。仓库/资产不在此处再传 `factory_models_path:=/abs/path/...` 覆盖,或置空 `factory_models_path:=""` 改为依赖手动 `export GZ_SIM_RESOURCE_PATH`。
 
 ### 关于 `worlds/factory.sdf`
 `worlds/factory.sdf` 是**一次性**由老 Classic 工厂世界转换 + 手工优化后入库的**最终成品**,不再由脚本生成(原转换器 `convert_classic_world.py` 及其 Classic 源 `lio_world.classic.model` 已删除——一次转换后不会再跑)。它在 Classic→Harmonic 转换基础上做了仿真性能优化(实测 RTF 大幅提升,且不影响点云/IMU):
@@ -127,9 +122,9 @@ export GZ_SIM_RESOURCE_PATH=$GZ_SIM_RESOURCE_PATH:/abs/path/to/models/factory_mo
 # 构建根 = core/(core 自成一体;build/install 落 core)
 cd core && colcon build --packages-select lidar_pointcloud_adapter robot_description robot_bringup robot_gz_bringup
 source install/setup.bash
-# factory 世界(默认);资产路径用 arg 传(或已 export GZ_SIM_RESOURCE_PATH)
-ros2 launch robot_gz_bringup robot_gz.launch.py \
-  factory_models_path:=/abs/path/to/models/factory_model
+# factory 世界 + 资产路径都已是默认值,通常直接起即可:
+ros2 launch robot_gz_bringup robot_gz.launch.py
+# 资产不在默认位置才传:factory_models_path:=/abs/path/to/models/factory_model
 # 回退冒烟:world:=test_world.sdf
 # 机器人 spawn 默认 x=4,y=0,z=0.05(Phase 5a 根改 base_footprint 在地面);若落在结构里,调 spawn_x:= / spawn_y:=
 ```
