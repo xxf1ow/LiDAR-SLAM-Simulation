@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>lidar_pointcloud_adapter</name>
+  <version>0.1.0</version>
+  <description>把 Gz gpu_lidar 的组织化点云补成 Velodyne 风格(加 ring/time),喂 FAST-LIO/LIO-SAM(sim-only)</description>
+  <maintainer email="20twenty.degree@gmail.com">xxf1ow</maintainer>
+  <license>MIT</license>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>sensor_msgs_py</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+
+  <test_depend>python3-pytest</test_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

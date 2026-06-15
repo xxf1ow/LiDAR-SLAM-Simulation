@@ -15,7 +15,10 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('config_file', default_value=default_cfg),
-        DeclareLaunchArgument('prior_map_path', default_value='~/result/GlobalMap.pcd'),
+        # 先验图默认路径用 expanduser 展开 ~(LIO-SAM 5b save_map 落 ~/result/GlobalMap.pcd);
+        # 否则字面 "~" 传给 PCL loadPCDFile 不会展开、加载失败。路径不同才传该 arg 覆盖。
+        DeclareLaunchArgument('prior_map_path',
+                              default_value=os.path.expanduser('~/result/GlobalMap.pcd')),
         Node(
             package='gicp_localization',
             executable='gicp_localization_node',

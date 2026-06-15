@@ -1,12 +1,12 @@
 diff --git a/config/params.yaml b/config/params.yaml
-index dd334c9..2ad5dd4 100644
+index dd334c9..fece8b2 100644
 --- a/config/params.yaml
 +++ b/config/params.yaml
 @@ -1,15 +1,19 @@
  /**:
    ros__parameters:
  
-+    # Use Gazebo simulation clock (/clock) instead of wall time - required so the
++    # Use Gazebo simulation clock (/clock) instead of wall time — required so the
 +    # LIO-SAM nodes' TF timestamps line up with the simulation-time TF tree.
 +    use_sim_time: true
 +
@@ -21,7 +21,7 @@ index dd334c9..2ad5dd4 100644
      # Frames
 -    lidarFrame: "lidar_link"
 -    baselinkFrame: "base_link"
-+    lidarFrame: "velodyne_base_link"
++    lidarFrame: "velodyne"
 +    baselinkFrame: "base_footprint"
      odometryFrame: "odom"
      mapFrame: "map"
@@ -48,12 +48,11 @@ index dd334c9..2ad5dd4 100644
      imuGravity: 9.80511
      imuRPYWeight: 0.01
  
--    extrinsicTrans:  [ 0.0,  0.0,  0.0 ]
--    extrinsicRot:    [-1.0,  0.0,  0.0,
 +    # Gazebo: IMU and LiDAR frames are already aligned by the simulation plugins,
 +    # so the extrinsic rotation must be identity (the real-sensor defaults below
 +    # would otherwise flip the cloud and make mapping diverge).
-+    extrinsicTrans:  [ 0.0,  0.0,  -0.0103 ]
+     extrinsicTrans:  [ 0.0,  0.0,  0.0 ]
+-    extrinsicRot:    [-1.0,  0.0,  0.0,
 +    #extrinsicRot:    [-1.0,  0.0,  0.0,
 +    #                   0.0,  1.0,  0.0,
 +    #                   0.0,  0.0, -1.0 ]
