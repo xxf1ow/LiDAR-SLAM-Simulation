@@ -50,7 +50,7 @@ controller_server:
   ros__parameters:
     use_sim_time: true
     odom_topic: /base_controller/odom    # diff_drive 真实 twist(FAST-LIO /Odometry twist 恒零)
-    controller_frequency: 20.0           # RTF≈0.5 跟不上就降(15/10)
+    controller_frequency: 15.0           # WSL 软渲下 20Hz 算不过来(missed rate);再紧可降到 10
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -69,16 +69,16 @@ controller_server:
       yaw_goal_tolerance: 0.25
     FollowPath:
       plugin: "nav2_mppi_controller::MPPIController"
-      time_steps: 56
+      time_steps: 40           # 56→40 降算力(horizon 2.0s);配 controller_frequency 15
       model_dt: 0.05
-      batch_size: 2000          # RTF≈0.5 跟不上就降到 1000
+      batch_size: 1000          # 2000→1000 降算力(WSL 软渲算力紧);再紧可降到 500
       vx_std: 0.2
       vy_std: 0.2
-      wz_std: 0.4
-      vx_max: 0.5               # CHASSIS: 起步保守(≤底盘 1.5)
+      wz_std: 0.6               # 0.4→0.6 多探索转向样本,改善弯道边走边转
+      vx_max: 1.0               # CHASSIS: 0.5→1.0 提速(≤底盘 1.5)
       vx_min: -0.35             # CHASSIS
       vy_max: 0.5
-      wz_max: 1.0               # CHASSIS: (≤底盘 2.0)
+      wz_max: 1.8               # CHASSIS: 1.0→1.8 治弯道爬行(≤底盘 2.0);紧弯 vx=wz·r 不再被钳死
       iteration_count: 1
       prune_distance: 1.7
       transform_tolerance: 0.1
@@ -238,7 +238,7 @@ bt_navigator:
     global_frame: map
     robot_base_frame: base_footprint
     odom_topic: /base_controller/odom
-    bt_loop_duration: 10
+    bt_loop_duration: 20         # 10→20(50Hz):软渲下 100Hz tick 跟不上的告警降频
     default_server_timeout: 20
     wait_for_service_timeout: 1000
     # 不显式设 BT XML → 用内置默认(navigate_to_pose/through_poses 的 *_w_replanning_and_recovery 树)

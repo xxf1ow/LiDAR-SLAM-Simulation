@@ -52,7 +52,10 @@ ros2 launch robot_navigation navigation.launch.py
 ## 验收判据（PASS → 5e 完成）
 1. 五个 nav 生命周期节点全 active（`ros2 lifecycle get /bt_navigator` 等）；启动无报错。
 2. TF `map→camera_init→body→base_footprint` 全链通；`tf2_echo map base_footprint` 随车动、**z≈0**（焊接符号对；若≈+1.1 翻 weld_z 符号）、旋转≈单位。
-3. `ros2 param get /behavior_server global_frame` = `camera_init`；局部 costmap global_frame=`camera_init`；全局 costmap/planner=`map`。
+3. frame 校验(global_frame 在内嵌 costmap 子节点上,不在 server 节点本身——查 `/controller_server`/`/planner_server` 会回 "Parameter not set",正常):
+   `ros2 param get /behavior_server global_frame`=`camera_init`；
+   `ros2 param get /local_costmap/local_costmap global_frame`=`camera_init`；
+   `ros2 param get /global_costmap/global_costmap global_frame`=`map`。
 4. RViz 给「Nav2 Goal」→ Smac Hybrid-A\* 规划出**平滑可行路径**（无原地转尖角）；`/plan` 有路径。
 5. **车实际开到目标**（不反向、不贴墙——走通道中央）；`/cmd_vel_nav` 有 Twist、`/cmd_vel` 有 TwistStamped、底盘响应。
 6. 局部 costmap 不刷 `Sensor origin out of map bounds`；障碍正常 mark+clear；MPPI 不报控制超时。
@@ -60,7 +63,8 @@ ros2 launch robot_navigation navigation.launch.py
 ## FAIL 排查
 - **车朝目标反向跑/不拐弯** → 焊接旋转非单位（必须单位；勿用 pitch=π）。
 - **车贴墙走** → 调大局部 `inflation_radius`、`cost_scaling_factor` 调缓、MPPI `ObstaclesCritic.critical_weight` 提高。
-- **MPPI 控制超时/断续**（RTF≈0.5 算力紧）→ 降 `batch_size`(2000→1000)、`time_steps`、`controller_frequency`。
+- **MPPI 控制超时/断续 / RTF 砸到个位数**（WSL 软渲 gpu_lidar 吃 CPU,算力紧）→ 降 `batch_size`、`time_steps`、`controller_frequency`(现已 1000/40/15;再紧到 500/10);治本是 WSLg GPU 直通。
+- **转弯特别慢 / 弯道像停下来转**（紧弯 vx 被 `vx=wz·r` 钳死）→ 提 `wz_max`(现 1.8,≤底盘 2.0)、`vx_max`(现 1.0,≤底盘 1.5)、`wz_std`(现 0.6);仍嫌弯太碎可调大 `minimum_turning_radius`(0.2→0.4,牺牲窄道机动)。
 - **局部 costmap 刷 origin out of bounds / 障碍清不掉** → 确认 voxel `origin_z=-1.0`、源 `/cloud_registered`。
 - **behavior 报 odom/帧不存在** → 确认 behavior global_frame=camera_init、odom_topic=/base_controller/odom。
 - **改 launch/config 不生效** → 必须重新 `colcon build`（launch 跑 install/ 副本）。
