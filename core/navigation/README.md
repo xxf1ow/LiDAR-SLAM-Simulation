@@ -51,7 +51,7 @@ ros2 launch robot_navigation navigation.launch.py
 
 ## 验收判据（PASS → 5e 完成）
 1. 五个 nav 生命周期节点全 active（`ros2 lifecycle get /bt_navigator` 等）；启动无报错。
-2. TF `map→camera_init→body→base_footprint` 全链通；`tf2_echo map base_footprint` 随车动、**z≈0**（焊接符号对；若≈+1.1 翻 weld_z 符号）、旋转≈单位。
+2. TF `map→camera_init→body→base_footprint` 全链通；`tf2_echo map base_footprint` 随车动、**旋转≈单位阵**（关键:没踩 pitch=π）。z≈**-0.56**(正常):SLAM 的 `map` 原点 z=0 在**传感器高度**(非地面),故 base_footprint=传感器-0.556≈-0.56=落在地面;若 z≈**+0.5** 则 weld_z 符号反了(车悬空)。
 3. frame 校验(global_frame 在内嵌 costmap 子节点上,不在 server 节点本身——查 `/controller_server`/`/planner_server` 会回 "Parameter not set",正常):
    `ros2 param get /behavior_server global_frame`=`camera_init`；
    `ros2 param get /local_costmap/local_costmap global_frame`=`camera_init`；
@@ -70,6 +70,11 @@ ros2 launch robot_navigation navigation.launch.py
 - **behavior 报 odom/帧不存在** → 确认 behavior global_frame=camera_init、odom_topic=/base_controller/odom。
 - **改 launch/config 不生效** → 必须重新 `colcon build`（launch 跑 install/ 副本）。
 - **ament_python 测试 colcon 不发现** → `python3 -m pytest core/navigation/robot_navigation/test` 兜底。
+
+## 已知限制（最小范围,构建机实测确认;均留后续阶段）
+- **堵路新障碍会撞,不会绕**:全局 costmap 只有静态先验图层(无实时障碍层),新障碍进不了全局图 → 全局路径仍直穿、不绕行;局部 MPPI + ~0.9-1.0m 近距盲区(velodyne min_range + FAST-LIO blind + costmap obstacle_min_range 三层)无法避开**完全堵死**的路 → 短暂停顿后撞上。**治法(留动态障碍阶段)**:全局 costmap 加实时 voxel 障碍层(源 /cloud_registered)让全局规划器远处绕开。路旁(不堵死)的局部避障是好的。
+- **Pause/Resume 不续行**:Nav2 面板 Pause=lifecycle deactivate(取消当前目标),Resume=activate(无"续上原目标"语义)→ 车闲置、RViz 残留上次 `/plan`。要继续=重发目标(Nav2 机制,非 bug)。
+- **Waypoint 模式不可用**:`waypoint_follower` 未启用(见路线图);穿点请用 RViz「Nav Through Poses」(`navigate_through_poses`,已可用)。
 
 ## 后续路线图（不在 5e）
 - **穿点导航**：启用 `waypoint_follower` + `navigate_through_poses`（参数/BT 已内置默认）。
