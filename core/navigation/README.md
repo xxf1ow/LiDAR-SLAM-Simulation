@@ -63,7 +63,8 @@ ros2 launch robot_navigation navigation.launch.py
 ## FAIL 排查
 - **车朝目标反向跑/不拐弯** → 焊接旋转非单位（必须单位；勿用 pitch=π）。
 - **车贴墙走** → 调大局部 `inflation_radius`、`cost_scaling_factor` 调缓、MPPI `ObstaclesCritic.critical_weight` 提高。
-- **MPPI 控制超时/断续 / RTF 砸到个位数**（WSL 软渲 gpu_lidar 吃 CPU,算力紧）→ 降 `batch_size`、`time_steps`、`controller_frequency`(现已 1000/40/15;再紧到 500/10);治本是 WSLg GPU 直通。
+- **MPPI 控制超时/断续 / RTF 砸到个位数**（WSL 软渲 gpu_lidar 吃 CPU,算力紧）→ 降 `batch_size`、`time_steps`、`controller_frequency`(现 1000/30/10;再紧降 `batch_size→500`);治本是 WSLg GPU 直通。
+  - ⚠️ **MPPI 强约束:`1/controller_frequency ≤ model_dt`**(否则 configure 报 "Controller period more then model dt")。**降 `controller_frequency` 必须同步把 `model_dt` 抬到 = 周期**(现 10Hz↔model_dt 0.1)。`horizon = time_steps × model_dt`。
 - **转弯特别慢 / 弯道像停下来转**（紧弯 vx 被 `vx=wz·r` 钳死）→ 提 `wz_max`(现 1.8,≤底盘 2.0)、`vx_max`(现 1.0,≤底盘 1.5)、`wz_std`(现 0.6);仍嫌弯太碎可调大 `minimum_turning_radius`(0.2→0.4,牺牲窄道机动)。
 - **局部 costmap 刷 origin out of bounds / 障碍清不掉** → 确认 voxel `origin_z=-1.0`、源 `/cloud_registered`。
 - **behavior 报 odom/帧不存在** → 确认 behavior global_frame=camera_init、odom_topic=/base_controller/odom。
