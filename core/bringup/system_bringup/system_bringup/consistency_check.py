@@ -124,3 +124,64 @@ def _adapter_scan_period(text):
 
 def _parse_footprint(s):
     return [(float(x), float(y)) for x, y in ast.literal_eval(s)]
+
+
+def check_geometry(repo_root):
+    """G1–G5:几何派生值在 xacro / controllers / nav2 / launch 间自洽。"""
+    fails = []
+    macro = _read(repo_root, F_MACRO)
+    props = _xacro_props(macro)
+    base_l, base_w, base_h = props["base_length"], props["base_width"], props["base_height"]
+    wheel_r, lidar_h = props["wheel_radius"], props["lidar_height"]
+
+    nav = _yaml(_read(repo_root, F_NAV_PARAMS))
+    ctrl = _yaml(_read(repo_root, F_CONTROLLERS))
+    cp = ctrl["base_controller"]["ros__parameters"]
+
+    # G1 footprint(global + local 两处)半长/半宽 == 车体半长/半宽
+    for scope in ("global_costmap", "local_costmap"):
+        fp = nav[scope][scope]["ros__parameters"]["footprint"]
+        pts = _parse_footprint(fp)
+        hx = max(abs(x) for x, _ in pts)
+        hy = max(abs(y) for _, y in pts)
+        if abs(hx - base_l / 2) > 1e-6:
+            fails.append("[G1] %s footprint 半长 %.3f != base_length/2 %.3f(源 xacro)。改 nav2_params.yaml 或核对 xacro。"
+                         % (scope, hx, base_l / 2))
+        if abs(hy - base_w / 2) > 1e-6:
+            fails.append("[G1] %s footprint 半宽 %.3f != base_width/2 %.3f。" % (scope, hy, base_w / 2))
+
+    # G2 controllers 轮参 == xacro
+    if abs(cp["wheel_radius"] - wheel_r) > 1e-9:
+        fails.append("[G2] wheel_radius 不一致: xacro=%.4f vs controllers=%.4f。改 robot_controllers.yaml 或核对 xacro。"
+                     % (wheel_r, cp["wheel_radius"]))
+    if abs(cp["wheel_separation"] - base_w) > 1e-9:
+        fails.append("[G2] wheel_separation controllers=%.4f != xacro base_width=%.4f。" % (cp["wheel_separation"], base_w))
+
+    # G3 navigation.launch.py 几何常量 == xacro(weld_z 由它派生)
+    lc = _launch_floats(_read(repo_root, F_NAV_LAUNCH), ["_BASE_HEIGHT", "_WHEEL_RADIUS", "_LIDAR_HEIGHT"])
+    for cname, xval in [("_BASE_HEIGHT", base_h), ("_WHEEL_RADIUS", wheel_r), ("_LIDAR_HEIGHT", lidar_h)]:
+        if cname not in lc:
+            fails.append("[G3] navigation.launch.py 缺几何常量 %s(weld_z 应由它派生)。" % cname)
+        elif abs(lc[cname] - xval) > 1e-9:
+            fails.append("[G3] navigation.launch.py %s=%.4f != xacro %.4f。改 navigation.launch.py 或核对 xacro。"
+                         % (cname, lc[cname], xval))
+
+    # G4 共位 -> 外参零
+    vxyz = _xacro_joint_origin_xyz(macro, "velodyne_joint")
+    ixyz = _xacro_joint_origin_xyz(macro, "imu_joint")
+    if vxyz != ixyz:
+        fails.append("[G4] velodyne_joint/imu_joint origin 不同(应共位): '%s' vs '%s'。" % (vxyz, ixyz))
+    flm = _yaml(_patch_added_text(_read(repo_root, F_FASTLIO_PATCH)))["/**"]["ros__parameters"]["mapping"]
+    if [float(v) for v in flm["extrinsic_T"]] != [0.0, 0.0, 0.0]:
+        fails.append("[G4] fast-lio extrinsic_T 非零: %s(velodyne/imu 共位应为 [0,0,0])。" % flm["extrinsic_T"])
+    if [float(v) for v in flm["extrinsic_R"]] != [1, 0, 0, 0, 1, 0, 0, 0, 1]:
+        fails.append("[G4] fast-lio extrinsic_R 非单位阵: %s。" % flm["extrinsic_R"])
+
+    # G5 nav2 限速 <= 底盘限速
+    fpp = nav["controller_server"]["ros__parameters"]["FollowPath"]
+    if fpp["vx_max"] > cp["linear.x.max_velocity"] + 1e-9:
+        fails.append("[G5] nav2 vx_max %.2f > 底盘 linear.x.max_velocity %.2f。" % (fpp["vx_max"], cp["linear.x.max_velocity"]))
+    if fpp["wz_max"] > cp["angular.z.max_velocity"] + 1e-9:
+        fails.append("[G5] nav2 wz_max %.2f > 底盘 angular.z.max_velocity %.2f。" % (fpp["wz_max"], cp["angular.z.max_velocity"]))
+
+    return fails

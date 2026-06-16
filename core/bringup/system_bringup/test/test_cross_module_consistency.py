@@ -50,3 +50,8 @@ def test_gazebo_lidar_block():
 
 def test_adapter_scan_period():
     assert cc._adapter_scan_period(cc._read(_root(), cc.F_GZ_LAUNCH)) == 0.1
+
+
+def test_geometry_consistent():
+    fails = cc.check_geometry(_root())
+    assert fails == [], "几何不一致:\n" + "\n".join(fails)
