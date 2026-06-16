@@ -55,3 +55,8 @@ def test_adapter_scan_period():
 def test_geometry_consistent():
     fails = cc.check_geometry(_root())
     assert fails == [], "几何不一致:\n" + "\n".join(fails)
+
+
+def test_lidar_consistent():
+    fails = cc.check_lidar(_root())
+    assert fails == [], "雷达不一致:\n" + "\n".join(fails)

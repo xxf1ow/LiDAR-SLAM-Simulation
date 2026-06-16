@@ -185,3 +185,31 @@ def check_geometry(repo_root):
         fails.append("[G5] nav2 wz_max %.2f > 底盘 angular.z.max_velocity %.2f。" % (fpp["wz_max"], cp["angular.z.max_velocity"]))
 
     return fails
+
+
+def check_lidar(repo_root):
+    """L1–L4:雷达规格在 gazebo.xacro / lio-sam.patch / fast-lio2.patch / adapter 间自洽。"""
+    fails = []
+    gz = _gazebo_lidar(_read(repo_root, F_GAZEBO))
+    fl_pre = _yaml(_patch_added_text(_read(repo_root, F_FASTLIO_PATCH)))["/**"]["ros__parameters"]["preprocess"]
+    liosam = _read(repo_root, F_LIOSAM_PATCH)
+    n_scan = int(_patch_added_value(liosam, "N_SCAN"))
+    horizon = int(_patch_added_value(liosam, "Horizon_SCAN"))
+    adapter_rate = round(1.0 / _adapter_scan_period(_read(repo_root, F_GZ_LAUNCH)))
+
+    # L1 线数
+    if not (gz["v_samples"] == n_scan == fl_pre["scan_line"]):
+        fails.append("[L1] 线数不一致: gazebo=%d, lio-sam N_SCAN=%d, fast-lio scan_line=%d。"
+                     % (gz["v_samples"], n_scan, fl_pre["scan_line"]))
+    # L2 水平
+    if gz["h_samples"] != horizon:
+        fails.append("[L2] 水平点数不一致: gazebo=%d, lio-sam Horizon_SCAN=%d。" % (gz["h_samples"], horizon))
+    # L3 频率
+    if not (gz["update_rate"] == fl_pre["scan_rate"] == adapter_rate):
+        fails.append("[L3] 频率不一致: gazebo update_rate=%d, fast-lio scan_rate=%d, adapter 1/scan_period=%d。"
+                     % (gz["update_rate"], fl_pre["scan_rate"], adapter_rate))
+    # L4 近距(不等式:盲区 >= 传感器最小距)
+    if fl_pre["blind"] < gz["range_min"] - 1e-9:
+        fails.append("[L4] fast-lio blind %.2f < gazebo range.min %.2f(盲区应 >= 传感器最小距)。"
+                     % (fl_pre["blind"], gz["range_min"]))
+    return fails
