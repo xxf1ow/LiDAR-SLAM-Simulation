@@ -78,6 +78,6 @@ ros2 launch robot_navigation navigation.launch.py
 
 ## 后续路线图（不在 5e）
 - **穿点导航**：启用 `waypoint_follower` + `navigate_through_poses`（参数/BT 已内置默认）。
-- **动态障碍**：移植旧 `src/sim_obstacles`（关重力防翻倒）+ MPPI 调避让（差速 + MPPI 预测式，目标超越旧栈 DWB 的 stop-and-wait）。
+- **动态障碍**：新建动态障碍仿真包（重新设计，不复用旧实现）+ MPPI 调避让（差速 + MPPI 预测式，目标超越旧栈 DWB 的 stop-and-wait）。
 - **手动接管**：加 `twist_mux` 多路复用 teleop + nav（都走 TwistStamped）。
 - **STVL / velocity_smoother / collision_monitor**：按需。

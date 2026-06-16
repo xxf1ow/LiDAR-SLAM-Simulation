@@ -4,21 +4,11 @@
 
 models/*
 results/*
-src/robot_gazebo/*
-src/robot_description/meshes/*
 
-# 上游依赖 clone 落各 core 模块名下(gitignore clone、跟踪 patch);src 下旧 clone 随各阶段迁移后删除
+# 上游依赖 clone 落各 core 模块名下(gitignore clone、跟踪 patch)
 core/mapping/LIO-SAM/
 core/localization/FAST_LIO/
 core/localization/small_gicp/
-src/velodyne_simulator/*
-
-src/LIO-SAM-ros2/*
-
-src/small_gicp/*
-
-# nav2 离线生成的 2D 占据栅格产物（按约定不进 git，用工具在 build 机生成）
-src/robot_navigation/maps/
 
 # Python 运行产物
 __pycache__/
