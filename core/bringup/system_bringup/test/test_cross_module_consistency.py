@@ -60,3 +60,7 @@ def test_geometry_consistent():
 def test_lidar_consistent():
     fails = cc.check_lidar(_root())
     assert fails == [], "雷达不一致:\n" + "\n".join(fails)
+
+
+def test_run_all_consistent():
+    assert cc.run(_root()) == []

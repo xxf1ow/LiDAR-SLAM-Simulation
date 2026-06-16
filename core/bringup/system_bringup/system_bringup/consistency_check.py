@@ -213,3 +213,34 @@ def check_lidar(repo_root):
         fails.append("[L4] fast-lio blind %.2f < gazebo range.min %.2f(盲区应 >= 传感器最小距)。"
                      % (fl_pre["blind"], gz["range_min"]))
     return fails
+
+
+def run(repo_root=None):
+    """跑全部检查,返回失败描述列表(空=全过)。repo_root 为空则从 __file__ 上溯。"""
+    if yaml is None:
+        return ["缺少 pyyaml(pip install pyyaml / apt install python3-yaml)。"]
+    if repo_root is None:
+        repo_root = find_repo_root()
+    fails = []
+    fails += check_geometry(repo_root)
+    fails += check_lidar(repo_root)
+    return fails
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="跨模块魔法值一致性检查")
+    ap.add_argument("--repo-root", default=None, help="仓库根(默认从 __file__ 上溯)")
+    ns = ap.parse_args(argv)
+    root = os.path.expanduser(ns.repo_root) if ns.repo_root else None
+    fails = run(root)
+    if fails:
+        print("跨模块一致性检查 未通过:")
+        for f in fails:
+            print("  - " + f)
+        return 1
+    print("跨模块一致性检查 通过。")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
