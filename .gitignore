@@ -12,3 +12,8 @@ core/localization/small_gicp/
 
 # Python 运行产物
 __pycache__/
+
+# colcon 构建产物(workspace 根 + 各包内残留)
+**/build/
+**/install/
+**/log/
