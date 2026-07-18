@@ -12,6 +12,7 @@ def generate_launch_description():
 
     config_file = LaunchConfiguration('config_file')
     prior_map_path = LaunchConfiguration('prior_map_path')
+    use_sim_time = LaunchConfiguration('use_sim_time')
 
     return LaunchDescription([
         DeclareLaunchArgument('config_file', default_value=default_cfg),
@@ -19,11 +20,12 @@ def generate_launch_description():
         # 否则字面 "~" 传给 PCL loadPCDFile 不会展开、加载失败。路径不同才传该 arg 覆盖。
         DeclareLaunchArgument('prior_map_path',
                               default_value=os.path.expanduser('~/result/GlobalMap.pcd')),
+        DeclareLaunchArgument('use_sim_time', default_value='true'),
         Node(
             package='gicp_localization',
             executable='gicp_localization_node',
             name='gicp_localization',
             output='screen',
-            parameters=[config_file, {'prior_map_path': prior_map_path}],
+            parameters=[config_file, {'prior_map_path': prior_map_path, 'use_sim_time': use_sim_time}],
         ),
     ])

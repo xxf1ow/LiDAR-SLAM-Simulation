@@ -75,6 +75,7 @@ def generate_launch_description():
                 '--roll', '0', '--pitch', '0', '--yaw', '0',
                 '--frame-id', 'body', '--child-frame-id', 'base_footprint',
             ],
+            parameters=[{'use_sim_time': use_sim_time}],
         ),
 
         # 2) map_server(yaml_filename 经 expanduser)
