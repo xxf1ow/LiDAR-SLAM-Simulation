@@ -71,6 +71,7 @@ sudo apt install ros-humble-navigation2 ros-humble-nav2-bringup
 - `core/mapping/LIO-SAM`(+ `core/mapping/lio-sam.patch`)
 - `core/localization/FAST_LIO`(+ `core/localization/fast-lio2.patch`)
 - `core/localization/small_gicp`
+- `~/res2_ws/gz_ros2_control`(humble 分支源码编译,**不在 core/ 下**——apt 版 `ros-humble-gz-ros2-control` 与 Gazebo Harmonic 不兼容;步骤见 `core/simulation/robot_gz_bringup/README.md` §0)
 
 工厂世界 `factory.sdf` 的 mesh 视觉引用 Classic 资产库(`models/factory_model/`,~30MB,gitignore),
 需备到构建机;`robot_gz.launch.py` 的 `factory_models_path` 默认指向 `~/LiDAR-SLAM-Simulation/models/factory_model`。

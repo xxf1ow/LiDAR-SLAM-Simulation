@@ -2,7 +2,23 @@
 
 **目的:** 坐实"同一份 xacro 三态切换 + Gz Harmonic 里差速机器人能被 /cmd_vel 驱动"。
 
-**前置:** 构建机 Ubuntu 22.04 + ROS 2 Humble + Gazebo Harmonic + `ros-humble-ros-gz` + `ros-humble-gz-ros2-control` + `ros-humble-ros2-control` + `ros-humble-ros2-controllers`；`core/` 已拷到工作区(colcon 工作区根)。
+**前置:** 构建机 Ubuntu 22.04 + ROS 2 Humble + Gazebo Harmonic + `ros-humble-ros-gz` + `ros-humble-ros2-control` + `ros-humble-ros2-controllers`,且 **`gz_ros2_control` 已按下方「0.」源码编译并 source**(apt 版 `ros-humble-gz-ros2-control` 与 Harmonic 不兼容、装不上)；`core/` 已拷到工作区(colcon 工作区根)。
+
+## 0. gz_ros2_control 源码编译(一次性)
+
+`ros-humble-gz-ros2-control` 的 apt 版与 Gazebo Harmonic 版本不匹配、本机装不上,改用源码编译 `ros-controls/gz_ros2_control` 的 **humble 分支**到独立工作区 `~/res2_ws`。它不是本项目的包(是 ros2_control 的 Gz 桥接库),故不入 `core/`;编译产物经 `.bashrc` 全局 source,所有 shell 均可发现其插件。
+
+```bash
+# 前提:Gazebo Harmonic + ros-humble-ros2-control + ros-humble-ros2-controllers 已 apt 装好
+mkdir -p ~/res2_ws && cd ~/res2_ws
+git clone -b humble https://github.com/ros-controls/gz_ros2_control.git
+colcon build --symlink-install
+# 每个新 shell 都 source(URDF 的 gz_ros2_control 插件靠它发现 libgz_ros2_control-system.so):
+echo 'source ~/res2_ws/install/setup.bash' >> ~/.bashrc
+source ~/res2_ws/install/setup.bash
+```
+
+> 产物 `libgz_ros2_control-system.so` 即 URDF `<plugin filename="gz_ros2_control-system">` 加载的库,提供仿真里的 `controller_manager`(无独立 ros2_control_node)。**不可删 `~/res2_ws`**,否则整个 sim 栈起不来。
 
 ## 1. 构建全部包
 ```bash
