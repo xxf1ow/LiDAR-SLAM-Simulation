@@ -8,10 +8,11 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (IncludeLaunchDescription, OpaqueFunction, TimerAction)
+from launch.actions import (IncludeLaunchDescription, OpaqueFunction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 from system_bringup import consistency_check
+from system_bringup.ready_gate import ready_gate
 
 # ===== 配置:改这里,不用命令行 =====
 MODE = "navigation"              # "navigation" | "mapping"
@@ -19,13 +20,10 @@ GUI = "true"
 RVIZ = "false"
 WORLD = "factory.sdf"
 SPAWN_X, SPAWN_Y, SPAWN_Z = "4.0", "0.0", "0.05"
-REPO_ROOT = "~/LiDAR-SLAM-Simulation"          # 一致性检查读源树用
 FAST_LIO_CONFIG = "gazebo_velodyne.yaml"
 PRIOR_MAP_PATH = "~/result/GlobalMap.pcd"
 NAV_MAP = "~/result/factory_map.yaml"
-DELAY_UPPER = 20.0               # 仿真底层起好到拉上层的间隔
-DELAY_GICP = 8.0                 # fast_lio 到 gicp
-DELAY_NAV = 12.0                 # gicp 到 nav2
+SETTLING = 20.0                   # 就绪(话题出现)后再等的稳定秒数:给 controller 激活/gicp 收敛余量
 # ====================================
 
 
@@ -36,19 +34,21 @@ def _inc(pkg, rel, args=None):
 
 
 def _bringup(context, *args, **kwargs):
-    failures = consistency_check.run(os.path.expanduser(REPO_ROOT))
+    failures = consistency_check.run(consistency_check.find_repo_root())  # 源码根自动检测(上溯 core/bringup/system_bringup 或 .git)
     if failures:
         raise RuntimeError("一致性闸门未通过(已中止,未启动任何节点):\n" + "\n".join(failures))
 
     robot_gz = _inc("robot_gz_bringup", "launch/robot_gz.launch.py",
                     {"gui": GUI, "rviz": RVIZ, "world": WORLD,
                      "spawn_x": SPAWN_X, "spawn_y": SPAWN_Y, "spawn_z": SPAWN_Z})
-    upper = TimerAction(period=DELAY_UPPER, actions=[_inc(
+    slam_stack = _inc(
         "system_bringup", "launch/slam_stack.launch.py",
         {"mode": MODE, "use_sim_time": "true",
          "fast_lio_config": FAST_LIO_CONFIG, "prior_map_path": PRIOR_MAP_PATH,
-         "nav_map": NAV_MAP, "delay_gicp": str(DELAY_GICP), "delay_nav": str(DELAY_NAV)})])
-    return [robot_gz, upper]
+         "nav_map": NAV_MAP, "settling": str(SETTLING)})
+    # 等 lidar(/points_raw) + controller(/joint_states) 都就绪,再 settling 秒后起上层栈
+    return [robot_gz] + ready_gate(["/points_raw", "/joint_states"], 300.0,
+                                   "robot_gz(lidar+controller)", [slam_stack], settling=SETTLING)
 
 
 def generate_launch_description():

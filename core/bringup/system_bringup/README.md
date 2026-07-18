@@ -27,7 +27,7 @@ colcon test --packages-select system_bringup && colcon test-result --verbose   #
 
 # 仿真 + 导航(改 MODE 常量切建图)。注意:不带任何 arg:=
 ros2 launch system_bringup sim.launch.py
-#   repo_root 默认 ~/LiDAR-SLAM-Simulation;仓库不在此处则改 sim.launch.py 顶部 REPO_ROOT 常量。
+#   源码根自动检测(从 launch 文件上溯 core/bringup/system_bringup 或 .git),无需配置。
 ```
 
 ## 验收判据(PASS)
@@ -39,7 +39,7 @@ ros2 launch system_bringup sim.launch.py
 6. `real.launch.py` 存在、结构完整、文档标注"骨架待实现",不要求运行。
 
 ## 改参数去哪
-- 启动相关(模式 / 世界 / spawn / 先验图路径 / 错峰延迟 / repo_root):`sim.launch.py`(或 `real.launch.py`)顶部常量块。
+- 启动相关(模式 / 世界 / spawn / 先验图路径 / 错峰延迟):`sim.launch.py`(或 `real.launch.py`)顶部常量块。(源码根由闸门自动检测,不在常量块。)
 - 调参(Nav2 vx_max 等、GICP fitness 等):仍在各自模块 yaml(本设计不集中化它们;它们各自单一 home)。
 - 几何/雷达魔法值:改**权威源**(xacro / patch),`consistency_check` 守住别处不漂。
 

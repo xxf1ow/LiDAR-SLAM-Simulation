@@ -9,9 +9,11 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            OpaqueFunction, TimerAction)
+                            OpaqueFunction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+
+from system_bringup.ready_gate import ready_gate
 
 
 def _inc(pkg, rel, args=None):
@@ -26,22 +28,23 @@ def _stack(context, *args, **kwargs):
     fast_cfg = LaunchConfiguration("fast_lio_config").perform(context)
     prior = LaunchConfiguration("prior_map_path").perform(context)
     nav_map = LaunchConfiguration("nav_map").perform(context)
-    d_gicp = float(LaunchConfiguration("delay_gicp").perform(context))
-    d_nav = float(LaunchConfiguration("delay_nav").perform(context))
+    settling = float(LaunchConfiguration("settling").perform(context))
 
     if mode == "mapping":
         return [_inc("lio_sam", "launch/run.launch.py")]
     if mode == "navigation":
-        return [
-            _inc("fast_lio", "launch/mapping.launch.py",
-                 {"config_file": fast_cfg, "use_sim_time": use_sim, "rviz": "false"}),
-            TimerAction(period=d_gicp, actions=[
-                _inc("gicp_localization", "launch/localization.launch.py",
-                     {"prior_map_path": prior})]),
-            TimerAction(period=d_gicp + d_nav, actions=[
-                _inc("robot_navigation", "launch/navigation.launch.py",
-                     {"map": nav_map, "use_rviz": "true"})]),
-        ]
+        fast_lio = _inc("fast_lio", "launch/mapping.launch.py",
+                        {"config_file": fast_cfg, "use_sim_time": use_sim, "rviz": "false"})
+        gicp = _inc("gicp_localization", "launch/localization.launch.py",
+                    {"prior_map_path": prior, "use_sim_time": use_sim})
+        nav2 = _inc("robot_navigation", "launch/navigation.launch.py",
+                    {"map": nav_map, "use_rviz": "true", "use_sim_time": use_sim})
+        # 链式就绪闸门(非阻塞):等上游真发出关键话题 + settling 后才起下个,超时中止
+        return [fast_lio] + ready_gate(["/Odometry", "/cloud_registered"], 60.0,
+                                       "fast_lio→/Odometry+/cloud_registered",
+                                       [gicp] + ready_gate("/localization", 60.0, "gicp→/localization",
+                                                           [nav2], settling=settling),
+                                       settling=settling)
     raise RuntimeError("未知 mode='%s'(应为 navigation|mapping)" % mode)
 
 
@@ -52,7 +55,6 @@ def generate_launch_description():
         DeclareLaunchArgument("fast_lio_config", default_value="gazebo_velodyne.yaml"),
         DeclareLaunchArgument("prior_map_path", default_value="~/result/GlobalMap.pcd"),
         DeclareLaunchArgument("nav_map", default_value="~/result/factory_map.yaml"),
-        DeclareLaunchArgument("delay_gicp", default_value="8.0"),
-        DeclareLaunchArgument("delay_nav", default_value="12.0"),
+        DeclareLaunchArgument("settling", default_value="20.0"),
         OpaqueFunction(function=_stack),
     ])
