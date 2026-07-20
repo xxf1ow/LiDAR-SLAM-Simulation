@@ -9,7 +9,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            OpaqueFunction)
+                            LogInfo, OpaqueFunction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 
@@ -29,11 +29,15 @@ def _stack(context, *args, **kwargs):
     prior = LaunchConfiguration("prior_map_path").perform(context)
     nav_map = LaunchConfiguration("nav_map").perform(context)
     settling = float(LaunchConfiguration("settling").perform(context))
+    flow = lambda m: LogInfo(msg="======== [slam_stack] %s" % m)
 
     if mode == "mapping":
         # lio_sam 的 use_sim_time 来自 params.yaml(sim=true,与 gz /clock 一致),不接收 launch arg
         # —— 故不透传 use_sim_time(传了 lio_sam 也不读)。real mapping 需另传 params_real.yaml(TODO)。
-        return [_inc("lio_sam", "launch/run.launch.py")]
+        return [
+            flow("MODE=mapping → ② 起 lio_sam 建图(4 节点 + 自带 RViz);建完用 save_map.sh 存盘"),
+            _inc("lio_sam", "launch/run.launch.py"),
+        ]
     if mode == "navigation":
         fast_lio = _inc("fast_lio", "launch/mapping.launch.py",
                         {"config_file": fast_cfg, "use_sim_time": use_sim, "rviz": "false"})
@@ -42,11 +46,14 @@ def _stack(context, *args, **kwargs):
         nav2 = _inc("robot_navigation", "launch/navigation.launch.py",
                     {"map": nav_map, "use_rviz": "true", "use_sim_time": use_sim})
         # 链式就绪闸门(非阻塞):等上游真发出关键话题 + settling 后才起下个,超时中止
-        return [fast_lio] + ready_gate(["/Odometry", "/cloud_registered"], 60.0,
-                                       "fast_lio→/Odometry+/cloud_registered",
-                                       [gicp] + ready_gate("/localization", 60.0, "gicp→/localization",
-                                                           [nav2], settling=settling),
-                                       settling=settling)
+        return [
+            flow("MODE=navigation → ② fast_lio → gate(/Odometry+/cloud_registered) → gicp → gate(/localization) → nav2"),
+            fast_lio,
+        ] + ready_gate(["/Odometry", "/cloud_registered"], 60.0,
+                       "fast_lio→/Odometry+/cloud_registered",
+                       [gicp] + ready_gate("/localization", 60.0, "gicp→/localization",
+                                           [nav2], settling=settling),
+                       settling=settling)
     raise RuntimeError("未知 mode='%s'(应为 navigation|mapping)" % mode)
 
 

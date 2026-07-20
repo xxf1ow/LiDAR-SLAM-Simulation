@@ -44,10 +44,10 @@ def _gate_script(needed, timeout, settling):
         "        break\n"
         "    time.sleep(0.5)\n"
         "if ok:\n"
-        "    print('[ready_gate]', NEEDED, 'seen, settling', SETTLING, 's')\n"
+        "    print('\\n======== [ready_gate]', NEEDED, '就绪 → settling', SETTLING, 's ========')\n"
         "    time.sleep(SETTLING)\n"
         "else:\n"
-        f"    print('[ready_gate]', NEEDED, 'TIMEOUT after', {timeout}, 's, missing=', missing)\n"
+        f"    print('\\n======== [ready_gate]', NEEDED, 'TIMEOUT after', {timeout}, 's, missing=', missing, ' ========')\n"
         "sys.exit(0 if ok else 1)\n"
     )
 

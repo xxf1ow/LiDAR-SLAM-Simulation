@@ -8,7 +8,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (IncludeLaunchDescription, OpaqueFunction)
+from launch.actions import (IncludeLaunchDescription, LogInfo, OpaqueFunction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 from system_bringup import consistency_check
@@ -34,9 +34,11 @@ def _inc(pkg, rel, args=None):
 
 
 def _bringup(context, *args, **kwargs):
-    failures = consistency_check.run(consistency_check.find_repo_root())  # 源码根自动检测(上溯 core/bringup/system_bringup 或 .git)
+    repo_root = consistency_check.find_repo_root()  # 源码根自动检测(上溯 core/bringup/system_bringup 或 .git)
+    failures = consistency_check.run(repo_root)
     if failures:
         raise RuntimeError("一致性闸门未通过(已中止,未启动任何节点):\n" + "\n".join(failures))
+    flow = lambda m: LogInfo(msg="======== [system_bringup] %s" % m)
 
     robot_gz = _inc("robot_gz_bringup", "launch/robot_gz.launch.py",
                     {"gui": GUI, "rviz": RVIZ, "world": WORLD,
@@ -47,8 +49,12 @@ def _bringup(context, *args, **kwargs):
          "fast_lio_config": FAST_LIO_CONFIG, "prior_map_path": PRIOR_MAP_PATH,
          "nav_map": NAV_MAP, "settling": str(SETTLING)})
     # 等 lidar(/points_raw) + controller(/joint_states) 都就绪,再 settling 秒后起上层栈
-    return [robot_gz] + ready_gate(["/points_raw", "/joint_states"], 300.0,
-                                   "robot_gz(lidar+controller)", [slam_stack], settling=SETTLING)
+    return [
+        flow("一致性闸门通过 | REPO_ROOT=%s | MODE=%s" % (repo_root, MODE)),
+        flow("① 起 robot_gz 仿真底层 → ready_gate 等 /points_raw+/joint_states + settling %ss 后起 slam_stack" % SETTLING),
+        robot_gz,
+    ] + ready_gate(["/points_raw", "/joint_states"], 300.0,
+                   "robot_gz(lidar+controller)", [slam_stack], settling=SETTLING)
 
 
 def generate_launch_description():
