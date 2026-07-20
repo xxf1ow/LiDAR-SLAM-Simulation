@@ -44,6 +44,14 @@ def find_repo_root(start=None):
         d = parent
 
 
+def load_bringup_config(repo_root=None):
+    """读源码 bringup config(launch 运行时调,不经 install —— 改 config 不用 rebuild)。"""
+    repo_root = repo_root or find_repo_root()
+    cfg_path = os.path.join(repo_root, "core", "bringup", "system_bringup", "config", "bringup.yaml")
+    with open(cfg_path, encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
 def _read(repo_root, relpath):
     with open(os.path.join(repo_root, *relpath.split("/")), encoding="utf-8") as f:
         return f.read()

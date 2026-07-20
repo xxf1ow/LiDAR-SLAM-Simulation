@@ -1,0 +1,19 @@
+# system_bringup 运行配置 —— sim/real.launch.py 运行时用 find_repo_root() 读**源码**本文件
+# (不经 install),故改这里不用 rebuild system_bringup。
+# 勿加进 setup.py data_files(不 install)——否则改了要 rebuild,失去本设计的意义。
+
+# === sim/real 共享 ===
+mode: navigation              # navigation | mapping
+fast_lio_config: gazebo_velodyne.yaml
+prior_map_path: ~/result/GlobalMap.pcd     # gicp 先验图(save_map.sh 落 ~/result)
+nav_map: ~/result/factory_map.yaml         # nav2 占据栅格(pcd_to_occupancy 生成)
+settling: 20.0                # ready_gate 就绪后再等的稳定秒数
+
+# === 仿真专用(sim.launch.py 读) ===
+sim:
+  gui: "true"
+  rviz: "false"               # robot_gz 的 RViz(lio_sam 自带 RViz 不受此控)
+  world: factory.sdf
+  spawn_x: "4.0"
+  spawn_y: "0.0"
+  spawn_z: "0.05"
