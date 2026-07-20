@@ -4,10 +4,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & run environment (read first)
 
-- **This repo is edited on a different machine than it is built/run.** The checkout you are editing has **no ROS 2 / colcon / Gazebo toolchain**. Actual `colcon build` / `colcon test` / simulation happen on a separate **Ubuntu 22.04 + ROS 2 Humble + Gazebo Sim Harmonic** machine, to which the developer **manually copies files** before building. So: make code changes here, then give the developer an explicit list of files to copy + commands to run, and treat their reported build/test output as the source of truth.
-- Because Eigen/PCL/rclcpp/small_gicp/gz headers aren't on this machine, **clang/clangd "file not found" / "undeclared identifier" diagnostics are false positives** — ignore them; trust the colcon build on the build machine.
+- **This machine is the single dev/build/run host.** It runs **Ubuntu 22.04 + ROS 2 Humble + Gazebo Sim Harmonic** with the full toolchain on PATH (`colcon`, `ros2`, `gz`). Editing, `colcon build` / `colcon test`, and simulation all happen here — there is no longer a separate build machine and no file-copying step. Make changes, build, and verify the output directly.
+- With the toolchain installed locally, clangd diagnostics are generally trustworthy. If a third-party header (Eigen/PCL/small_gicp/gz) still occasionally reports "not found", treat `colcon build` output as the source of truth rather than chasing the diagnostic.
+- **Python uses the system `/usr/bin/python3` (3.10) directly — there is no `uv`/`.venv`.** It was removed to stop it polluting the build: a leaked `.venv` had made CMake cache `Python3_EXECUTABLE=.venv/bin/python3` and broke rosidl/ament with `No module named 'em'` / `'catkin_pkg'`. Run ad-hoc scripts with `python3 ...` (resolves to `/usr/bin/python3`) and install Python deps via `sudo apt` / system `pip`. With `uv`/`.venv` gone there is no longer anything to exclude from `PATH`.
 - **The colcon workspace root is `core/`** (not the repo root, not `src/`). All build/run commands are run from `core/`: `cd core && colcon build ...`, then `source install/setup.bash`. `core/` is **self-contained** — upstream clones live under `core/<module>/`, not in a separate `src/`.
 - Target platform is Linux-only. Frequencies measured with `ros2 topic hz` appear halved when RTF < 1 (correct in sim time).
+
+## Running the sim stack — memory discipline (read before launching Gazebo)
+
+This box has only **7.6 GB RAM**; one full sim stack (`robot_gz` + `fast_lio` + `gicp_localization` + `nav2`, plus Gazebo Harmonic's ogre2 renderer) uses **3–5 GB**. Two stacks at once, or one stack plus leaked orphan processes, **will OOM and freeze the machine** — this has already happened and required a hard reboot. Before launching Gazebo:
+
+- **One stack at a time; check `free -h` first** — need ~2 GB available before starting Gazebo, otherwise stop and clean up.
+- **`ros2 launch ... &` orphans its children when the launching shell exits or is killed.** The `gz sim` (ruby) process, `controller_manager`, `spawner`, `parameter_bridge`, `adapter_node`, `robot_state_publisher`, and every nav2 node keep running as orphans and pile up across runs — **this is the #1 cause of OOM**.
+- **Tear down with the process group, never `pkill -f`.** Launch the stack with `setsid`; kill the whole tree with `kill -- -<PGID>`. `pkill -f` is unsafe here: it (a) leaks `adapter_node`/`robot_state_publisher`/`controller_manager`/`spawner`, and (b) an inline `bash -c '... pkill -f "gz sim" ...'` **matches its own command line and kills the shell running it**. Put cleanup commands in a script file (`bash /tmp/clean.sh` — its process name doesn't contain the pattern).
+- **Verify cleanup before the next run:** `pgrep -af 'gz sim|fast_lio|gicp|nav2|controller_manager|adapter_node|robot_state_publisher'` must be empty **and** `free -h` must show memory reclaimed. No new stack until both hold.
+- **Don't spin up redundant background stacks.** Reuse a running stack for the next check; tear it down only when truly done.
 
 ## What this project is
 
@@ -32,9 +43,10 @@ Each module has its own `README.md` with detailed clone + build + run + acceptan
 ## Repository conventions
 
 - **Upstream dependencies are NOT forked.** `FAST_LIO`, `LIO-SAM`, `small_gicp` are **manually `git clone`d into their owning module** (`core/localization/FAST_LIO`, `core/mapping/LIO-SAM`, `core/localization/small_gicp`), pinned to a specific commit, and **`.gitignore`d** (see each module README for exact clone commands + pinned SHAs). `core` is self-contained: colcon discovers the clones in-place, no separate workspace.
+- **`gz_ros2_control` is the one upstream that lives outside `core/`.** Its apt package (`ros-humble-gz-ros2-control`) is incompatible with Gazebo Harmonic, so the `humble` branch is source-built in a separate workspace `~/res2_ws` and globally sourced via `.bashrc`. It provides sim's `controller_manager` (the `gz_ros2_control-system` URDF plugin) — do not delete `~/res2_ws`. Build steps: `core/simulation/robot_gz_bringup/README.md` §0.
 - Local modifications to upstream are delivered as **patch files tracked in the owning module** (`core/localization/fast-lio2.patch`, `core/mapping/lio-sam.patch`), applied via `git apply`. **Simulation-only** patches live in a `sim-only/` subdir and must never be applied to real hardware (they document why). The correct way to edit upstream config: edit the clone's working tree → `git diff > ../<name>.patch` → commit the patch.
 - `core/localization/livox_ros_driver2` is a **message-stub package** (only `CustomMsg`/`CustomPoint`), present solely to satisfy FAST-LIO's compile-time dependency in this velodyne-only setup — no Livox-SDK needed.
-- The factory world `core/simulation/robot_gz_bringup/worlds/factory.sdf` is a **one-time** Classic→Harmonic conversion + hand-optimization, committed as the final artifact (no generator script). Its `model://` mesh visuals reference Classic asset libraries kept under `models/` (gitignored, copied to the build machine).
+- The factory world `core/simulation/robot_gz_bringup/worlds/factory.sdf` is a **one-time** Classic→Harmonic conversion + hand-optimization, committed as the final artifact (no generator script). Its `model://` mesh visuals reference Classic asset libraries kept under `models/` (gitignored, must be present on this host under `models/` before running).
 - `docs/superpowers/` (spec & plan files) is `.gitignore`d and never committed — process artifacts only; deliverables are patches + READMEs + package code.
 - Commit messages: Conventional Commits with a scope, written in Chinese (`feat(gicp): …`, `fix: …`, `docs: …`, `tune: …`, `chore: …`), ending with `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. Push only when explicitly asked.
 

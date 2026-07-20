@@ -17,6 +17,16 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+# 几何常量(权威源 = robot_description/urdf/robot_macro.urdf.xacro;
+# 由 system_bringup 的一致性检查 G3 守住与 xacro 一致)。
+# weld_z 由此派生,不再硬编码魔法数。ROS 无法让 launch 直接读 xacro property,
+# 故此处保留几何常量副本 + 一致性测试兜底。
+_BASE_HEIGHT = 0.40
+_WHEEL_RADIUS = 0.12
+_LIDAR_HEIGHT = 0.072
+_SENSOR_Z = _BASE_HEIGHT / 2 + _LIDAR_HEIGHT / 2              # 0.236
+_WELD_Z = -((_BASE_HEIGHT / 2 + _WHEEL_RADIUS) + _SENSOR_Z)  # -0.556
+
 
 def generate_launch_description():
     pkg = get_package_share_directory('robot_navigation')
@@ -50,9 +60,11 @@ def generate_launch_description():
             description='2D 占据栅格 .yaml(pcd_to_occupancy 生成)'),
         DeclareLaunchArgument('params_file', default_value=default_params),
         DeclareLaunchArgument('use_rviz', default_value='true'),
-        # 焊接：parent=body -> child=base_footprint，单位旋转，z=-0.556=-(base_height/2+wheel_radius+sensor_z)。
+        # 焊接：parent=body -> child=base_footprint，单位旋转。
+        # z 由顶部几何常量派生(_WELD_Z = -(base_height/2 + wheel_radius + sensor_z) = -0.556)，
+        # 不再硬编码;system_bringup 一致性检查 G3 守住 _BASE_HEIGHT/_WHEEL_RADIUS/_LIDAR_HEIGHT 与 xacro 一致。
         # 2D 导航对 z 符号不敏感(只影响 RViz 竖直位置)；验收 tf2_echo map base_footprint 应 z≈0。
-        DeclareLaunchArgument('weld_z', default_value='-0.556'),
+        DeclareLaunchArgument('weld_z', default_value=f'{_WELD_Z:.4f}'),
 
         # 1) TF 焊接：body(FAST-LIO) -> base_footprint(URDF 根)
         Node(
@@ -63,6 +75,7 @@ def generate_launch_description():
                 '--roll', '0', '--pitch', '0', '--yaw', '0',
                 '--frame-id', 'body', '--child-frame-id', 'base_footprint',
             ],
+            parameters=[{'use_sim_time': use_sim_time}],
         ),
 
         # 2) map_server(yaml_filename 经 expanduser)
