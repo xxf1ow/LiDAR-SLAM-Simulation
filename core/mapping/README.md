@@ -56,10 +56,10 @@ bash mapping/save_map.sh
 
 ## 通过 bringup 启动 mapping(替代上面手动分步)
 
-把 `core/bringup/system_bringup/launch/sim.launch.py` 顶部 `MODE = "navigation"` 改为 `"mapping"`,然后:
+把 `core/bringup/system_bringup/config/bringup.yaml` 的 `mode: navigation` 改为 `mode: mapping`(`platform: sim` 保持),不用 rebuild,然后:
 ```bash
 cd core && source install/setup.bash
-ros2 launch system_bringup sim.launch.py
+ros2 launch system_bringup bringup.launch.py
 ```
 链路:一致性闸门 → robot_gz → ready_gate[/points_raw, /joint_states] → lio_sam(4 节点 + 自带 RViz)。建图时仍用 `sticky_teleop`(另开终端)开车;**建够后先跑 `bash mapping/save_map.sh`**(此时 lio_sam 仍在跑、service 在线)存盘+转换,完成后再 Ctrl+C 停栈。
 
