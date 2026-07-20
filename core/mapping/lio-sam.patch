@@ -1,5 +1,5 @@
 diff --git a/config/params.yaml b/config/params.yaml
-index dd334c9..fece8b2 100644
+index dd334c9..2e947c1 100644
 --- a/config/params.yaml
 +++ b/config/params.yaml
 @@ -1,15 +1,19 @@
@@ -31,8 +31,9 @@ index dd334c9..fece8b2 100644
  
      # Export settings
 -    savePCD: false                               # https://github.com/TixiaoShan/LIO-SAM/issues/3
+-    savePCDDirectory: "/Downloads/LOAM/"         # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
 +    savePCD: true                                # https://github.com/TixiaoShan/LIO-SAM/issues/3
-     savePCDDirectory: "/Downloads/LOAM/"         # in your home folder, starts and ends with "/". Warning: the code deletes "LOAM" folder then recreates it. See "mapOptimization" for implementation
++    savePCDDirectory: "/result/loam/"             # ~/result/loam/;LIO-SAM 存盘前 rm -r 此目录重建(mapOptmization.cpp:188/414),故用专门子目录——勿改 /result/(会删 ~/result/ 主级的 GlobalMap.pcd/factory_map.yaml)。save_map.sh 存盘后会 cp GlobalMap.pcd 到 ~/result/
  
      # Sensor Settings
 -    sensor: ouster                               # lidar sensor type, either 'velodyne', 'ouster' or 'livox'

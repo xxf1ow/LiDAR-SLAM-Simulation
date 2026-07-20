@@ -31,6 +31,8 @@ def _stack(context, *args, **kwargs):
     settling = float(LaunchConfiguration("settling").perform(context))
 
     if mode == "mapping":
+        # lio_sam 的 use_sim_time 来自 params.yaml(sim=true,与 gz /clock 一致),不接收 launch arg
+        # —— 故不透传 use_sim_time(传了 lio_sam 也不读)。real mapping 需另传 params_real.yaml(TODO)。
         return [_inc("lio_sam", "launch/run.launch.py")]
     if mode == "navigation":
         fast_lio = _inc("fast_lio", "launch/mapping.launch.py",
