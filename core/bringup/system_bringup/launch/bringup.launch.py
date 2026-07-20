@@ -59,7 +59,10 @@ def _bringup(context, *args, **kwargs):
         ]
         return flow_log + [base] + ready_gate(
             ["/points_raw", "/joint_states"], 300.0, "robot_gz(lidar+controller)",
-            [slam_stack], settling=stack_cfg["settling"])
+            [flow("sim 全栈启动中。开车另开终端:cd ~/xxsim/core && source install/setup.bash && "
+                  "ros2 run robot_gz_bringup sticky_teleop.py --ros-args -p use_sim_time:=true"),
+             slam_stack],
+            settling=stack_cfg["settling"])
 
     if platform == "real":
         actions = [
