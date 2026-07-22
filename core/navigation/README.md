@@ -22,8 +22,7 @@ map →[GICP]→ camera_init →[FAST-LIO]→ body →[本包静态焊接]→ ba
 ## 关键设计点
 - **双 frame**：全局 costmap=map（含 GICP 校正、会跳变，全局重规划无害）；局部 costmap+behavior=camera_init（FAST-LIO 连续、不跳变，MPPI 高频环要平滑）。
 - **障碍源** `/cloud_registered`(sensor_frame=body)，**不是** `/points_raw`（后者经 velodyne URDF 链转歪刷假障碍）。
-- **全局+局部障碍层统一 STVL**(`spatio_temporal_voxel_layer`)：视锥+时间衰减清除(非 VoxelLayer raytrace)；`combination_method:1`(max)不覆盖 static_layer；为未来运动障碍预留(届时调 `voxel_decay`/`decay_acceleration`)。
-- **局部 voxel `origin_z=-1.0`**：含传感器原点；否则报 `Sensor origin out of map bounds`、清不掉障碍假卡死。
+- **全局+局部障碍层统一 STVL**(`spatio_temporal_voxel_layer`)：视锥+时间衰减清除(非 VoxelLayer raytrace)；`combination_method:1`(max)不覆盖 static_layer；为未来运动障碍预留(届时调 `voxel_decay`/`decay_acceleration`)。STVL 的 3D voxel 层结构性规避了旧 VoxelLayer 的 `Sensor origin out of map bounds`(`origin_z:0.0` 即可,无需旧的 `-1.0` hack)。
 - **odom_topic `/base_controller/odom`**：diff_drive 真实 twist；FAST-LIO `/Odometry` twist 恒零，MPPI 不能用。
 - **换底盘只改 CHASSIS-DEPENDENT 参数**（`nav2_params.yaml` 顶部注释块列清单：转弯半径/运动模型/footprint/限速）。
 
@@ -67,7 +66,7 @@ ros2 launch robot_navigation navigation.launch.py
 - **MPPI 控制超时/断续 / RTF 砸到个位数**（WSL 软渲 gpu_lidar 吃 CPU,算力紧）→ 降 `batch_size`、`time_steps`、`controller_frequency`(现 1000/30/10;再紧降 `batch_size→500`);治本是 WSLg GPU 直通。
   - ⚠️ **MPPI 强约束:`1/controller_frequency ≤ model_dt`**(否则 configure 报 "Controller period more then model dt")。**降 `controller_frequency` 必须同步把 `model_dt` 抬到 = 周期**(现 10Hz↔model_dt 0.1)。`horizon = time_steps × model_dt`。
 - **转弯特别慢 / 弯道像停下来转**（紧弯 vx 被 `vx=wz·r` 钳死）→ 提 `wz_max`(现 1.8,≤底盘 2.0)、`vx_max`(现 1.0,≤底盘 1.5)、`wz_std`(现 0.6);仍嫌弯太碎可调大 `minimum_turning_radius`(0.2→0.4,牺牲窄道机动)。
-- **局部 costmap 刷 origin out of bounds / 障碍清不掉** → 确认 voxel `origin_z=-1.0`、源 `/cloud_registered`。
+- **局部 costmap 障碍清不掉 / 刷错** → 确认 STVL 源 `/cloud_registered`、`sensor_frame:body`、清除源 `model_type:1`(3D lidar)与 FOV 角度;STVL 视锥清除无旧 `origin_z` 坑(若换回 VoxelLayer 才需 `origin_z=-1.0`)。
 - **behavior 报 odom/帧不存在** → 确认 behavior global_frame=camera_init、odom_topic=/base_controller/odom。
 - **改 launch/config 不生效** → 必须重新 `colcon build`（launch 跑 install/ 副本）。
 - **ament_python 测试 colcon 不发现** → `python3 -m pytest core/navigation/robot_navigation/test` 兜底。

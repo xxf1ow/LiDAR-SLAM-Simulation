@@ -84,3 +84,4 @@ def test_global_stvl_sources_are_cloud_registered():
     stvl = p["global_costmap"]["global_costmap"]["ros__parameters"]["stvl_layer"]
     assert stvl["pointcloud_mark"]["topic"] == "/cloud_registered"
     assert stvl["pointcloud_clear"]["topic"] == "/cloud_registered"
+    assert stvl["pointcloud_mark"]["sensor_frame"] == "body"
