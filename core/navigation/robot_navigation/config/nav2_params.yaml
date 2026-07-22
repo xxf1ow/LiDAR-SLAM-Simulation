@@ -184,7 +184,7 @@ global_costmap:
           marking: true
           clearing: false
           obstacle_range: 20.0
-          min_obstacle_height: 0.1
+          min_obstacle_height: -0.44  # 地面z(-0.556)+底盘间隙0.12;标≥0.12m 障碍,不标地面
           max_obstacle_height: 2.0
           expected_update_rate: 0.0
           observation_persistence: 0.0
@@ -199,7 +199,7 @@ global_costmap:
           marking: false
           clearing: true
           max_z: 2.0
-          min_z: 0.1                 # 官方示例为 1.0;先按障碍高度带填,低矮障碍清不掉则调
+          min_z: -0.44  # 与 min_obstacle_height 同步下探到底盘间隙
           vertical_fov_angle: 0.523   # VLP-16 垂直 FOV ~±15°
           vertical_fov_padding: 0.05
           horizontal_fov_angle: 6.29  # 360°
@@ -246,7 +246,7 @@ local_costmap:
           marking: true
           clearing: false
           obstacle_range: 20.0
-          min_obstacle_height: 0.1
+          min_obstacle_height: -0.44  # 地面z(-0.556)+底盘间隙0.12;标≥0.12m 障碍,不标地面
           max_obstacle_height: 2.0
           filter: "voxel"
           voxel_min_points: 0
@@ -258,7 +258,7 @@ local_costmap:
           marking: false
           clearing: true
           max_z: 2.0
-          min_z: 0.1
+          min_z: -0.44  # 与 min_obstacle_height 同步下探到底盘间隙
           vertical_fov_angle: 0.523
           vertical_fov_padding: 0.05
           horizontal_fov_angle: 6.29
