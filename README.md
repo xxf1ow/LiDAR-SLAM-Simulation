@@ -120,5 +120,5 @@ ros2 launch robot_navigation navigation.launch.py
 
 ---
 
-## 数据流参考
-仿真侧消息/帧/TF 的逐项注解见 [`docs/sim-dataflow-lio-sam.md`](docs/sim-dataflow-lio-sam.md)。
+## 长期规划
+产品级交付目标与待完成事项见 [`docs/ROADMAP.md`](docs/ROADMAP.md)。

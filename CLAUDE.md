@@ -22,13 +22,13 @@ This box has only **7.6 GB RAM**; one full sim stack (`robot_gz` + `fast_lio` + 
 
 ## What this project is
 
-A Gazebo **Sim Harmonic** rebuild of a LiDAR-SLAM simulation, on **ROS 2 Humble**, built bottom-up in phases and organized as **five decoupled modules** under `core/`. The runtime goal: a differential-drive robot autonomously navigating a factory world using **FAST-LIO2 odometry + GICP localization in a LIO-SAM prior map + Nav2**.
+A Gazebo **Sim Harmonic** rebuild of a LiDAR-SLAM simulation, on **ROS 2 Humble**, built bottom-up in phases and organized as **six decoupled modules** under `core/` (five functional — robot/simulation/mapping/localization/navigation — plus `bringup` for one-entry full-stack launch and pre-launch consistency gating). The runtime goal: a differential-drive robot autonomously navigating a factory world using **FAST-LIO2 odometry + GICP localization in a LIO-SAM prior map + Nav2**.
 
 This is a **rebuild** of an older Gazebo-Classic stack (the former `src/` workspace, now deleted). It follows official references (`ros2_control_demos` for the robot, Nav2 examples for navigation) and a clean ros2_control `sim/mock/real` switch rather than copying the old implementation.
 
 Runtime TF chain (full stack): `map →[gicp_localization]→ camera_init →[FAST-LIO]→ body →[static weld]→ base_footprint →[URDF]→ base_link → velodyne/imu_link/wheels`. The prior map is in LIO-SAM's `map` frame; FAST-LIO's `camera_init`/`body` are wired into the robot URDF tree only at the navigation stage via the `body→base_footprint` weld.
 
-## Repository structure (`core/` = five modules)
+## Repository structure (`core/` = six modules)
 
 | Module | Contents | Role |
 |---|---|---|
@@ -37,8 +37,9 @@ Runtime TF chain (full stack): `map →[gicp_localization]→ camera_init →[FA
 | `core/mapping/` | `lio-sam.patch` (+ `LIO-SAM` clone, gitignored) | LIO-SAM builds & saves the prior map PCD (`~/result/GlobalMap.pcd`) |
 | `core/localization/` | `gicp_localization` (in-repo package), `fast-lio2.patch` (+ `FAST_LIO` clone), `small_gicp` clone, `livox_ros_driver2` (msg stub, in-repo) | FAST-LIO2 odometry + GICP scan-to-prior-map localization |
 | `core/navigation/` | `robot_navigation` (ament_python: `pcd_to_occupancy`, `twist_stamper`, `nav2_params.yaml`, `navigation.launch.py`) | Nav2 autonomous navigation (Smac Hybrid-A\* + MPPI) |
+| `core/bringup/` | `system_bringup` (ament_python: `consistency_check.py`, `bringup.launch.py` + `config/bringup.yaml`, `slam_stack.launch.py`) | One-entry full-stack launch (sim/real × mapping/navigation) + pre-launch cross-module consistency gate |
 
-Each module has its own `README.md` with detailed clone + build + run + acceptance steps. The top-level `README.md` is an overview that points into them.
+Each functional module has its own `README.md` with detailed clone + build + run + acceptance steps (`core/robot/` is the exception — its build/run/acceptance is documented inline in `core/simulation/robot_gz_bringup/README.md`). The top-level `README.md` is an overview that points into them.
 
 ## Repository conventions
 
@@ -47,7 +48,7 @@ Each module has its own `README.md` with detailed clone + build + run + acceptan
 - Local modifications to upstream are delivered as **patch files tracked in the owning module** (`core/localization/fast-lio2.patch`, `core/mapping/lio-sam.patch`), applied via `git apply`. **Simulation-only** patches live in a `sim-only/` subdir and must never be applied to real hardware (they document why). The correct way to edit upstream config: edit the clone's working tree → `git diff > ../<name>.patch` → commit the patch.
 - `core/localization/livox_ros_driver2` is a **message-stub package** (only `CustomMsg`/`CustomPoint`), present solely to satisfy FAST-LIO's compile-time dependency in this velodyne-only setup — no Livox-SDK needed.
 - The factory world `core/simulation/robot_gz_bringup/worlds/factory.sdf` is a **one-time** Classic→Harmonic conversion + hand-optimization, committed as the final artifact (no generator script). Its `model://` mesh visuals reference Classic asset libraries kept under `models/` (gitignored, must be present on this host under `models/` before running).
-- `docs/superpowers/` (spec & plan files) is `.gitignore`d and never committed — process artifacts only; deliverables are patches + READMEs + package code.
+- Long-term direction lives in `docs/ROADMAP.md` (product vision + current progress + todo). Per-stage spec/plan artifacts are transient and not kept in-repo; deliverables are patches + READMEs + package code.
 - Commit messages: Conventional Commits with a scope, written in Chinese (`feat(gicp): …`, `fix: …`, `docs: …`, `tune: …`, `chore: …`), ending with `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`. Push only when explicitly asked.
 
 ## Build, test, run (from `core/`)
