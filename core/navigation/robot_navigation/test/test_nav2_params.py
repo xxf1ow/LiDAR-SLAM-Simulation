@@ -27,17 +27,25 @@ def test_behavior_server_frame_is_camera_init():
     assert p["behavior_server"]["ros__parameters"]["global_frame"] == "camera_init"
 
 
-def test_local_voxel_origin_z_is_negative_one():
+def test_local_costmap_has_stvl_layer():
     p = _load()
-    vox = p["local_costmap"]["local_costmap"]["ros__parameters"]["voxel_layer"]
-    assert vox["origin_z"] == -1.0
+    plugins = p["local_costmap"]["local_costmap"]["ros__parameters"]["plugins"]
+    assert plugins == ["stvl_layer", "inflation_layer"]
 
 
-def test_local_obstacle_source_is_cloud_registered():
+def test_local_stvl_plugin_and_combination():
     p = _load()
-    pc = p["local_costmap"]["local_costmap"]["ros__parameters"]["voxel_layer"]["pointcloud"]
-    assert pc["topic"] == "/cloud_registered"
-    assert pc["sensor_frame"] == "body"
+    stvl = p["local_costmap"]["local_costmap"]["ros__parameters"]["stvl_layer"]
+    assert stvl["plugin"] == "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+    assert stvl["combination_method"] == 1
+
+
+def test_local_stvl_sources_are_cloud_registered():
+    p = _load()
+    stvl = p["local_costmap"]["local_costmap"]["ros__parameters"]["stvl_layer"]
+    assert stvl["pointcloud_mark"]["topic"] == "/cloud_registered"
+    assert stvl["pointcloud_clear"]["topic"] == "/cloud_registered"
+    assert stvl["pointcloud_mark"]["sensor_frame"] == "body"
 
 
 def test_odom_topic_is_base_controller_odom():
