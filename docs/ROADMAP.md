@@ -52,7 +52,7 @@
 
 ### C. 导航能力补全
 
-- [ ] 动态障碍层：全局 costmap 加实时障碍层 + MPPI 避让 — **已知问题**：当前全局 costmap 只有静态先验图层，堵死路的新障碍会撞、不绕行。
+- [x] 动态障碍层（静态堵路已解）：全局+局部 costmap 均用 STVL 实时障碍层（源 `/cloud_registered`），全局规划器看到新障碍即绕行。**残留**：运动障碍（行人）避让 + 预测式 MPPI 仍为独立里程碑（需先建动态障碍仿真包）。
 - [ ] waypoint/穿点导航：启用 `waypoint_follower`（`navigate_through_poses` 已可用）。
 - [ ] 恢复行为增强（现为基础 spin/backup/wait）。
 

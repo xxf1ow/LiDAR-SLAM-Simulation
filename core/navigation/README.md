@@ -22,6 +22,7 @@ map →[GICP]→ camera_init →[FAST-LIO]→ body →[本包静态焊接]→ ba
 ## 关键设计点
 - **双 frame**：全局 costmap=map（含 GICP 校正、会跳变，全局重规划无害）；局部 costmap+behavior=camera_init（FAST-LIO 连续、不跳变，MPPI 高频环要平滑）。
 - **障碍源** `/cloud_registered`(sensor_frame=body)，**不是** `/points_raw`（后者经 velodyne URDF 链转歪刷假障碍）。
+- **全局+局部障碍层统一 STVL**(`spatio_temporal_voxel_layer`)：视锥+时间衰减清除(非 VoxelLayer raytrace)；`combination_method:1`(max)不覆盖 static_layer；为未来运动障碍预留(届时调 `voxel_decay`/`decay_acceleration`)。
 - **局部 voxel `origin_z=-1.0`**：含传感器原点；否则报 `Sensor origin out of map bounds`、清不掉障碍假卡死。
 - **odom_topic `/base_controller/odom`**：diff_drive 真实 twist；FAST-LIO `/Odometry` twist 恒零，MPPI 不能用。
 - **换底盘只改 CHASSIS-DEPENDENT 参数**（`nav2_params.yaml` 顶部注释块列清单：转弯半径/运动模型/footprint/限速）。
@@ -72,7 +73,7 @@ ros2 launch robot_navigation navigation.launch.py
 - **ament_python 测试 colcon 不发现** → `python3 -m pytest core/navigation/robot_navigation/test` 兜底。
 
 ## 已知限制（最小范围,构建机实测确认;均留后续阶段）
-- **堵路新障碍会撞,不会绕**:全局 costmap 只有静态先验图层(无实时障碍层),新障碍进不了全局图 → 全局路径仍直穿、不绕行;局部 MPPI + ~0.9-1.0m 近距盲区(velodyne min_range + FAST-LIO blind + costmap obstacle_min_range 三层)无法避开**完全堵死**的路 → 短暂停顿后撞上。**治法(留动态障碍阶段)**:全局 costmap 加实时 voxel 障碍层(源 /cloud_registered)让全局规划器远处绕开。路旁(不堵死)的局部避障是好的。
+- **堵路新障碍已能绕(C1 已解)**:全局+局部 costmap 现均用 STVL 实时障碍层(`spatio_temporal_voxel_layer`,源 `/cloud_registered`,视锥+时间衰减清除),全局 Smac 规划器看到新障碍即重规划绕行。**残留**:运动障碍(行人)避让为独立里程碑;起步点近场盲区(FAST-LIO `blind=1.0`)障碍仍不可见,留后续。
 - **Pause/Resume 不续行**:Nav2 面板 Pause=lifecycle deactivate(取消当前目标),Resume=activate(无"续上原目标"语义)→ 车闲置、RViz 残留上次 `/plan`。要继续=重发目标(Nav2 机制,非 bug)。
 - **Waypoint 模式不可用**:`waypoint_follower` 未启用(见路线图);穿点请用 RViz「Nav Through Poses」(`navigate_through_poses`,已可用)。
 
