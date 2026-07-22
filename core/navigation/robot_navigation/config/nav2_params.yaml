@@ -158,10 +158,53 @@ global_costmap:
       track_unknown_space: true
       footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # CHASSIS: 本车 0.75x0.55
       resolution: 0.05
-      plugins: ["static_layer", "inflation_layer"]
+      plugins: ["static_layer", "stvl_layer", "inflation_layer"]
       static_layer:
         plugin: "nav2_costmap_2d::StaticLayer"
         map_subscribe_transient_local: true
+      stvl_layer:
+        plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+        enabled: true
+        combination_method: 1        # =max,不覆盖 static_layer 先验障碍(多层共存命脉)
+        decay_model: 0              # 0=linear(为未来移动障碍预留)
+        voxel_decay: 15.0           # 线性衰减秒数;静态障碍被持续观测不会衰减掉
+        voxel_size: 0.05
+        track_unknown_space: true
+        mark_threshold: 0
+        origin_z: 0.0
+        publish_voxel_map: false    # 全图层不发布 3D 体素(省带宽;调试临时开)
+        transform_tolerance: 0.2
+        mapping_mode: false
+        map_save_duration: 60.0
+        observation_sources: pointcloud_mark pointcloud_clear
+        pointcloud_mark:
+          data_type: PointCloud2
+          topic: /cloud_registered
+          sensor_frame: body
+          marking: true
+          clearing: false
+          obstacle_range: 20.0
+          min_obstacle_height: 0.1
+          max_obstacle_height: 2.0
+          expected_update_rate: 0.0
+          observation_persistence: 0.0
+          inf_is_valid: false
+          filter: "voxel"
+          voxel_min_points: 0
+          clear_after_reading: true
+        pointcloud_clear:
+          enabled: true
+          data_type: PointCloud2
+          topic: /cloud_registered
+          marking: false
+          clearing: true
+          max_z: 2.0
+          min_z: 0.1                 # 官方示例为 1.0;先按障碍高度带填,低矮障碍清不掉则调
+          vertical_fov_angle: 0.523   # VLP-16 垂直 FOV ~±15°
+          vertical_fov_padding: 0.05
+          horizontal_fov_angle: 6.29  # 360°
+          decay_acceleration: 5.0
+          model_type: 1              # 1=3D lidar(VLP-16 类)
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 2.5      # 调缓→代价梯度平展,全局路径偏通道中央

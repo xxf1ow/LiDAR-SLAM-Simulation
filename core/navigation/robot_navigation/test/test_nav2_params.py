@@ -56,3 +56,23 @@ def test_controller_is_mppi():
     p = _load()
     fp = p["controller_server"]["ros__parameters"]["FollowPath"]
     assert fp["plugin"] == "nav2_mppi_controller::MPPIController"
+
+
+def test_global_costmap_has_stvl_layer():
+    p = _load()
+    plugins = p["global_costmap"]["global_costmap"]["ros__parameters"]["plugins"]
+    assert plugins == ["static_layer", "stvl_layer", "inflation_layer"]
+
+
+def test_global_stvl_plugin_and_combination():
+    p = _load()
+    stvl = p["global_costmap"]["global_costmap"]["ros__parameters"]["stvl_layer"]
+    assert stvl["plugin"] == "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
+    assert stvl["combination_method"] == 1
+
+
+def test_global_stvl_sources_are_cloud_registered():
+    p = _load()
+    stvl = p["global_costmap"]["global_costmap"]["ros__parameters"]["stvl_layer"]
+    assert stvl["pointcloud_mark"]["topic"] == "/cloud_registered"
+    assert stvl["pointcloud_clear"]["topic"] == "/cloud_registered"
