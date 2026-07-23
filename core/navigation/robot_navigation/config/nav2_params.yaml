@@ -167,7 +167,7 @@ global_costmap:
         enabled: true
         combination_method: 1        # =max,不覆盖 static_layer 先验障碍(多层共存命脉)
         decay_model: 0              # 0=linear(为未来移动障碍预留)
-        voxel_decay: 15.0           # 线性衰减秒数;静态障碍被持续观测不会衰减掉
+        voxel_decay: 5.0           # 线性衰减秒数;静态障碍被持续观测不会衰减掉
         voxel_size: 0.05
         track_unknown_space: true
         mark_threshold: 0
@@ -230,7 +230,7 @@ local_costmap:
         enabled: true
         combination_method: 1        # =max
         decay_model: 0              # 0=linear
-        voxel_decay: 15.0           # 与全局同值起步;MPPI 面向,Task 3 或需更短
+        voxel_decay: 5.0           # 与全局同值起步;MPPI 面向,Task 3 或需更短
         voxel_size: 0.05
         track_unknown_space: true
         mark_threshold: 0
