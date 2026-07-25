@@ -6,3 +6,7 @@
 
 # Patch files must stay LF + UTF-8 to apply cleanly with `git apply`.
 *.patch text eol=lf
+
+# Preserve imported vendor drops byte-for-byte; do not report their original
+# formatting as project-authored whitespace errors.
+core/robot/drivers/chassis_8030d/can_driver_8030D_sdk/** -whitespace

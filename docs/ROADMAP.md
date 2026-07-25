@@ -21,7 +21,7 @@
 
 | 模块 | 仿真侧 | 真机侧 | 备注 |
 |---|---|---|---|
-| `robot/` | 已完成（gz/mock/real 三态模型） | 未开始（硬件接口代码已写、未上机） | 五模块中唯一无 README |
+| `robot/` | 已完成（gz/mock/real 三态模型） | 进行中（8030D 厂商节点与网页验收工具已入库，尚未上机） | `robot_hardware` 仍是回环占位实现 |
 | `simulation/` | 已完成 | — | 单一工厂世界 |
 | `mapping/` | 已完成（LIO-SAM 建图 + 一键存图） | 未开始 | |
 | `localization/` | 已完成（FAST-LIO + GICP） | 未开始 | 无全局重定位 |
@@ -68,7 +68,9 @@
 
 ### E. 真机落地（real 整条链）
 
-- [ ] `robot_hardware` 真机通信上机实测。
+- [x] 8030D 厂商驱动与网页手动验收工具纳入 `core/robot/drivers/`。
+- [ ] 使用网页工具完成 8030D 架空轮实测并记录反馈约定。
+- [ ] `robot_hardware` 对接 8030D 厂商节点并完成 ros2_control 真机实测。
 - [ ] real 侧 velodyne/imu 驱动节点。
 - [ ] bringup `real` 分支实现（现为骨架 + TODO）。
 - [ ] real mapping 的 `params_real.yaml`。

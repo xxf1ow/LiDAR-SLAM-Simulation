@@ -15,7 +15,7 @@
 
 | 模块 | 角色 | 详细文档 |
 |---|---|---|
-| `core/robot/` | 差速机器人描述 + ros2_control(`robot_description` 单一 xacro 的 gz/mock/real 三态、`robot_hardware` 真机 C++ 硬件接口、`robot_bringup` 控制器 + launch) | `core/robot/` 各包 |
+| `core/robot/` | 差速机器人描述 + ros2_control + 真实设备驱动（`drivers/chassis_8030d` 含厂商 CAN 节点与网页验收工具；雷达/IMU 驱动后续进入 `drivers/lidar_<model>`） | [`core/robot/README.md`](core/robot/README.md) |
 | `core/simulation/` | Gz Harmonic 世界 + 传感器桥接(`robot_gz_bringup` 起世界/spawn/桥接/控制器、`lidar_pointcloud_adapter` 把 Gz 组织化点云转成 Velodyne 风格 `/points_raw`、`spike` 雷达冒烟) | [`core/simulation/robot_gz_bringup/README.md`](core/simulation/robot_gz_bringup/README.md) |
 | `core/mapping/` | **LIO-SAM** 建图、保存先验图 `~/result/GlobalMap.pcd` | [`core/mapping/README.md`](core/mapping/README.md) |
 | `core/localization/` | **FAST-LIO2** 里程计 + **GICP** 先验图定位(`gicp_localization` 自研包) | [`core/localization/README.md`](core/localization/README.md) |
