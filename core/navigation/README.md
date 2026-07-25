@@ -22,7 +22,7 @@ map →[GICP]→ camera_init →[FAST-LIO]→ body →[本包静态焊接]→ ba
 ## 关键设计点
 - **双 frame**：全局 costmap=map（含 GICP 校正、会跳变，全局重规划无害）；局部 costmap+behavior=camera_init（FAST-LIO 连续、不跳变，MPPI 高频环要平滑）。
 - **障碍源** `/cloud_registered`(sensor_frame=body)，**不是** `/points_raw`（后者经 velodyne URDF 链转歪刷假障碍）。
-- **局部 voxel `origin_z=-1.0`**：含传感器原点；否则报 `Sensor origin out of map bounds`、清不掉障碍假卡死。
+- **全局+局部障碍层统一 STVL**(`spatio_temporal_voxel_layer`)：视锥+时间衰减清除(非 VoxelLayer raytrace)；`combination_method:1`(max)不覆盖 static_layer；为未来运动障碍预留(届时调 `voxel_decay`/`decay_acceleration`)。STVL 的 3D voxel 层结构性规避了旧 VoxelLayer 的 `Sensor origin out of map bounds`(`origin_z:0.0` 即可,无需旧的 `-1.0` hack)。
 - **odom_topic `/base_controller/odom`**：diff_drive 真实 twist；FAST-LIO `/Odometry` twist 恒零，MPPI 不能用。
 - **换底盘只改 CHASSIS-DEPENDENT 参数**（`nav2_params.yaml` 顶部注释块列清单：转弯半径/运动模型/footprint/限速）。
 
@@ -66,15 +66,16 @@ ros2 launch robot_navigation navigation.launch.py
 - **MPPI 控制超时/断续 / RTF 砸到个位数**（WSL 软渲 gpu_lidar 吃 CPU,算力紧）→ 降 `batch_size`、`time_steps`、`controller_frequency`(现 1000/30/10;再紧降 `batch_size→500`);治本是 WSLg GPU 直通。
   - ⚠️ **MPPI 强约束:`1/controller_frequency ≤ model_dt`**(否则 configure 报 "Controller period more then model dt")。**降 `controller_frequency` 必须同步把 `model_dt` 抬到 = 周期**(现 10Hz↔model_dt 0.1)。`horizon = time_steps × model_dt`。
 - **转弯特别慢 / 弯道像停下来转**（紧弯 vx 被 `vx=wz·r` 钳死）→ 提 `wz_max`(现 1.8,≤底盘 2.0)、`vx_max`(现 1.0,≤底盘 1.5)、`wz_std`(现 0.6);仍嫌弯太碎可调大 `minimum_turning_radius`(0.2→0.4,牺牲窄道机动)。
-- **局部 costmap 刷 origin out of bounds / 障碍清不掉** → 确认 voxel `origin_z=-1.0`、源 `/cloud_registered`。
+- **局部 costmap 障碍清不掉 / 刷错** → 确认 STVL 源 `/cloud_registered`、`sensor_frame:body`、清除源 `model_type:1`(3D lidar)与 FOV 角度;STVL 视锥清除无旧 `origin_z` 坑(若换回 VoxelLayer 才需 `origin_z=-1.0`)。
 - **behavior 报 odom/帧不存在** → 确认 behavior global_frame=camera_init、odom_topic=/base_controller/odom。
 - **改 launch/config 不生效** → 必须重新 `colcon build`（launch 跑 install/ 副本）。
 - **ament_python 测试 colcon 不发现** → `python3 -m pytest core/navigation/robot_navigation/test` 兜底。
 
 ## 已知限制（最小范围,构建机实测确认;均留后续阶段）
-- **堵路新障碍会撞,不会绕**:全局 costmap 只有静态先验图层(无实时障碍层),新障碍进不了全局图 → 全局路径仍直穿、不绕行;局部 MPPI + ~0.9-1.0m 近距盲区(velodyne min_range + FAST-LIO blind + costmap obstacle_min_range 三层)无法避开**完全堵死**的路 → 短暂停顿后撞上。**治法(留动态障碍阶段)**:全局 costmap 加实时 voxel 障碍层(源 /cloud_registered)让全局规划器远处绕开。路旁(不堵死)的局部避障是好的。
+- **堵路新障碍已能绕(C1 已解)**:全局+局部 costmap 现均用 STVL 实时障碍层(`spatio_temporal_voxel_layer`,源 `/cloud_registered`,视锥+时间衰减清除),全局 Smac 规划器看到新障碍即重规划绕行。**残留**:运动障碍(行人)避让为独立里程碑;起步点近场盲区(FAST-LIO `blind=1.0`)障碍仍不可见,留后续。
 - **Pause/Resume 不续行**:Nav2 面板 Pause=lifecycle deactivate(取消当前目标),Resume=activate(无"续上原目标"语义)→ 车闲置、RViz 残留上次 `/plan`。要继续=重发目标(Nav2 机制,非 bug)。
 - **Waypoint 模式不可用**:`waypoint_follower` 未启用(见路线图);穿点请用 RViz「Nav Through Poses」(`navigate_through_poses`,已可用)。
+- **U 形死路绕行撞墙(近场盲区擦已知障碍)**:动态新增的长条障碍 A、B(全局静态图无)堵出一条 U 形死路,且足够长(车须驶入一段才靠局部 costmap 发现实死路);绕行转向时车贴该障碍更近,其一端落入雷达近场盲区(FAST-LIO `blind=1.0`),该段 voxel 被清除 → 局部 costmap 出现假缺口 → MPPI 钻缺口撞墙。根因=近场盲区 + STVL 视锥清除在贴近时擦除已观测障碍(绕行/重规划本身正确)。留后续:缩 `blind` / 盲区保形(已知 voxel 不随视锥擦) / `collision_monitor` 兜底。
 
 ## 后续路线图（不在 5e）
 - **穿点导航**：启用 `waypoint_follower` + `navigate_through_poses`（参数/BT 已内置默认）。

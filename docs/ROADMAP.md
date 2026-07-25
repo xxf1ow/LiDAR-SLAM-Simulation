@@ -52,9 +52,10 @@
 
 ### C. 导航能力补全
 
-- [ ] 动态障碍层：全局 costmap 加实时障碍层 + MPPI 避让 — **已知问题**：当前全局 costmap 只有静态先验图层，堵死路的新障碍会撞、不绕行。
+- [x] 动态障碍层（静态堵路已解）：全局+局部 costmap 均用 STVL 实时障碍层（源 `/cloud_registered`），全局规划器看到新障碍即绕行。**残留**：运动障碍（行人）避让 + 预测式 MPPI 仍为独立里程碑（需先建动态障碍仿真包）。
 - [ ] waypoint/穿点导航：启用 `waypoint_follower`（`navigate_through_poses` 已可用）。
 - [ ] 恢复行为增强（现为基础 spin/backup/wait）。
+- [ ] 近场盲区擦障碍修复（U 形死路绕行撞墙） — **已知问题**：转向贴近长条障碍时，雷达近场盲区（FAST-LIO `blind=1.0`）内已观测的 voxel 段被 STVL 视锥清除，局部 costmap 出现假缺口，MPPI 钻缺口撞墙；根因为近场盲区 + 视锥清除擦除已知障碍（绕行本身正确），方向=缩 `blind` / 盲区保形 / `collision_monitor` 兜底。
 
 > Pause/Resume 不续行是 Nav2 lifecycle 机制、非 bug，不计入 todo。
 
