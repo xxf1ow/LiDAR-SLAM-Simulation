@@ -8,6 +8,7 @@ from launch.actions import (
     IncludeLaunchDescription,
 )
 from launch.utilities import perform_substitutions
+from launch_ros.substitutions import FindPackageShare
 
 
 LAUNCH_PATH = (
@@ -38,6 +39,7 @@ def include_for_filename(includes, filename):
 
 
 def test_real_chassis_includes_vendor_and_real_robot_with_single_owner_settings():
+    context = LaunchContext()
     description = load_launch_module().generate_launch_description()
     includes = [
         entity for entity in description.entities
@@ -49,7 +51,16 @@ def test_real_chassis_includes_vendor_and_real_robot_with_single_owner_settings(
     robot = include_for_filename(includes, "robot.launch.py")
     vendor_arguments = launch_arguments(vendor)
     robot_arguments = launch_arguments(robot)
+    vendor_arguments_raw = dict(vendor.launch_arguments)
+    vendor_share = Path(FindPackageShare("can_driver").perform(context))
+    vendor.launch_description_source.get_launch_description(context)
+    vendor_location = Path(vendor.launch_description_source.location)
+    assert vendor_location == vendor_share / "can_driver_8030.launch.py"
     assert vendor_arguments["auto_enable_on_start"] == "false"
+    assert (
+        Path(vendor_arguments_raw["config_file"].perform(context))
+        == vendor_share / "can_driver_params.yaml"
+    )
     assert "use_mock_hardware" not in vendor_arguments
     assert robot_arguments["use_mock_hardware"] == "false"
     assert "prefix" not in robot_arguments

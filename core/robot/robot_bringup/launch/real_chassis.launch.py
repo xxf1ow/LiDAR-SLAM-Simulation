@@ -13,10 +13,15 @@ def generate_launch_description():
     vendor = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             PathJoinSubstitution(
-                [FindPackageShare("can_driver"), "launch", "can_driver_8030.launch.py"]
+                [FindPackageShare("can_driver"), "can_driver_8030.launch.py"]
             )
         ),
-        launch_arguments={"auto_enable_on_start": "false"}.items(),
+        launch_arguments={
+            "auto_enable_on_start": "false",
+            "config_file": PathJoinSubstitution(
+                [FindPackageShare("can_driver"), "can_driver_params.yaml"]
+            ),
+        }.items(),
     )
     robot = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
