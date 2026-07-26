@@ -11,6 +11,7 @@ set(THIS_PACKAGE_INCLUDE_DEPENDS
   pluginlib
   rclcpp
   rclcpp_lifecycle
+  std_msgs
 )
 
 find_package(ament_cmake REQUIRED)
@@ -46,6 +47,18 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_drive_conversion test/test_drive_conversion.cpp)
   target_link_libraries(test_drive_conversion robot_hardware)
+
+  ament_add_gtest(test_diff_drive_system test/test_diff_drive_system.cpp)
+  target_link_libraries(test_diff_drive_system robot_hardware)
+  ament_target_dependencies(test_diff_drive_system
+    hardware_interface
+    rclcpp
+    rclcpp_lifecycle
+    std_msgs
+  )
+
+  ament_add_gtest(test_plugin_load test/test_plugin_load.cpp)
+  ament_target_dependencies(test_plugin_load hardware_interface pluginlib)
 endif()
 
 ament_package()

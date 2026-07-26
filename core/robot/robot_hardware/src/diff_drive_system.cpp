@@ -1,22 +1,71 @@
-// 差速机器人真机侧 system 接口实现。移植自 ros2_control_demos example_2(DiffBotSystemHardware)。
-// 行为与参考一致：velocity 命令、position 一阶积分、节流日志。真机时把 read/write 换成实际通信即可。
+// 差速机器人真机侧 system 接口实现。
 #include "robot_hardware/diff_drive_system.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
-#include <iomanip>
-#include <limits>
+#include <functional>
 #include <memory>
-#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
 #include <vector>
 
-#include "hardware_interface/lexical_casts.hpp"
 #include "hardware_interface/types/hardware_interface_type_values.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 namespace robot_hardware
 {
+namespace
+{
+double parse_positive_double(
+  const std::unordered_map<std::string, std::string> & parameters,
+  const std::string & key)
+{
+  const auto found = parameters.find(key);
+  if (found == parameters.end()) {
+    throw std::invalid_argument(key);
+  }
+  std::size_t parsed = 0;
+  const double value = std::stod(found->second, &parsed);
+  if (parsed != found->second.size() || !std::isfinite(value) || value <= 0.0) {
+    throw std::invalid_argument(key);
+  }
+  return value;
+}
+
+int parse_positive_int16_limit(
+  const std::unordered_map<std::string, std::string> & parameters,
+  const std::string & key)
+{
+  const auto found = parameters.find(key);
+  if (found == parameters.end()) {
+    throw std::invalid_argument(key);
+  }
+  std::size_t parsed = 0;
+  const int value = std::stoi(found->second, &parsed);
+  if (parsed != found->second.size() || value <= 0 || value > 32767) {
+    throw std::invalid_argument(key);
+  }
+  return value;
+}
+
+bool ends_with(const std::string & value, const std::string & suffix)
+{
+  return value.size() >= suffix.size() &&
+    value.compare(value.size() - suffix.size(), suffix.size(), suffix) == 0;
+}
+}  // namespace
+
+DiffDriveSystem::~DiffDriveSystem()
+{
+  if (rclcpp::ok() && motor_pub_ && driver_pub_) {
+    stop_and_disable();
+  }
+  release_io();
+}
+
 hardware_interface::CallbackReturn DiffDriveSystem::on_init(
   const hardware_interface::HardwareInfo & info)
 {
@@ -26,58 +75,65 @@ hardware_interface::CallbackReturn DiffDriveSystem::on_init(
   {
     return hardware_interface::CallbackReturn::ERROR;
   }
+
   logger_ = std::make_shared<rclcpp::Logger>(
     rclcpp::get_logger("controller_manager.resource_manager.hardware_component.system.DiffDrive"));
   clock_ = std::make_shared<rclcpp::Clock>(rclcpp::Clock());
 
-  hw_start_sec_ =
-    hardware_interface::stod(info_.hardware_parameters["example_param_hw_start_duration_sec"]);
-  hw_stop_sec_ =
-    hardware_interface::stod(info_.hardware_parameters["example_param_hw_stop_duration_sec"]);
-  hw_positions_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_velocities_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
-  hw_commands_.resize(info_.joints.size(), std::numeric_limits<double>::quiet_NaN());
+  try {
+    if (info_.joints.size() != 2) {
+      throw std::invalid_argument("exactly two joints are required");
+    }
+    if (!ends_with(info_.joints[0].name, "left_wheel_joint")) {
+      throw std::invalid_argument("joint 0 must be left_wheel_joint");
+    }
+    if (!ends_with(info_.joints[1].name, "right_wheel_joint")) {
+      throw std::invalid_argument("joint 1 must be right_wheel_joint");
+    }
 
-  for (const hardware_interface::ComponentInfo & joint : info_.joints)
-  {
-    if (joint.command_interfaces.size() != 1)
-    {
-      RCLCPP_FATAL(
-        get_logger(), "Joint '%s' has %zu command interfaces found. 1 expected.",
-        joint.name.c_str(), joint.command_interfaces.size());
-      return hardware_interface::CallbackReturn::ERROR;
+    for (const hardware_interface::ComponentInfo & joint : info_.joints) {
+      if (
+        joint.command_interfaces.size() != 1 ||
+        joint.command_interfaces[0].name != hardware_interface::HW_IF_VELOCITY)
+      {
+        throw std::invalid_argument("each joint requires one velocity command interface");
+      }
+      if (
+        joint.state_interfaces.size() != 2 ||
+        joint.state_interfaces[0].name != hardware_interface::HW_IF_POSITION ||
+        joint.state_interfaces[1].name != hardware_interface::HW_IF_VELOCITY)
+      {
+        throw std::invalid_argument(
+                "each joint requires position then velocity state interfaces");
+      }
     }
-    if (joint.command_interfaces[0].name != hardware_interface::HW_IF_VELOCITY)
-    {
-      RCLCPP_FATAL(
-        get_logger(), "Joint '%s' have %s command interfaces found. '%s' expected.",
-        joint.name.c_str(), joint.command_interfaces[0].name.c_str(),
-        hardware_interface::HW_IF_VELOCITY);
-      return hardware_interface::CallbackReturn::ERROR;
-    }
-    if (joint.state_interfaces.size() != 2)
-    {
-      RCLCPP_FATAL(
-        get_logger(), "Joint '%s' has %zu state interface. 2 expected.", joint.name.c_str(),
-        joint.state_interfaces.size());
-      return hardware_interface::CallbackReturn::ERROR;
-    }
-    if (joint.state_interfaces[0].name != hardware_interface::HW_IF_POSITION)
-    {
-      RCLCPP_FATAL(
-        get_logger(), "Joint '%s' have '%s' as first state interface. '%s' expected.",
-        joint.name.c_str(), joint.state_interfaces[0].name.c_str(),
-        hardware_interface::HW_IF_POSITION);
-      return hardware_interface::CallbackReturn::ERROR;
-    }
-    if (joint.state_interfaces[1].name != hardware_interface::HW_IF_VELOCITY)
-    {
-      RCLCPP_FATAL(
-        get_logger(), "Joint '%s' have '%s' as second state interface. '%s' expected.",
-        joint.name.c_str(), joint.state_interfaces[1].name.c_str(),
-        hardware_interface::HW_IF_VELOCITY);
-      return hardware_interface::CallbackReturn::ERROR;
-    }
+
+    activation_wait_sec_ = parse_positive_double(
+      info_.hardware_parameters, "activation_wait_sec");
+    feedback_timeout_sec_ = parse_positive_double(
+      info_.hardware_parameters, "feedback_timeout_sec");
+    max_motor_rpm_ = parse_positive_int16_limit(
+      info_.hardware_parameters, "max_motor_rpm");
+
+    hw_commands_.assign(info_.joints.size(), 0.0);
+    hw_positions_.assign(info_.joints.size(), 0.0);
+    hw_velocities_.assign(info_.joints.size(), 0.0);
+
+    io_node_ = std::make_shared<rclcpp::Node>("diff_drive_system_io");
+    motor_pub_ = io_node_->create_publisher<std_msgs::msg::Int16MultiArray>(
+      "/motor_speed", rclcpp::QoS(10).reliable());
+    driver_pub_ = io_node_->create_publisher<std_msgs::msg::Int8>(
+      "/driver", rclcpp::QoS(10).reliable());
+    feedback_sub_ = io_node_->create_subscription<std_msgs::msg::Int16MultiArray>(
+      "/current_speed",
+      rclcpp::QoS(10).reliable(),
+      std::bind(&DiffDriveSystem::feedback_callback, this, std::placeholders::_1));
+    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    executor_->add_node(io_node_);
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR(get_logger(), "Failed to initialize DiffDriveSystem: %s", error.what());
+    release_io();
+    return hardware_interface::CallbackReturn::ERROR;
   }
 
   return hardware_interface::CallbackReturn::SUCCESS;
@@ -86,14 +142,11 @@ hardware_interface::CallbackReturn DiffDriveSystem::on_init(
 std::vector<hardware_interface::StateInterface> DiffDriveSystem::export_state_interfaces()
 {
   std::vector<hardware_interface::StateInterface> state_interfaces;
-  for (auto i = 0u; i < info_.joints.size(); i++)
-  {
+  for (auto i = 0u; i < info_.joints.size(); ++i) {
     state_interfaces.emplace_back(
-      hardware_interface::StateInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_positions_[i]));
+      info_.joints[i].name, hardware_interface::HW_IF_POSITION, &hw_positions_[i]);
     state_interfaces.emplace_back(
-      hardware_interface::StateInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_[i]));
+      info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_velocities_[i]);
   }
   return state_interfaces;
 }
@@ -101,81 +154,166 @@ std::vector<hardware_interface::StateInterface> DiffDriveSystem::export_state_in
 std::vector<hardware_interface::CommandInterface> DiffDriveSystem::export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface> command_interfaces;
-  for (auto i = 0u; i < info_.joints.size(); i++)
-  {
+  for (auto i = 0u; i < info_.joints.size(); ++i) {
     command_interfaces.emplace_back(
-      hardware_interface::CommandInterface(
-        info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_[i]));
+      info_.joints[i].name, hardware_interface::HW_IF_VELOCITY, &hw_commands_[i]);
   }
   return command_interfaces;
 }
 
 hardware_interface::CallbackReturn DiffDriveSystem::on_activate(
-  const rclcpp_lifecycle::State & /*previous_state*/)
+  const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(get_logger(), "Activating ...please wait...");
-  for (auto i = 0; i < hw_start_sec_; i++)
-  {
-    rclcpp::sleep_for(std::chrono::seconds(1));
-    RCLCPP_INFO(get_logger(), "%.1f seconds left...", hw_start_sec_ - i);
-  }
-  for (auto i = 0u; i < hw_positions_.size(); i++)
-  {
-    if (std::isnan(hw_positions_[i]))
-    {
-      hw_positions_[i] = 0;
-      hw_velocities_[i] = 0;
-      hw_commands_[i] = 0;
+  active_ = false;
+  have_feedback_ = false;
+  std::fill(hw_commands_.begin(), hw_commands_.end(), 0.0);
+  std::fill(hw_velocities_.begin(), hw_velocities_.end(), 0.0);
+
+  const auto deadline = std::chrono::steady_clock::now() +
+    std::chrono::duration<double>(activation_wait_sec_);
+  while (std::chrono::steady_clock::now() < deadline) {
+    publish_motor(0, 0);
+    publish_driver(true);
+    executor_->spin_some();
+    if (have_feedback_ && feedback_is_fresh(std::chrono::steady_clock::now())) {
+      active_ = true;
+      return hardware_interface::CallbackReturn::SUCCESS;
     }
+    rclcpp::sleep_for(std::chrono::milliseconds(100));
   }
-  RCLCPP_INFO(get_logger(), "Successfully activated!");
-  return hardware_interface::CallbackReturn::SUCCESS;
+
+  stop_and_disable();
+  RCLCPP_ERROR(get_logger(), "Activation timed out waiting for /current_speed");
+  return hardware_interface::CallbackReturn::FAILURE;
 }
 
 hardware_interface::CallbackReturn DiffDriveSystem::on_deactivate(
-  const rclcpp_lifecycle::State & /*previous_state*/)
+  const rclcpp_lifecycle::State &)
 {
-  RCLCPP_INFO(get_logger(), "Deactivating ...please wait...");
-  for (auto i = 0; i < hw_stop_sec_; i++)
-  {
-    rclcpp::sleep_for(std::chrono::seconds(1));
-    RCLCPP_INFO(get_logger(), "%.1f seconds left...", hw_stop_sec_ - i);
+  stop_and_disable();
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn DiffDriveSystem::on_cleanup(
+  const rclcpp_lifecycle::State &)
+{
+  if (rclcpp::ok()) {
+    stop_and_disable();
   }
-  RCLCPP_INFO(get_logger(), "Successfully deactivated!");
+  release_io();
+  return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+hardware_interface::CallbackReturn DiffDriveSystem::on_shutdown(
+  const rclcpp_lifecycle::State &)
+{
+  if (rclcpp::ok()) {
+    stop_and_disable();
+  }
+  release_io();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
 hardware_interface::return_type DiffDriveSystem::read(
-  const rclcpp::Time & /*time*/, const rclcpp::Duration & period)
+  const rclcpp::Time &, const rclcpp::Duration & period)
 {
-  std::stringstream ss;
-  ss << "Reading states:";
-  for (std::size_t i = 0; i < hw_velocities_.size(); i++)
-  {
-    hw_positions_[i] = hw_positions_[i] + period.seconds() * hw_velocities_[i];
-    ss << std::fixed << std::setprecision(2) << std::endl
-       << "\t" "position " << hw_positions_[i] << " and velocity " << hw_velocities_[i]
-       << " for '" << info_.joints[i].name.c_str() << "'!";
+  executor_->spin_some();
+  if (!active_) {
+    std::fill(hw_velocities_.begin(), hw_velocities_.end(), 0.0);
+    return hardware_interface::return_type::OK;
   }
-  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
+  if (!have_feedback_ || !feedback_is_fresh(std::chrono::steady_clock::now())) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "8030D wheel feedback timed out");
+    return hardware_interface::return_type::ERROR;
+  }
+
+  hw_velocities_[0] = latest_feedback_.left_rad_s;
+  hw_velocities_[1] = latest_feedback_.right_rad_s;
+  for (std::size_t index = 0; index < hw_positions_.size(); ++index) {
+    hw_positions_[index] += period.seconds() * hw_velocities_[index];
+  }
   return hardware_interface::return_type::OK;
 }
 
 hardware_interface::return_type DiffDriveSystem::write(
-  const rclcpp::Time & /*time*/, const rclcpp::Duration & /*period*/)
+  const rclcpp::Time &, const rclcpp::Duration &)
 {
-  std::stringstream ss;
-  ss << "Writing commands:";
-  for (auto i = 0u; i < hw_commands_.size(); i++)
-  {
-    hw_velocities_[i] = hw_commands_[i];
-    ss << std::fixed << std::setprecision(2) << std::endl
-       << "\t" << "command " << hw_commands_[i] << " for '" << info_.joints[i].name.c_str() << "'!";
+  if (!active_) {
+    return hardware_interface::return_type::OK;
   }
-  RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 500, "%s", ss.str().c_str());
+  const auto command = to_motor_rpm(
+    hw_commands_[0], hw_commands_[1], max_motor_rpm_);
+  if (!command.has_value()) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "Rejected non-finite wheel command");
+    return hardware_interface::return_type::ERROR;
+  }
+  publish_motor(command->right_rpm, command->left_rpm);
   return hardware_interface::return_type::OK;
 }
 
+void DiffDriveSystem::feedback_callback(
+  const std_msgs::msg::Int16MultiArray::SharedPtr message)
+{
+  if (message->data.size() < 2) {
+    RCLCPP_WARN_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "/current_speed must contain at least two channels");
+    return;
+  }
+  latest_feedback_ = from_motor_feedback(message->data[0], message->data[1]);
+  last_feedback_time_ = std::chrono::steady_clock::now();
+  have_feedback_ = true;
+}
+
+void DiffDriveSystem::publish_motor(int16_t right_rpm, int16_t left_rpm)
+{
+  if (!motor_pub_) {
+    return;
+  }
+  std_msgs::msg::Int16MultiArray message;
+  message.data = {right_rpm, left_rpm};
+  motor_pub_->publish(message);
+}
+
+void DiffDriveSystem::publish_driver(bool enabled)
+{
+  if (!driver_pub_) {
+    return;
+  }
+  std_msgs::msg::Int8 message;
+  message.data = enabled ? 1 : 0;
+  driver_pub_->publish(message);
+}
+
+void DiffDriveSystem::stop_and_disable()
+{
+  active_ = false;
+  std::fill(hw_commands_.begin(), hw_commands_.end(), 0.0);
+  std::fill(hw_velocities_.begin(), hw_velocities_.end(), 0.0);
+  publish_motor(0, 0);
+  publish_driver(false);
+}
+
+void DiffDriveSystem::release_io()
+{
+  if (executor_ && io_node_) {
+    executor_->remove_node(io_node_);
+  }
+  feedback_sub_.reset();
+  motor_pub_.reset();
+  driver_pub_.reset();
+  io_node_.reset();
+  executor_.reset();
+}
+
+bool DiffDriveSystem::feedback_is_fresh(
+  std::chrono::steady_clock::time_point now) const
+{
+  return std::chrono::duration<double>(now - last_feedback_time_).count() <=
+         feedback_timeout_sec_;
+}
 }  // namespace robot_hardware
 
 #include "pluginlib/class_list_macros.hpp"
