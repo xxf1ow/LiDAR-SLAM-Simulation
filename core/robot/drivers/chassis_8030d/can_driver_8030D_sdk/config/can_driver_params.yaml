@@ -1,0 +1,59 @@
+# =============================================================================
+# CAN Driver 8030D — ROS 2 Parameter Configuration
+# =============================================================================
+# This file defines all configurable parameters for the CAN motor driver node.
+# Modify values here to match your hardware setup, then launch with:
+#   ros2 launch can_driver can_driver_8030.launch.py
+#
+# To override individual parameters from the command line:
+#   ros2 run can_driver can_driver_8030 --ros-args -p motor_speed_max:=300
+# =============================================================================
+
+can_driver_8030:
+  ros__parameters:
+
+    # -------------------------------------------------------------------------
+    # CAN Hardware Configuration
+    # -------------------------------------------------------------------------
+    can_device_type: 4               # 3=VCI_USBCAN1, 4=VCI_USBCAN2
+    can_device_index: 0              # Device index (usually 0 for first device)
+    can_channel: 0                   # CAN channel: 0=channel1, 1=channel2
+
+    # Baud rate timing registers (500 Kbps = Timing0:0x00, Timing1:0x1C)
+    # Common settings:
+    #   1000 Kbps: Timing0=0x00, Timing1=0x14
+    #    500 Kbps: Timing0=0x00, Timing1=0x1C
+    #    250 Kbps: Timing0=0x01, Timing1=0x1C
+    #    125 Kbps: Timing0=0x03, Timing1=0x1C
+    can_timing0: 0x00
+    can_timing1: 0x1C
+
+    # CAN filter (0x00000000 + 0xFFFFFFFF + filter=1 = accept all frames)
+    can_acc_code: 0x00000000
+    can_acc_mask: 0xFFFFFFFF
+    can_filter: 1
+    can_mode: 0                      # 0=normal mode
+
+    # -------------------------------------------------------------------------
+    # Motor Control Parameters
+    # -------------------------------------------------------------------------
+    motor_speed_max: 256             # Maximum speed in RPM
+    auto_enable_on_start: true       # Enable motors automatically on node start
+
+    # -------------------------------------------------------------------------
+    # Topic Names (for remapping support)
+    # -------------------------------------------------------------------------
+    topic_motor_speed: "motor_speed"
+    topic_current_speed: "current_speed"
+    topic_current_voltage: "current_voltage"
+    topic_current_weight: "current_weight"
+    topic_driver: "driver"
+    topic_light: "light"
+    topic_lift: "lift"
+
+    # -------------------------------------------------------------------------
+    # Polling Intervals (seconds)
+    # -------------------------------------------------------------------------
+    speed_ask_interval: 0.05         # Speed feedback query interval (50ms)
+    voltage_ask_interval: 1.0        # Voltage query interval (1s)
+    weight_ask_interval: 1.0         # Weight sensor query interval (1s)

@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>can_driver</name>
+  <version>1.0.0</version>
+  <description>
+    ROS 2 driver for ZLG USBCAN2 adapter controlling ZL-8030D CAN bus motor drivers.
+    Supports motor speed control (sync/async), voltage monitoring, weight sensing,
+    turn signal control, and lift mechanism. Designed for NVIDIA Jetson Orin/Nano
+    with JetPack 6 / ROS 2 Humble.
+  </description>
+
+  <maintainer email="lonman99@163.com">lonman</maintainer>
+
+  <license>MIT</license>
+
+  <url type="repository">https://github.com/lonman/can_driver_8030D</url>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

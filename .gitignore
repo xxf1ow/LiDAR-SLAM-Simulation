@@ -10,6 +10,9 @@ core/mapping/LIO-SAM/
 core/localization/FAST_LIO/
 core/localization/small_gicp/
 
+# 厂商原始交付压缩包仅作本地留档；Git 跟踪解压后的可构建 ROS 包
+core/robot/drivers/**/vendor_archives/
+
 # Python 运行产物
 __pycache__/
 
