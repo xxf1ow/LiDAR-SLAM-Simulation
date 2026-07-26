@@ -18,7 +18,10 @@ foreach(Dependency IN ITEMS ${THIS_PACKAGE_INCLUDE_DEPENDS})
   find_package(${Dependency} REQUIRED)
 endforeach()
 
-add_library(robot_hardware SHARED src/diff_drive_system.cpp)
+add_library(robot_hardware SHARED
+  src/diff_drive_system.cpp
+  src/drive_conversion.cpp
+)
 target_compile_features(robot_hardware PUBLIC cxx_std_17)
 target_include_directories(robot_hardware PUBLIC
   $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
@@ -38,4 +41,11 @@ install(TARGETS robot_hardware
 
 ament_export_targets(export_robot_hardware HAS_LIBRARY_TARGET)
 ament_export_dependencies(${THIS_PACKAGE_INCLUDE_DEPENDS})
+
+if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_drive_conversion test/test_drive_conversion.cpp)
+  target_link_libraries(test_drive_conversion robot_hardware)
+endif()
+
 ament_package()
