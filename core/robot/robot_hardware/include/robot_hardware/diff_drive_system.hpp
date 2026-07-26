@@ -72,7 +72,7 @@ private:
   void feedback_callback(const std_msgs::msg::Int16MultiArray::SharedPtr message);
   void publish_motor(int16_t right_rpm, int16_t left_rpm);
   void publish_driver(bool enabled);
-  void stop_and_disable();
+  void stop_and_disable() noexcept;
   void release_io() noexcept;
   bool feedback_is_fresh(std::chrono::steady_clock::time_point now) const;
 

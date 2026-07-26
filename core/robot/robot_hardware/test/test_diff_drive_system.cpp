@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -127,6 +128,50 @@ public:
     return events_;
   }
 
+  bool wait_for_event_counts(
+    const std::string & first,
+    std::size_t first_count,
+    const std::string & second,
+    std::size_t second_count,
+    std::chrono::milliseconds timeout = 1s) const
+  {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+      const auto snapshot = events();
+      if (
+        static_cast<std::size_t>(std::count(snapshot.begin(), snapshot.end(), first)) >=
+        first_count &&
+        static_cast<std::size_t>(std::count(snapshot.begin(), snapshot.end(), second)) >=
+        second_count)
+      {
+        return true;
+      }
+      std::this_thread::sleep_for(10ms);
+    }
+    return false;
+  }
+
+  bool wait_for_events_stable(
+    std::chrono::milliseconds stable_for = 50ms,
+    std::chrono::milliseconds timeout = 1s) const
+  {
+    auto last_count = events().size();
+    auto stable_since = std::chrono::steady_clock::now();
+    const auto deadline = stable_since + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(10ms);
+      const auto current_count = events().size();
+      const auto now = std::chrono::steady_clock::now();
+      if (current_count != last_count) {
+        last_count = current_count;
+        stable_since = now;
+      } else if (now - stable_since >= stable_for) {
+        return true;
+      }
+    }
+    return false;
+  }
+
 private:
   rclcpp::Node::SharedPtr node_;
   rclcpp::executors::SingleThreadedExecutor executor_;
@@ -217,6 +262,8 @@ TEST_F(DiffDriveSystemTest, BridgesCommandsAndMeasuredFeedback)
   ASSERT_EQ(
     system.on_activate(rclcpp_lifecycle::State()),
     hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_TRUE(fake.wait_for_event_counts("motor:0,0", 1u, "driver:1", 1u));
+  ASSERT_TRUE(fake.wait_for_events_stable());
   const auto activation_events = fake.events();
   EXPECT_GE(std::count(activation_events.begin(), activation_events.end(), "motor:0,0"), 1);
   EXPECT_GE(std::count(activation_events.begin(), activation_events.end(), "driver:1"), 1);
@@ -275,6 +322,9 @@ TEST_F(DiffDriveSystemTest, ShortFeedbackDoesNotRefreshTimeout)
     system.on_activate(rclcpp_lifecycle::State()),
     hardware_interface::CallbackReturn::SUCCESS);
 
+  ASSERT_TRUE(fake.wait_for_event_counts("motor:0,0", 1u, "driver:1", 1u));
+  ASSERT_TRUE(fake.wait_for_events_stable());
+  fake.clear_events();
   fake.set_feedback_enabled(false);
   std::this_thread::sleep_for(50ms);
   ASSERT_EQ(
@@ -283,16 +333,12 @@ TEST_F(DiffDriveSystemTest, ShortFeedbackDoesNotRefreshTimeout)
   std::this_thread::sleep_for(200ms);
   fake.publish_raw_feedback({123});
   std::this_thread::sleep_for(20ms);
-  fake.clear_events();
   EXPECT_EQ(
     system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.02)),
     hardware_interface::return_type::ERROR);
 
-  const auto stop_deadline = std::chrono::steady_clock::now() + 1s;
-  while (fake.events().size() < 2u && std::chrono::steady_clock::now() < stop_deadline) {
-    std::this_thread::sleep_for(10ms);
-  }
-  std::this_thread::sleep_for(50ms);
+  ASSERT_TRUE(fake.wait_for_event_counts("motor:0,0", 1u, "driver:0", 1u));
+  ASSERT_TRUE(fake.wait_for_events_stable());
   const auto stop_events = fake.events();
   EXPECT_EQ(stop_events.size(), 2u);
   EXPECT_EQ(std::count(stop_events.begin(), stop_events.end(), "motor:0,0"), 1);
@@ -310,17 +356,16 @@ TEST_F(DiffDriveSystemTest, NonFiniteCommandStopsAndDisables)
     system.on_activate(rclcpp_lifecycle::State()),
     hardware_interface::CallbackReturn::SUCCESS);
 
+  ASSERT_TRUE(fake.wait_for_event_counts("motor:0,0", 1u, "driver:1", 1u));
+  ASSERT_TRUE(fake.wait_for_events_stable());
   fake.clear_events();
   commands[0].set_value(std::numeric_limits<double>::quiet_NaN());
   commands[1].set_value(0.0);
   EXPECT_EQ(
     system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.02)),
     hardware_interface::return_type::ERROR);
-  const auto stop_deadline = std::chrono::steady_clock::now() + 1s;
-  while (fake.events().size() < 2u && std::chrono::steady_clock::now() < stop_deadline) {
-    std::this_thread::sleep_for(10ms);
-  }
-  std::this_thread::sleep_for(50ms);
+  ASSERT_TRUE(fake.wait_for_event_counts("motor:0,0", 1u, "driver:0", 1u));
+  ASSERT_TRUE(fake.wait_for_events_stable());
   const auto stop_events = fake.events();
   EXPECT_EQ(stop_events.size(), 2u);
   EXPECT_EQ(std::count(stop_events.begin(), stop_events.end(), "motor:0,0"), 1);

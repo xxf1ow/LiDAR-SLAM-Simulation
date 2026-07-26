@@ -60,11 +60,8 @@ bool ends_with(const std::string & value, const std::string & suffix)
 
 DiffDriveSystem::~DiffDriveSystem()
 {
-  try {
-    if (rclcpp::ok() && motor_pub_ && driver_pub_) {
-      stop_and_disable();
-    }
-  } catch (...) {
+  if (rclcpp::ok() && motor_pub_ && driver_pub_) {
+    stop_and_disable();
   }
   release_io();
 }
@@ -331,13 +328,19 @@ void DiffDriveSystem::publish_driver(bool enabled)
   driver_pub_->publish(message);
 }
 
-void DiffDriveSystem::stop_and_disable()
+void DiffDriveSystem::stop_and_disable() noexcept
 {
   active_ = false;
   std::fill(hw_commands_.begin(), hw_commands_.end(), 0.0);
   std::fill(hw_velocities_.begin(), hw_velocities_.end(), 0.0);
-  publish_motor(0, 0);
-  publish_driver(false);
+  try {
+    publish_motor(0, 0);
+  } catch (...) {
+  }
+  try {
+    publish_driver(false);
+  } catch (...) {
+  }
 }
 
 void DiffDriveSystem::release_io() noexcept
