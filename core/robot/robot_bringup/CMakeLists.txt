@@ -20,6 +20,11 @@ if(BUILD_TESTING)
     test/test_real_chassis_launch.py
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   )
+  ament_add_pytest_test(
+    fake_8030d_node
+    test/test_fake_8030d_node.py
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+  )
 
   find_package(ament_cmake_ros REQUIRED)
   find_package(launch_testing_ament_cmake REQUIRED)
