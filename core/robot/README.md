@@ -5,7 +5,7 @@
 | 目录 | 职责 |
 |---|---|
 | `robot_description/` | URDF/Xacro、关节、碰撞几何、雷达/IMU 安装外参和 ros2_control 声明 |
-| `robot_hardware/` | ros2_control `SystemInterface`；当前仍是回环占位实现，尚未接入 8030D |
+| `robot_hardware/` | 正式的 8030D ros2_control 话题适配器，将轮速命令和实测反馈接入 `SystemInterface` |
 | `robot_bringup/` | `robot_state_publisher`、controller manager 和控制器的正式启动入口 |
 | `drivers/` | 这台真实机器人的厂商设备驱动及设备级验收工具 |
 
@@ -18,21 +18,29 @@
 
 ## 控制链边界
 
-网页工具只用于设备验收：
+正式底盘链为：
+
+```text
+/cmd_vel → diff_drive_controller → robot_hardware → can_driver → 8030D → /current_speed → wheel state/odom
+```
+
+一条命令启动厂商节点和真实 ros2_control 底盘：
+
+```bash
+ros2 launch robot_bringup real_chassis.launch.py
+```
+
+正式链运行时，`robot_hardware` 独占厂商输入话题 `/motor_speed` 和
+`/driver`，并从 `/current_speed` 取得实测轮速。Web 网页工具是独立的
+设备验收入口：
 
 ```text
 手机网页 → can_driver_web_control → can_driver → USBCAN2 → 8030D
 ```
 
-规划中的正式控制链：
-
-```text
-Nav2 → diff_drive_controller → robot_hardware → can_driver → 8030D
-```
-
-当前 `robot_hardware` 的 `write()` 只把命令复制到内部状态，`read()` 只做
-位置积分，因此 `use_mock_hardware:=false` 还不能用于实车。底盘验收完成后，
-再实现 rad/s↔RPM、左右轮顺序、使能/失能和反馈超时处理。
+Web 网页工具与正式链会发布相同的厂商输入话题，必须互斥运行。当前正式链没有
+软件急停，也没有手动/自动 `/cmd_vel` 仲裁；这些安全与控制权能力留待后续
+Spec，现阶段不能替代物理急停或断电手段。
 
 ## 构建
 

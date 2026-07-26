@@ -21,7 +21,7 @@
 
 | 模块 | 仿真侧 | 真机侧 | 备注 |
 |---|---|---|---|
-| `robot/` | 已完成（gz/mock/real 三态模型） | 进行中（8030D 厂商节点与网页验收工具已入库，尚未上机） | `robot_hardware` 仍是回环占位实现 |
+| `robot/` | 已完成（gz/mock/real 三态模型） | 进行中（8030D 厂商节点与网页验收工具已入库，尚未上机） | 8030D ros2_control topic adapter and one-command chassis bringup implemented; Ubuntu Humble integration/Gazebo/Jetson verification status recorded in the chassis README. |
 | `simulation/` | 已完成 | — | 单一工厂世界 |
 | `mapping/` | 已完成（LIO-SAM 建图 + 一键存图） | 未开始 | |
 | `localization/` | 已完成（FAST-LIO + GICP） | 未开始 | 无全局重定位 |

@@ -9,9 +9,8 @@ ROS 2 包：
 | `can_driver_web_control/` | `can_driver_web_control` | 手机网页手动验收工具，发布使能和左右轮 RPM |
 
 网页工具只用于架空轮实测，不属于正式控制链，也不会被
-`system_bringup` 启动。正式控制链仍由 `diff_drive_controller` 和
-`robot_hardware` 承担；在完成适配前，不要将当前占位版
-`robot_hardware` 用于实车。
+`system_bringup` 启动。正式控制链由 `diff_drive_controller` 和
+8030D ros2_control 话题适配器 `robot_hardware` 承担。
 
 ## 平台与硬件
 
@@ -47,6 +46,83 @@ colcon test-result --verbose
 sudo cp robot/drivers/chassis_8030d/can_driver_8030D_sdk/lib/libcontrolcan.so /usr/local/lib/
 sudo ldconfig
 ```
+
+## 正式 ros2_control 底盘链
+
+正式链为：
+
+```text
+/cmd_vel → diff_drive_controller → robot_hardware → can_driver → 8030D → /current_speed → wheel state/odom
+```
+
+启动命令：
+
+```bash
+cd ~/LiDAR-SLAM-Simulation/core
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 launch robot_bringup real_chassis.launch.py
+```
+
+该 launch 将厂商节点的 `auto_enable_on_start` 覆盖为 `false`，由
+`robot_hardware` 独占厂商输入话题 `/motor_speed` 和 `/driver`。启动后
+检查唯一话题所有权及控制器状态：
+
+```bash
+ros2 topic info /motor_speed -v
+ros2 topic info /driver -v
+ros2 control list_controllers
+```
+
+首次运动测试必须架空驱动轮，并保证操作人员能够立即使用物理急停或切断
+驱动电源。确认话题所有权和控制器状态后，可发布低速前进命令：
+
+```bash
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/TwistStamped \
+  "{header: {frame_id: base_link}, twist: {linear: {x: 0.12}}}"
+```
+
+另开终端观察命令、实测反馈、轮状态和轮式里程计：
+
+```bash
+ros2 topic echo /motor_speed
+ros2 topic echo /current_speed
+ros2 topic echo /joint_states
+ros2 topic echo /base_controller/odom --field twist.twist
+```
+
+停止发布 `/cmd_vel` 后，现有控制器的 0.5 秒命令超时会将轮速命令归零。
+此链目前没有软件急停，也没有手动/自动 `/cmd_vel` 仲裁；必须保证只有一个
+`/cmd_vel` 来源，并始终保留物理急停或断电手段。Web 网页工具也会发布
+`/motor_speed` 和 `/driver`，因此绝不能与正式链同时运行。
+
+## 验证状态
+
+截至 2026-07-26，当前 Windows 主机没有 `ros2`、`rosdep` 或 `colcon`，
+也不是 Ubuntu 22.04 / ROS 2 Humble 环境。以下完整目标环境命令尚未运行，
+不能据此声称 Ubuntu Humble 构建、ROS 集成测试、完整 launch 或 Gazebo
+已经通过：
+
+```bash
+cd ~/LiDAR-SLAM-Simulation/core
+source /opt/ros/humble/setup.bash
+rosdep install --from-paths . --ignore-src -r -y
+colcon build --packages-select \
+  robot_hardware robot_description robot_bringup robot_gz_bringup \
+  --event-handlers console_direct+
+colcon test --packages-select \
+  robot_hardware robot_description robot_bringup \
+  --event-handlers console_direct+
+colcon test-result --verbose
+```
+
+本机仅完成了可运行的静态/pytest 证据：控制器 YAML、测试用假 8030D 节点
+和现有 README 契约共 5 个测试通过；正式 launch、假节点和集成测试 Python
+文件通过语法编译。这些结果不能替代 ROS 2 Humble 构建、DDS/控制器运行时、
+Gazebo、aarch64 厂商库或实体底盘验证。
+
+Jetson 部署、厂商二进制、完整正式链和架空轮实体验收均保持待验证，直到
+Task 7 目标环境验收通过。
 
 ## 复制到独立验收工作区
 
@@ -100,6 +176,6 @@ ros2 launch can_driver_web_control can_driver_web_test.launch.py
 6. 点击“停车 / 失能”，确认零速和失能命令均已发送。
 7. 记录反馈顺序、符号、倍率以及断连行为。
 
-同一时间只能有一个组件控制 USBCAN2。运行本工具时不要同时启动未来的
-正式 `robot_hardware` 适配链。厂商预编译节点没有可验证的硬件看门狗；
+同一时间只能有一个组件控制 USBCAN2。运行本工具时不要同时启动正式
+`robot_hardware` 适配链。厂商预编译节点没有可验证的硬件看门狗；
 本工具不能替代物理急停，也不能作为生产控制链。
