@@ -26,7 +26,8 @@ base_controller:
     pose_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
     twist_covariance_diagonal: [0.001, 0.001, 0.001, 0.001, 0.001, 0.01]
 
-    open_loop: true
+    open_loop: false
+    position_feedback: false
     # 本项目定位靠 SLAM(建图 LIO-SAM / 运行 FAST-LIO+GICP),odom→base_footprint
     # 由 SLAM 独占;轮式里程计仍发 /base_controller/odom 话题供 Nav2,但不发 TF。
     enable_odom_tf: false

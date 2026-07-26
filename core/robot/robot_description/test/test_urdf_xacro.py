@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import tempfile
+import xml.etree.ElementTree as ET
 
 import pytest
 from ament_index_python.packages import get_package_share_directory
@@ -39,6 +40,25 @@ def test_xacro_expands_to_valid_urdf(use_gazebo, use_mock_hardware):
     assert "<robot" in urdf
     assert "left_wheel_joint" in urdf
     assert "right_wheel_joint" in urdf
+    root = ET.fromstring(urdf)
+    ros2_control = root.find("ros2_control")
+    assert ros2_control is not None
+    joints = [joint.attrib["name"] for joint in ros2_control.findall("joint")]
+    assert joints == ["left_wheel_joint", "right_wheel_joint"]
+
+    if use_gazebo == "false" and use_mock_hardware == "false":
+        hardware = ros2_control.find("hardware")
+        assert hardware is not None
+        params = {
+            param.attrib["name"]: (param.text or "").strip()
+            for param in hardware.findall("param")
+        }
+        assert params == {
+            "activation_wait_sec": "5.0",
+            "feedback_timeout_sec": "0.5",
+            "max_motor_rpm": "256",
+        }
+
     # Phase 2 新增顶置传感器挂载帧
     assert 'link name="velodyne"' in urdf
     assert 'link name="imu_link"' in urdf
