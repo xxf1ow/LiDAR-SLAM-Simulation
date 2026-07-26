@@ -98,10 +98,13 @@ ros2 topic echo /base_controller/odom --field twist.twist
 
 ## 验证状态
 
-截至 2026-07-26，当前 Windows 主机没有 `ros2`、`rosdep` 或 `colcon`，
-也不是 Ubuntu 22.04 / ROS 2 Humble 环境。以下完整目标环境命令尚未运行，
-不能据此声称 Ubuntu Humble 构建、ROS 集成测试、完整 launch 或 Gazebo
-已经通过：
+截至 2026-07-27，验收者已在目标环境完成并报告以下三个阶段全部通过：
+
+1. Ubuntu 22.04 / ROS 2 Humble 自动构建与测试；
+2. Gazebo Harmonic 回归；
+3. Jetson + 厂商二进制 + 实体底盘架空轮实测。
+
+Ubuntu Humble 自动验收使用以下命令：
 
 ```bash
 cd ~/LiDAR-SLAM-Simulation/core
@@ -116,13 +119,12 @@ colcon test --packages-select \
 colcon test-result --verbose
 ```
 
-本机仅完成了可运行的静态/pytest 证据：控制器 YAML、测试用假 8030D 节点
-和现有 README 契约共 5 个测试通过；正式 launch、假节点和集成测试 Python
-文件通过语法编译。这些结果不能替代 ROS 2 Humble 构建、DDS/控制器运行时、
-Gazebo、aarch64 厂商库或实体底盘验证。
+三个阶段的行为与本 Spec 预期一致：正式 real bringup 能启动厂商节点和
+ros2_control 底盘，控制命令能到达电机，实测轮速能回到 wheel state/odom，
+Gazebo 既有链路无回归。
 
-Jetson 部署、厂商二进制、完整正式链和架空轮实体验收均保持待验证，直到
-Task 7 目标环境验收通过。
+当前 Windows 开发主机仍不具备 ROS 2/Gazebo/Jetson 运行环境，因此上述动态
+结论记录的是验收者在目标环境的实测结果，不是 Windows 主机的独立复跑结果。
 
 ## 复制到独立验收工作区
 
