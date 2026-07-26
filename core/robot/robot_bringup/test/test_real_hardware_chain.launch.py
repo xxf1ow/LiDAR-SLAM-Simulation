@@ -114,6 +114,8 @@ class TestRealHardwareChain(unittest.TestCase):
     def test_cmd_vel_reaches_vendor_and_measured_feedback_reaches_odom(self):
         self.publish_forward_until_motor_moves()
         self.assertEqual(self.motor, [10, 10])
+        expected_odom_linear_x = 0.1256637061
+        odom_tolerance = 0.002
 
         def measured_state_visible():
             if self.joint_state is None or self.odom is None:
@@ -122,7 +124,11 @@ class TestRealHardwareChain(unittest.TestCase):
             return (
                 velocities.get("left_wheel_joint", 0.0) > 1.0
                 and velocities.get("right_wheel_joint", 0.0) > 1.0
-                and self.odom.twist.twist.linear.x > 0.12
+                and abs(
+                    self.odom.twist.twist.linear.x
+                    - expected_odom_linear_x
+                )
+                <= odom_tolerance
             )
 
         self.spin_until(measured_state_visible)
@@ -136,7 +142,9 @@ class TestRealHardwareChain(unittest.TestCase):
             velocities["right_wheel_joint"], 1.0471975512, places=3
         )
         self.assertAlmostEqual(
-            self.odom.twist.twist.linear.x, 0.1256637061, places=2
+            self.odom.twist.twist.linear.x,
+            expected_odom_linear_x,
+            delta=odom_tolerance,
         )
 
     def test_cmd_vel_timeout_returns_motor_command_to_zero(self):

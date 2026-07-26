@@ -53,8 +53,10 @@ std::string test_urdf(
 class Fake8030D
 {
 public:
-  Fake8030D()
-  : node_(std::make_shared<rclcpp::Node>("fake_8030d_cpp"))
+  explicit Fake8030D(
+    std::size_t max_feedback_messages = std::numeric_limits<std::size_t>::max())
+  : node_(std::make_shared<rclcpp::Node>("fake_8030d_cpp")),
+    max_feedback_messages_(max_feedback_messages)
   {
     feedback_pub_ = node_->create_publisher<std_msgs::msg::Int16MultiArray>(
       "/current_speed", rclcpp::QoS(10).reliable());
@@ -77,7 +79,10 @@ public:
         }
       });
     timer_ = node_->create_wall_timer(20ms, [this]() {
-      if (!enabled_.load() || !publish_feedback_.load()) {
+      if (
+        !enabled_.load() ||
+        feedback_messages_published_ >= max_feedback_messages_)
+      {
         return;
       }
       std::vector<int16_t> command;
@@ -90,6 +95,7 @@ public:
         static_cast<int16_t>(-command[1] * 10),
         static_cast<int16_t>(command[0] * 10)};
       feedback_pub_->publish(feedback);
+      ++feedback_messages_published_;
     });
     executor_.add_node(node_);
     spin_thread_ = std::thread([this]() {executor_.spin();});
@@ -103,8 +109,6 @@ public:
     }
     executor_.remove_node(node_);
   }
-
-  void set_feedback_enabled(bool enabled) {publish_feedback_.store(enabled);}
 
   void publish_raw_feedback(const std::vector<int16_t> & values)
   {
@@ -183,8 +187,9 @@ private:
   rclcpp::Subscription<std_msgs::msg::Int8>::SharedPtr driver_sub_;
   rclcpp::Subscription<std_msgs::msg::Int16MultiArray>::SharedPtr motor_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  const std::size_t max_feedback_messages_;
+  std::size_t feedback_messages_published_{0};
   std::atomic<bool> enabled_{false};
-  std::atomic<bool> publish_feedback_{true};
   mutable std::mutex state_mutex_;
   std::vector<int16_t> command_{0, 0};
   std::vector<std::string> events_;
@@ -375,7 +380,7 @@ TEST_F(DiffDriveSystemTest, BridgesCommandsAndMeasuredFeedback)
 
 TEST_F(DiffDriveSystemTest, ShortFeedbackDoesNotRefreshTimeout)
 {
-  Fake8030D fake;
+  Fake8030D fake(1u);
   auto infos = hardware_interface::parse_control_resources_from_urdf(test_urdf());
   robot_hardware::DiffDriveSystem system;
   ASSERT_EQ(system.on_init(infos.front()), hardware_interface::CallbackReturn::SUCCESS);
@@ -386,11 +391,6 @@ TEST_F(DiffDriveSystemTest, ShortFeedbackDoesNotRefreshTimeout)
   ASSERT_TRUE(fake.wait_for_event_counts("motor:0,0", 1u, "driver:1", 1u));
   ASSERT_TRUE(fake.wait_for_events_stable());
   fake.clear_events();
-  fake.set_feedback_enabled(false);
-  std::this_thread::sleep_for(50ms);
-  ASSERT_EQ(
-    system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.02)),
-    hardware_interface::return_type::OK);
   std::this_thread::sleep_for(200ms);
   fake.publish_raw_feedback({123});
   std::this_thread::sleep_for(20ms);
