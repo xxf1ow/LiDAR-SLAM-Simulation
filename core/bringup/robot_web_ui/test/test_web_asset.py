@@ -228,6 +228,48 @@ def _run_browser_scenario(scenario):
             return;
           }}
 
+          if (scenario === "wasd-keyboard") {{
+            const expectedDirections = new Map([
+              ["w", "forward"],
+              ["a", "left"],
+              ["s", "backward"],
+              ["d", "right"]
+            ]);
+            for (const [key, direction] of expectedDirections) {{
+              documentListeners.get("keydown")({{
+                key,
+                repeat: false,
+                preventDefault() {{}}
+              }});
+              assert.strictEqual(desiredDirection, direction, key);
+              documentListeners.get("keyup")({{
+                key,
+                preventDefault() {{}}
+              }});
+              assert.strictEqual(desiredDirection, "stop", `${{key}} keyup`);
+            }}
+
+            documentListeners.get("keydown")({{
+              key: "W",
+              repeat: false,
+              preventDefault() {{}}
+            }});
+            assert.strictEqual(desiredDirection, "forward");
+            windowListeners.get("blur")();
+            assert.strictEqual(desiredDirection, "stop", "window blur");
+
+            documentListeners.get("keydown")({{
+              key: "D",
+              repeat: false,
+              preventDefault() {{}}
+            }});
+            assert.strictEqual(desiredDirection, "right");
+            document.hidden = true;
+            documentListeners.get("visibilitychange")();
+            assert.strictEqual(desiredDirection, "stop", "hidden document");
+            return;
+          }}
+
           assert.fail(`unknown scenario: ${{scenario}}`);
         }}
 
@@ -255,6 +297,7 @@ def _run_browser_scenario(scenario):
         "single-flight-and-stop",
         "all-stop-paths",
         "idle-and-mode-actions",
+        "wasd-keyboard",
     ],
 )
 def test_mobile_control_behavior(scenario):

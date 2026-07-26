@@ -248,6 +248,29 @@
     button.addEventListener("blur", stopMotion);
   });
 
+  const keyboardDirections = {
+    w: "forward",
+    a: "left",
+    s: "backward",
+    d: "right"
+  };
+
+  function beginWasdMotion(event) {
+    const direction = keyboardDirections[event.key.toLowerCase()];
+    if (direction === undefined || event.repeat) return;
+    event.preventDefault();
+    desiredDirection = direction;
+  }
+
+  function endWasdMotion(event) {
+    if (keyboardDirections[event.key.toLowerCase()] === undefined) return;
+    event.preventDefault();
+    desiredDirection = "stop";
+  }
+
+  document.addEventListener("keydown", beginWasdMotion);
+  document.addEventListener("keyup", endWasdMotion);
+
   async function requestMode(path, successMessage) {
     try {
       await post(path, {});
