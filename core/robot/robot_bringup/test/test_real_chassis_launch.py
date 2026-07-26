@@ -1,5 +1,6 @@
 import importlib.util
 from pathlib import Path
+from xml.etree import ElementTree
 
 from launch import LaunchContext
 from launch.actions import (
@@ -12,6 +13,7 @@ from launch.utilities import perform_substitutions
 LAUNCH_PATH = (
     Path(__file__).resolve().parents[1] / "launch" / "real_chassis.launch.py"
 )
+PACKAGE_XML_PATH = Path(__file__).resolve().parents[1] / "package.xml"
 
 
 def load_launch_module():
@@ -50,14 +52,30 @@ def test_real_chassis_includes_vendor_and_real_robot_with_single_owner_settings(
     assert vendor_arguments["auto_enable_on_start"] == "false"
     assert "use_mock_hardware" not in vendor_arguments
     assert robot_arguments["use_mock_hardware"] == "false"
+    assert "prefix" not in robot_arguments
     assert "auto_enable_on_start" not in robot_arguments
 
-    gui_arguments = [
+    declarations = [
         entity for entity in description.entities
-        if isinstance(entity, DeclareLaunchArgument) and entity.name == "gui"
+        if isinstance(entity, DeclareLaunchArgument)
     ]
+    assert "prefix" not in {argument.name for argument in declarations}
+    gui_arguments = [argument for argument in declarations if argument.name == "gui"]
     assert len(gui_arguments) == 1
     assert (
         perform_substitutions(LaunchContext(), gui_arguments[0].default_value)
         == "false"
     )
+
+
+def test_package_declares_direct_launch_and_test_dependencies():
+    root = ElementTree.parse(PACKAGE_XML_PATH).getroot()
+    exec_dependencies = [element.text for element in root.findall("exec_depend")]
+    test_dependencies = [element.text for element in root.findall("test_depend")]
+
+    assert {"launch", "launch_ros"} <= set(exec_dependencies)
+    assert {"ament_index_python", "launch", "launch_testing"} <= set(
+        test_dependencies
+    )
+    assert len(exec_dependencies) == len(set(exec_dependencies))
+    assert len(test_dependencies) == len(set(test_dependencies))

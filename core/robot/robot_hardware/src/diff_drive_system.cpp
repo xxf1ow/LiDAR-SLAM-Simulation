@@ -90,6 +90,13 @@ hardware_interface::CallbackReturn DiffDriveSystem::on_init(
     if (!ends_with(info_.joints[1].name, "right_wheel_joint")) {
       throw std::invalid_argument("joint 1 must be right_wheel_joint");
     }
+    const std::string left_prefix = info_.joints[0].name.substr(
+      0, info_.joints[0].name.size() - std::string("left_wheel_joint").size());
+    const std::string right_prefix = info_.joints[1].name.substr(
+      0, info_.joints[1].name.size() - std::string("right_wheel_joint").size());
+    if (left_prefix != right_prefix) {
+      throw std::invalid_argument("wheel joints must use the same prefix");
+    }
 
     for (const hardware_interface::ComponentInfo & joint : info_.joints) {
       if (
@@ -166,6 +173,11 @@ hardware_interface::CallbackReturn DiffDriveSystem::on_activate(
     RCLCPP_ERROR(get_logger(), "Cannot activate without initialized ROS I/O");
     return hardware_interface::CallbackReturn::ERROR;
   }
+  if (!rclcpp::ok()) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "Cannot activate after ROS shutdown");
+    return hardware_interface::CallbackReturn::FAILURE;
+  }
 
   active_ = false;
   have_feedback_ = false;
@@ -174,19 +186,33 @@ hardware_interface::CallbackReturn DiffDriveSystem::on_activate(
 
   const auto deadline = std::chrono::steady_clock::now() +
     std::chrono::duration<double>(activation_wait_sec_);
-  while (std::chrono::steady_clock::now() < deadline) {
-    publish_motor(0, 0);
-    publish_driver(true);
-    executor_->spin_some();
-    if (have_feedback_ && feedback_is_fresh(std::chrono::steady_clock::now())) {
-      active_ = true;
-      return hardware_interface::CallbackReturn::SUCCESS;
+  try {
+    while (rclcpp::ok() && std::chrono::steady_clock::now() < deadline) {
+      publish_motor(0, 0);
+      publish_driver(true);
+      executor_->spin_some();
+      if (have_feedback_ && feedback_is_fresh(std::chrono::steady_clock::now())) {
+        active_ = true;
+        return hardware_interface::CallbackReturn::SUCCESS;
+      }
+      rclcpp::sleep_for(std::chrono::milliseconds(100));
     }
-    rclcpp::sleep_for(std::chrono::milliseconds(100));
+  } catch (const std::exception & error) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "Activation ROS I/O failed: %s", error.what());
+    return hardware_interface::CallbackReturn::FAILURE;
+  } catch (...) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "Activation ROS I/O failed");
+    return hardware_interface::CallbackReturn::FAILURE;
   }
 
   stop_and_disable();
-  RCLCPP_ERROR(get_logger(), "Activation timed out waiting for /current_speed");
+  if (rclcpp::ok()) {
+    RCLCPP_ERROR(get_logger(), "Activation timed out waiting for /current_speed");
+  } else {
+    RCLCPP_ERROR(get_logger(), "Activation interrupted by ROS shutdown");
+  }
   return hardware_interface::CallbackReturn::FAILURE;
 }
 
@@ -226,7 +252,17 @@ hardware_interface::return_type DiffDriveSystem::read(
     return hardware_interface::return_type::ERROR;
   }
 
-  executor_->spin_some();
+  try {
+    executor_->spin_some();
+  } catch (const std::exception & error) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "Failed to process wheel feedback: %s", error.what());
+    return hardware_interface::return_type::ERROR;
+  } catch (...) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "Failed to process wheel feedback");
+    return hardware_interface::return_type::ERROR;
+  }
   if (!active_) {
     std::fill(hw_velocities_.begin(), hw_velocities_.end(), 0.0);
     return hardware_interface::return_type::OK;
@@ -258,7 +294,17 @@ hardware_interface::return_type DiffDriveSystem::write(
     RCLCPP_ERROR(get_logger(), "Rejected non-finite wheel command");
     return hardware_interface::return_type::ERROR;
   }
-  publish_motor(command->right_rpm, command->left_rpm);
+  try {
+    publish_motor(command->right_rpm, command->left_rpm);
+  } catch (const std::exception & error) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "Failed to publish wheel command: %s", error.what());
+    return hardware_interface::return_type::ERROR;
+  } catch (...) {
+    stop_and_disable();
+    RCLCPP_ERROR(get_logger(), "Failed to publish wheel command");
+    return hardware_interface::return_type::ERROR;
+  }
   return hardware_interface::return_type::OK;
 }
 

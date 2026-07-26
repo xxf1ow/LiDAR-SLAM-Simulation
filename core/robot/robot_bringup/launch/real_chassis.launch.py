@@ -9,7 +9,6 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     gui = LaunchConfiguration("gui")
-    prefix = LaunchConfiguration("prefix")
 
     vendor = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -27,7 +26,6 @@ def generate_launch_description():
         ),
         launch_arguments={
             "gui": gui,
-            "prefix": prefix,
             "use_mock_hardware": "false",
         }.items(),
     )
@@ -35,7 +33,6 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("gui", default_value="false"),
-            DeclareLaunchArgument("prefix", default_value=""),
             vendor,
             robot,
         ]

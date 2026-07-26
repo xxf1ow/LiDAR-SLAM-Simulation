@@ -21,16 +21,19 @@ using namespace std::chrono_literals;
 
 namespace
 {
-std::string test_urdf(bool swap_joints = false)
+std::string test_urdf(
+  bool swap_joints = false,
+  const std::string & left_prefix = "",
+  const std::string & right_prefix = "")
 {
   const std::string left =
-    R"(<joint name="left_wheel_joint">
+    R"(<joint name=")" + left_prefix + R"(left_wheel_joint">
          <command_interface name="velocity"/>
          <state_interface name="position"/>
          <state_interface name="velocity"/>
        </joint>)";
   const std::string right =
-    R"(<joint name="right_wheel_joint">
+    R"(<joint name=")" + right_prefix + R"(right_wheel_joint">
          <command_interface name="velocity"/>
          <state_interface name="position"/>
          <state_interface name="velocity"/>
@@ -216,6 +219,28 @@ TEST_F(DiffDriveSystemTest, RejectsSwappedJointOrder)
     hardware_interface::CallbackReturn::ERROR);
 }
 
+TEST_F(DiffDriveSystemTest, RejectsMismatchedJointPrefixes)
+{
+  auto infos = hardware_interface::parse_control_resources_from_urdf(
+    test_urdf(false, "foo_", "bar_"));
+  ASSERT_EQ(infos.size(), 1u);
+  robot_hardware::DiffDriveSystem system;
+  EXPECT_EQ(
+    system.on_init(infos.front()),
+    hardware_interface::CallbackReturn::ERROR);
+}
+
+TEST_F(DiffDriveSystemTest, AcceptsSharedJointPrefix)
+{
+  auto infos = hardware_interface::parse_control_resources_from_urdf(
+    test_urdf(false, "front_", "front_"));
+  ASSERT_EQ(infos.size(), 1u);
+  robot_hardware::DiffDriveSystem system;
+  EXPECT_EQ(
+    system.on_init(infos.front()),
+    hardware_interface::CallbackReturn::SUCCESS);
+}
+
 TEST_F(DiffDriveSystemTest, ActivationFailsWithoutFeedback)
 {
   auto infos = hardware_interface::parse_control_resources_from_urdf(test_urdf());
@@ -224,6 +249,42 @@ TEST_F(DiffDriveSystemTest, ActivationFailsWithoutFeedback)
   EXPECT_EQ(
     system.on_activate(rclcpp_lifecycle::State()),
     hardware_interface::CallbackReturn::FAILURE);
+}
+
+TEST_F(DiffDriveSystemTest, ActivationFailsPromptlyAfterRosShutdown)
+{
+  auto infos = hardware_interface::parse_control_resources_from_urdf(test_urdf());
+  {
+    robot_hardware::DiffDriveSystem system;
+    ASSERT_EQ(system.on_init(infos.front()), hardware_interface::CallbackReturn::SUCCESS);
+    rclcpp::shutdown();
+
+    hardware_interface::CallbackReturn result =
+      hardware_interface::CallbackReturn::ERROR;
+    const auto start = std::chrono::steady_clock::now();
+    EXPECT_NO_THROW(result = system.on_activate(rclcpp_lifecycle::State()));
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    EXPECT_EQ(result, hardware_interface::CallbackReturn::FAILURE);
+    EXPECT_LT(elapsed, 500ms);
+  }
+  rclcpp::init(0, nullptr);
+}
+
+TEST_F(DiffDriveSystemTest, ReadAfterCleanupReturnsErrorWithoutThrowing)
+{
+  auto infos = hardware_interface::parse_control_resources_from_urdf(test_urdf());
+  robot_hardware::DiffDriveSystem system;
+  ASSERT_EQ(system.on_init(infos.front()), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(
+    system.on_cleanup(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+
+  hardware_interface::return_type result = hardware_interface::return_type::OK;
+  EXPECT_NO_THROW(
+    result = system.read(
+      rclcpp::Time(0), rclcpp::Duration::from_seconds(0.02)));
+  EXPECT_EQ(result, hardware_interface::return_type::ERROR);
 }
 
 TEST_F(DiffDriveSystemTest, CleanupConfigureAndActivateRebuildsIo)
