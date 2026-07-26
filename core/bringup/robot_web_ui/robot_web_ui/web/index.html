@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+  <title>机器人控制</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      --canvas: #0b1220;
+      --surface: #162033;
+      --line: #2d3b52;
+      --text: #f2f6fb;
+      --muted: #9aabc0;
+      --motion: #4db7d6;
+      --manual: #d49a32;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      min-height: 100dvh;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: var(--canvas);
+      color: var(--text);
+    }
+    main {
+      width: min(100%, 430px);
+      padding: max(16px, env(safe-area-inset-top))
+        16px max(16px, env(safe-area-inset-bottom));
+    }
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.25rem;
+      font-weight: 750;
+      letter-spacing: .02em;
+    }
+    .hint {
+      margin: 0;
+      color: var(--muted);
+      font-size: .78rem;
+    }
+    .panel {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: var(--surface);
+    }
+    .speed-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) 3.5rem;
+      align-items: center;
+      gap: 12px;
+    }
+    .speed-value {
+      color: var(--motion);
+      font-family: ui-monospace, "Cascadia Mono", monospace;
+      font-variant-numeric: tabular-nums;
+      text-align: right;
+    }
+    input[type="range"] {
+      min-width: 0;
+      min-height: 44px;
+      accent-color: var(--motion);
+    }
+    .controls {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(72px, 88px));
+      grid-template-rows: repeat(3, minmax(68px, 76px));
+      justify-content: center;
+      gap: 9px;
+      margin: 12px 0;
+    }
+    button {
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      color: var(--text);
+      background: #243147;
+      font: inherit;
+      font-weight: 750;
+      touch-action: none;
+      user-select: none;
+      -webkit-user-select: none;
+      transition: background-color 100ms ease, transform 100ms ease;
+    }
+    button:active {
+      background: #267d99;
+      transform: scale(.97);
+    }
+    button:focus-visible,
+    input:focus-visible {
+      outline: 3px solid var(--manual);
+      outline-offset: 3px;
+    }
+    [data-direction="forward"] { grid-column: 2; grid-row: 1; }
+    [data-direction="left"] { grid-column: 1; grid-row: 2; }
+    [data-direction="right"] { grid-column: 3; grid-row: 2; }
+    [data-direction="backward"] { grid-column: 2; grid-row: 3; }
+    .actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+    .actions button {
+      min-height: 52px;
+      padding: 8px;
+    }
+    #takeover {
+      border-color: #8e6726;
+      background: #59431f;
+    }
+    #resume { background: #26364d; }
+    .notice {
+      min-height: 1.4em;
+      margin: 10px 2px 0;
+      color: #f0bf68;
+      font-size: .85rem;
+      line-height: 1.4;
+    }
+    @media (max-height: 620px) {
+      main { padding-top: 10px; padding-bottom: 10px; }
+      header { margin-bottom: 8px; }
+      .controls {
+        grid-template-rows: repeat(3, 62px);
+        margin: 8px 0;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      button { transition: none; }
+      button:active { transform: none; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>机器人控制</h1>
+    <p class="hint">按住移动，松开停止</p>
+  </header>
+
+  <section class="panel speed-row" aria-label="速度设置">
+    <label for="speed">速度</label>
+    <input id="speed" type="range" min="0" max="100" value="20" step="1">
+    <strong class="speed-value"><span id="speedValue">20</span>%</strong>
+  </section>
+
+  <section class="panel controls" aria-label="移动方向">
+    <button data-direction="forward" aria-label="前进">前进</button>
+    <button data-direction="left" aria-label="左转">左转</button>
+    <button data-direction="right" aria-label="右转">右转</button>
+    <button data-direction="backward" aria-label="后退">后退</button>
+  </section>
+
+  <section class="actions" aria-label="控制模式">
+    <button id="takeover">人工接管</button>
+    <button id="resume">恢复自动导航</button>
+  </section>
+  <p id="notice" class="notice" role="status" aria-live="polite"></p>
+</main>
+
+<script>
+  const speed = document.getElementById("speed");
+  const speedValue = document.getElementById("speedValue");
+  const notice = document.getElementById("notice");
+  let desiredDirection = "stop";
+  let commandLoopRunning = false;
+
+  speed.addEventListener("input", () => {
+    speedValue.textContent = speed.value;
+  });
+
+  function delay(milliseconds) {
+    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  }
+
+  async function post(path, body) {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body)
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(payload.error || `HTTP ${response.status}`);
+    }
+    return payload;
+  }
+
+  function showRequestFailure(error) {
+    notice.textContent = `请求失败：${error.message}`;
+  }
+
+  async function commandLoop() {
+    if (commandLoopRunning) return;
+    commandLoopRunning = true;
+    while (commandLoopRunning) {
+      try {
+        await post("/api/manual-command", {
+          direction: desiredDirection,
+          speed_percent: Number(speed.value)
+        });
+        notice.textContent = "";
+      } catch (error) {
+        showRequestFailure(error);
+      }
+      await delay(100);
+    }
+  }
+
+  function beginMotion(event) {
+    desiredDirection = event.currentTarget.dataset.direction;
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function stopMotion() {
+    desiredDirection = "stop";
+  }
+
+  function beginKeyboardMotion(event) {
+    if ((event.key !== " " && event.key !== "Enter") || event.repeat) return;
+    event.preventDefault();
+    desiredDirection = event.currentTarget.dataset.direction;
+  }
+
+  function endKeyboardMotion(event) {
+    if (event.key !== " " && event.key !== "Enter") return;
+    event.preventDefault();
+    desiredDirection = "stop";
+  }
+
+  document.querySelectorAll("[data-direction]").forEach((button) => {
+    button.addEventListener("pointerdown", beginMotion);
+    button.addEventListener("pointerup", stopMotion);
+    button.addEventListener("pointercancel", stopMotion);
+    button.addEventListener("lostpointercapture", stopMotion);
+    button.addEventListener("keydown", beginKeyboardMotion);
+    button.addEventListener("keyup", endKeyboardMotion);
+    button.addEventListener("blur", stopMotion);
+  });
+
+  async function requestMode(path, successMessage) {
+    try {
+      await post(path, {});
+      notice.textContent = successMessage;
+    } catch (error) {
+      showRequestFailure(error);
+    }
+  }
+
+  document.getElementById("takeover").addEventListener("click", () => {
+    requestMode("/api/takeover-manual", "人工接管请求已完成");
+  });
+  document.getElementById("resume").addEventListener("click", () => {
+    desiredDirection = "stop";
+    requestMode("/api/resume-automatic", "恢复自动导航请求已完成");
+  });
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) desiredDirection = "stop";
+  });
+  window.addEventListener("pagehide", stopMotion);
+  window.addEventListener("blur", stopMotion);
+  commandLoop();
+</script>
+</body>
+</html>
