@@ -28,6 +28,7 @@ def _stack(context, *args, **kwargs):
     fast_cfg = LaunchConfiguration("fast_lio_config").perform(context)
     prior = LaunchConfiguration("prior_map_path").perform(context)
     nav_map = LaunchConfiguration("nav_map").perform(context)
+    cmd_vel_output_topic = LaunchConfiguration("cmd_vel_output_topic").perform(context)
     settling = float(LaunchConfiguration("settling").perform(context))
     flow = lambda m: LogInfo(msg="======== [slam_stack] %s" % m)
 
@@ -44,7 +45,8 @@ def _stack(context, *args, **kwargs):
         gicp = _inc("gicp_localization", "launch/localization.launch.py",
                     {"prior_map_path": prior, "use_sim_time": use_sim})
         nav2 = _inc("robot_navigation", "launch/navigation.launch.py",
-                    {"map": nav_map, "use_rviz": "true", "use_sim_time": use_sim})
+                    {"map": nav_map, "use_rviz": "true", "use_sim_time": use_sim,
+                     "cmd_vel_output_topic": cmd_vel_output_topic})
         # 链式就绪闸门(非阻塞):等上游真发出关键话题 + settling 后才起下个,超时中止
         return [
             flow("MODE=navigation → ② fast_lio → gate(/Odometry+/cloud_registered) → gicp → gate(/localization) → nav2"),
@@ -64,6 +66,7 @@ def generate_launch_description():
         DeclareLaunchArgument("fast_lio_config", default_value="gazebo_velodyne.yaml"),
         DeclareLaunchArgument("prior_map_path", default_value="~/result/GlobalMap.pcd"),
         DeclareLaunchArgument("nav_map", default_value="~/result/factory_map.yaml"),
+        DeclareLaunchArgument("cmd_vel_output_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("settling", default_value="20.0"),
         OpaqueFunction(function=_stack),
     ])

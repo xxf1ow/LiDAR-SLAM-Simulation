@@ -6,7 +6,7 @@
 + twist_stamper + lifecycle_manager(autostart) + 可选 RViz。
 
 拓扑(spec §4.8)：controller/behavior 的 cmd_vel remap 到 /cmd_vel_nav(Twist)，
-twist_stamper 补戳成 /cmd_vel(TwistStamped) 给 diff_drive。
+twist_stamper 补戳后发到可配置输出话题(TwistStamped)。
 """
 import os
 
@@ -37,6 +37,7 @@ def generate_launch_description():
     params_file = LaunchConfiguration('params_file')
     use_rviz = LaunchConfiguration('use_rviz')
     weld_z = LaunchConfiguration('weld_z')
+    cmd_vel_output_topic = LaunchConfiguration('cmd_vel_output_topic')
 
     lifecycle_nodes = [
         'map_server', 'planner_server', 'controller_server',
@@ -60,6 +61,7 @@ def generate_launch_description():
             description='2D 占据栅格 .yaml(pcd_to_occupancy 生成)'),
         DeclareLaunchArgument('params_file', default_value=default_params),
         DeclareLaunchArgument('use_rviz', default_value='true'),
+        DeclareLaunchArgument('cmd_vel_output_topic', default_value='/cmd_vel'),
         # 焊接：parent=body -> child=base_footprint，单位旋转。
         # z 由顶部几何常量派生(_WELD_Z = -(base_height/2 + wheel_radius + sensor_z) = -0.556)，
         # 不再硬编码;system_bringup 一致性检查 G3 守住 _BASE_HEIGHT/_WHEEL_RADIUS/_LIDAR_HEIGHT 与 xacro 一致。
@@ -107,14 +109,14 @@ def generate_launch_description():
             output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
         ),
 
-        # 7) twist_stamper：/cmd_vel_nav(Twist) -> /cmd_vel(TwistStamped) 给 diff_drive
+        # 7) twist_stamper：/cmd_vel_nav(Twist) -> 配置的 TwistStamped 输出话题
         Node(
             package='robot_navigation', executable='twist_stamper', name='twist_stamper',
             output='screen',
             parameters=[{
                 'use_sim_time': use_sim_time,
                 'input_topic': '/cmd_vel_nav',
-                'output_topic': '/cmd_vel',
+                'output_topic': cmd_vel_output_topic,
                 'frame_id': 'base_link',
             }],
         ),

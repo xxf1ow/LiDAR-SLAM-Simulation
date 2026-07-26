@@ -13,6 +13,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (IncludeLaunchDescription, LogInfo, OpaqueFunction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch_ros.actions import Node
 
 from system_bringup import consistency_check
 from system_bringup.ready_gate import ready_gate
@@ -43,7 +44,23 @@ def _bringup(context, *args, **kwargs):
          "fast_lio_config": stack_cfg["fast_lio"]["config"],
          "prior_map_path": stack_cfg["gicp_localization"]["prior_map_path"],
          "nav_map": stack_cfg["robot_navigation"]["map"],
+         "cmd_vel_output_topic": "/cmd_vel_auto",
          "settling": str(stack_cfg["settling"])})
+
+    control_layer = [
+        Node(
+            package="cmd_vel_gate",
+            executable="cmd_vel_gate",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim == "true"}],
+        ),
+        Node(
+            package="robot_web_ui",
+            executable="robot_web_ui",
+            output="screen",
+            parameters=[{"use_sim_time": use_sim == "true"}],
+        ),
+    ]
 
     if platform == "sim":
         gz = cfg["robot_gz"]
@@ -57,7 +74,7 @@ def _bringup(context, *args, **kwargs):
             flow("一致性闸门通过 | platform=sim | mode=%s | config=源码 bringup.yaml(改它不 rebuild)" % mode),
             flow("① 起 robot_gz 仿真底层 → ready_gate 等 /points_raw+/joint_states + settling %ss 后起 slam_stack" % stack_cfg["settling"]),
         ]
-        return flow_log + [base] + ready_gate(
+        return control_layer + flow_log + [base] + ready_gate(
             ["/points_raw", "/joint_states"], 300.0, "robot_gz(lidar+controller)",
             [flow("sim 全栈启动中。开车另开终端:cd ~/xxsim/core && source install/setup.bash && "
                   "ros2 run robot_gz_bringup sticky_teleop.py --ros-args -p use_sim_time:=true"),
@@ -75,7 +92,7 @@ def _bringup(context, *args, **kwargs):
         #     {"use_mock_hardware": str(cfg["robot_bringup"].get("use_mock_hardware", False))}))
         actions += ready_gate("/points_raw", 300.0, "真机 velodyne→/points_raw",
                               [slam_stack], settling=stack_cfg["settling"])
-        return actions
+        return control_layer + actions
 
     raise RuntimeError("未知 platform='%s'(应为 sim|real)" % platform)
 
