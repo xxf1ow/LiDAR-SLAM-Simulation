@@ -39,6 +39,9 @@ public:
   hardware_interface::CallbackReturn on_init(
     const hardware_interface::HardwareInfo & info) override;
 
+  hardware_interface::CallbackReturn on_configure(
+    const rclcpp_lifecycle::State & previous_state) override;
+
   std::vector<hardware_interface::StateInterface> export_state_interfaces() override;
 
   std::vector<hardware_interface::CommandInterface> export_command_interfaces() override;
@@ -65,11 +68,12 @@ public:
   rclcpp::Clock::SharedPtr get_clock() const { return clock_; }
 
 private:
+  bool initialize_io();
   void feedback_callback(const std_msgs::msg::Int16MultiArray::SharedPtr message);
   void publish_motor(int16_t right_rpm, int16_t left_rpm);
   void publish_driver(bool enabled);
   void stop_and_disable();
-  void release_io();
+  void release_io() noexcept;
   bool feedback_is_fresh(std::chrono::steady_clock::time_point now) const;
 
   double activation_wait_sec_{5.0};

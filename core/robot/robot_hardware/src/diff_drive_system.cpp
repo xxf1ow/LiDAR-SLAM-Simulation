@@ -60,8 +60,11 @@ bool ends_with(const std::string & value, const std::string & suffix)
 
 DiffDriveSystem::~DiffDriveSystem()
 {
-  if (rclcpp::ok() && motor_pub_ && driver_pub_) {
-    stop_and_disable();
+  try {
+    if (rclcpp::ok() && motor_pub_ && driver_pub_) {
+      stop_and_disable();
+    }
+  } catch (...) {
   }
   release_io();
 }
@@ -118,25 +121,23 @@ hardware_interface::CallbackReturn DiffDriveSystem::on_init(
     hw_commands_.assign(info_.joints.size(), 0.0);
     hw_positions_.assign(info_.joints.size(), 0.0);
     hw_velocities_.assign(info_.joints.size(), 0.0);
-
-    io_node_ = std::make_shared<rclcpp::Node>("diff_drive_system_io");
-    motor_pub_ = io_node_->create_publisher<std_msgs::msg::Int16MultiArray>(
-      "/motor_speed", rclcpp::QoS(10).reliable());
-    driver_pub_ = io_node_->create_publisher<std_msgs::msg::Int8>(
-      "/driver", rclcpp::QoS(10).reliable());
-    feedback_sub_ = io_node_->create_subscription<std_msgs::msg::Int16MultiArray>(
-      "/current_speed",
-      rclcpp::QoS(10).reliable(),
-      std::bind(&DiffDriveSystem::feedback_callback, this, std::placeholders::_1));
-    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
-    executor_->add_node(io_node_);
   } catch (const std::exception & error) {
     RCLCPP_ERROR(get_logger(), "Failed to initialize DiffDriveSystem: %s", error.what());
     release_io();
     return hardware_interface::CallbackReturn::ERROR;
   }
 
-  return hardware_interface::CallbackReturn::SUCCESS;
+  return initialize_io() ?
+         hardware_interface::CallbackReturn::SUCCESS :
+         hardware_interface::CallbackReturn::ERROR;
+}
+
+hardware_interface::CallbackReturn DiffDriveSystem::on_configure(
+  const rclcpp_lifecycle::State &)
+{
+  return initialize_io() ?
+         hardware_interface::CallbackReturn::SUCCESS :
+         hardware_interface::CallbackReturn::ERROR;
 }
 
 std::vector<hardware_interface::StateInterface> DiffDriveSystem::export_state_interfaces()
@@ -164,6 +165,11 @@ std::vector<hardware_interface::CommandInterface> DiffDriveSystem::export_comman
 hardware_interface::CallbackReturn DiffDriveSystem::on_activate(
   const rclcpp_lifecycle::State &)
 {
+  if (!executor_) {
+    RCLCPP_ERROR(get_logger(), "Cannot activate without initialized ROS I/O");
+    return hardware_interface::CallbackReturn::ERROR;
+  }
+
   active_ = false;
   have_feedback_ = false;
   std::fill(hw_commands_.begin(), hw_commands_.end(), 0.0);
@@ -217,6 +223,12 @@ hardware_interface::CallbackReturn DiffDriveSystem::on_shutdown(
 hardware_interface::return_type DiffDriveSystem::read(
   const rclcpp::Time &, const rclcpp::Duration & period)
 {
+  if (!executor_) {
+    std::fill(hw_velocities_.begin(), hw_velocities_.end(), 0.0);
+    RCLCPP_ERROR(get_logger(), "Cannot read without initialized ROS I/O");
+    return hardware_interface::return_type::ERROR;
+  }
+
   executor_->spin_some();
   if (!active_) {
     std::fill(hw_velocities_.begin(), hw_velocities_.end(), 0.0);
@@ -251,6 +263,38 @@ hardware_interface::return_type DiffDriveSystem::write(
   }
   publish_motor(command->right_rpm, command->left_rpm);
   return hardware_interface::return_type::OK;
+}
+
+bool DiffDriveSystem::initialize_io()
+{
+  if (io_node_ && executor_ && motor_pub_ && driver_pub_ && feedback_sub_) {
+    return true;
+  }
+
+  release_io();
+  try {
+    io_node_ = std::make_shared<rclcpp::Node>("diff_drive_system_io");
+    motor_pub_ = io_node_->create_publisher<std_msgs::msg::Int16MultiArray>(
+      "/motor_speed", rclcpp::QoS(10).reliable());
+    driver_pub_ = io_node_->create_publisher<std_msgs::msg::Int8>(
+      "/driver", rclcpp::QoS(10).reliable());
+    feedback_sub_ = io_node_->create_subscription<std_msgs::msg::Int16MultiArray>(
+      "/current_speed",
+      rclcpp::QoS(10).reliable(),
+      std::bind(&DiffDriveSystem::feedback_callback, this, std::placeholders::_1));
+    executor_ = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
+    executor_->add_node(io_node_);
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR(get_logger(), "Failed to initialize ROS I/O: %s", error.what());
+    release_io();
+    return false;
+  } catch (...) {
+    RCLCPP_ERROR(get_logger(), "Failed to initialize ROS I/O");
+    release_io();
+    return false;
+  }
+
+  return true;
 }
 
 void DiffDriveSystem::feedback_callback(
@@ -296,10 +340,13 @@ void DiffDriveSystem::stop_and_disable()
   publish_driver(false);
 }
 
-void DiffDriveSystem::release_io()
+void DiffDriveSystem::release_io() noexcept
 {
-  if (executor_ && io_node_) {
-    executor_->remove_node(io_node_);
+  try {
+    if (executor_ && io_node_) {
+      executor_->remove_node(io_node_, false);
+    }
+  } catch (...) {
   }
   feedback_sub_.reset();
   motor_pub_.reset();

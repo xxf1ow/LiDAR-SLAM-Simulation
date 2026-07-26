@@ -1,6 +1,8 @@
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -56,14 +58,18 @@ public:
       "/driver", rclcpp::QoS(10).reliable(),
       [this](const std_msgs::msg::Int8::SharedPtr msg) {
         enabled_.store(msg->data == 1);
-        last_driver_.store(msg->data);
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        events_.push_back("driver:" + std::to_string(msg->data));
       });
     motor_sub_ = node_->create_subscription<std_msgs::msg::Int16MultiArray>(
       "/motor_speed", rclcpp::QoS(10).reliable(),
       [this](const std_msgs::msg::Int16MultiArray::SharedPtr msg) {
         if (msg->data.size() >= 2) {
-          std::lock_guard<std::mutex> lock(command_mutex_);
+          std::lock_guard<std::mutex> lock(state_mutex_);
           command_ = {msg->data[0], msg->data[1]};
+          events_.push_back(
+            "motor:" + std::to_string(msg->data[0]) + "," +
+            std::to_string(msg->data[1]));
         }
       });
     timer_ = node_->create_wall_timer(20ms, [this]() {
@@ -72,7 +78,7 @@ public:
       }
       std::vector<int16_t> command;
       {
-        std::lock_guard<std::mutex> lock(command_mutex_);
+        std::lock_guard<std::mutex> lock(state_mutex_);
         command = command_;
       }
       std_msgs::msg::Int16MultiArray feedback;
@@ -95,7 +101,6 @@ public:
   }
 
   void set_feedback_enabled(bool enabled) {publish_feedback_.store(enabled);}
-  int last_driver() const {return last_driver_.load();}
 
   void publish_raw_feedback(const std::vector<int16_t> & values)
   {
@@ -106,8 +111,20 @@ public:
 
   std::vector<int16_t> command() const
   {
-    std::lock_guard<std::mutex> lock(command_mutex_);
+    std::lock_guard<std::mutex> lock(state_mutex_);
     return command_;
+  }
+
+  void clear_events()
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    events_.clear();
+  }
+
+  std::vector<std::string> events() const
+  {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    return events_;
   }
 
 private:
@@ -120,9 +137,9 @@ private:
   rclcpp::TimerBase::SharedPtr timer_;
   std::atomic<bool> enabled_{false};
   std::atomic<bool> publish_feedback_{true};
-  std::atomic<int> last_driver_{-1};
-  mutable std::mutex command_mutex_;
+  mutable std::mutex state_mutex_;
   std::vector<int16_t> command_{0, 0};
+  std::vector<std::string> events_;
 };
 }  // namespace
 
@@ -164,6 +181,26 @@ TEST_F(DiffDriveSystemTest, ActivationFailsWithoutFeedback)
     hardware_interface::CallbackReturn::FAILURE);
 }
 
+TEST_F(DiffDriveSystemTest, CleanupConfigureAndActivateRebuildsIo)
+{
+  Fake8030D fake;
+  auto infos = hardware_interface::parse_control_resources_from_urdf(test_urdf());
+  robot_hardware::DiffDriveSystem system;
+  ASSERT_EQ(system.on_init(infos.front()), hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(
+    system.on_configure(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(
+    system.on_cleanup(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+  ASSERT_EQ(
+    system.on_configure(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(
+    system.on_activate(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+}
+
 TEST_F(DiffDriveSystemTest, BridgesCommandsAndMeasuredFeedback)
 {
   Fake8030D fake;
@@ -180,6 +217,9 @@ TEST_F(DiffDriveSystemTest, BridgesCommandsAndMeasuredFeedback)
   ASSERT_EQ(
     system.on_activate(rclcpp_lifecycle::State()),
     hardware_interface::CallbackReturn::SUCCESS);
+  const auto activation_events = fake.events();
+  EXPECT_GE(std::count(activation_events.begin(), activation_events.end(), "motor:0,0"), 1);
+  EXPECT_GE(std::count(activation_events.begin(), activation_events.end(), "driver:1"), 1);
 
   commands[0].set_value(1.0);
   commands[1].set_value(1.0);
@@ -243,16 +283,20 @@ TEST_F(DiffDriveSystemTest, ShortFeedbackDoesNotRefreshTimeout)
   std::this_thread::sleep_for(200ms);
   fake.publish_raw_feedback({123});
   std::this_thread::sleep_for(20ms);
+  fake.clear_events();
   EXPECT_EQ(
     system.read(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.02)),
     hardware_interface::return_type::ERROR);
 
   const auto stop_deadline = std::chrono::steady_clock::now() + 1s;
-  while (fake.last_driver() != 0 && std::chrono::steady_clock::now() < stop_deadline) {
+  while (fake.events().size() < 2u && std::chrono::steady_clock::now() < stop_deadline) {
     std::this_thread::sleep_for(10ms);
   }
-  EXPECT_EQ(fake.last_driver(), 0);
-  EXPECT_EQ(fake.command(), std::vector<int16_t>({0, 0}));
+  std::this_thread::sleep_for(50ms);
+  const auto stop_events = fake.events();
+  EXPECT_EQ(stop_events.size(), 2u);
+  EXPECT_EQ(std::count(stop_events.begin(), stop_events.end(), "motor:0,0"), 1);
+  EXPECT_EQ(std::count(stop_events.begin(), stop_events.end(), "driver:0"), 1);
 }
 
 TEST_F(DiffDriveSystemTest, NonFiniteCommandStopsAndDisables)
@@ -266,28 +310,40 @@ TEST_F(DiffDriveSystemTest, NonFiniteCommandStopsAndDisables)
     system.on_activate(rclcpp_lifecycle::State()),
     hardware_interface::CallbackReturn::SUCCESS);
 
+  fake.clear_events();
   commands[0].set_value(std::numeric_limits<double>::quiet_NaN());
   commands[1].set_value(0.0);
   EXPECT_EQ(
     system.write(rclcpp::Time(0), rclcpp::Duration::from_seconds(0.02)),
     hardware_interface::return_type::ERROR);
   const auto stop_deadline = std::chrono::steady_clock::now() + 1s;
-  while (fake.last_driver() != 0 && std::chrono::steady_clock::now() < stop_deadline) {
+  while (fake.events().size() < 2u && std::chrono::steady_clock::now() < stop_deadline) {
     std::this_thread::sleep_for(10ms);
   }
-  EXPECT_EQ(fake.last_driver(), 0);
-  EXPECT_EQ(fake.command(), std::vector<int16_t>({0, 0}));
+  std::this_thread::sleep_for(50ms);
+  const auto stop_events = fake.events();
+  EXPECT_EQ(stop_events.size(), 2u);
+  EXPECT_EQ(std::count(stop_events.begin(), stop_events.end(), "motor:0,0"), 1);
+  EXPECT_EQ(std::count(stop_events.begin(), stop_events.end(), "driver:0"), 1);
 }
 
-TEST_F(DiffDriveSystemTest, CleanupAndShutdownReleaseIoIdempotently)
+TEST_F(DiffDriveSystemTest, RepeatedCleanupShutdownAndDestructionReleaseIoIdempotently)
 {
   auto infos = hardware_interface::parse_control_resources_from_urdf(test_urdf());
-  robot_hardware::DiffDriveSystem system;
-  ASSERT_EQ(system.on_init(infos.front()), hardware_interface::CallbackReturn::SUCCESS);
+  auto system = std::make_unique<robot_hardware::DiffDriveSystem>();
+  ASSERT_EQ(system->on_init(infos.front()), hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(
-    system.on_cleanup(rclcpp_lifecycle::State()),
+    system->on_cleanup(rclcpp_lifecycle::State()),
     hardware_interface::CallbackReturn::SUCCESS);
   EXPECT_EQ(
-    system.on_shutdown(rclcpp_lifecycle::State()),
+    system->on_cleanup(rclcpp_lifecycle::State()),
     hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(
+    system->on_shutdown(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+  EXPECT_EQ(
+    system->on_shutdown(rclcpp_lifecycle::State()),
+    hardware_interface::CallbackReturn::SUCCESS);
+  system.reset();
+  SUCCEED();
 }
