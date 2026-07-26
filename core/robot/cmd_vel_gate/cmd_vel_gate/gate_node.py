@@ -1,0 +1,98 @@
+import time
+
+import rclpy
+from geometry_msgs.msg import TwistStamped
+from rclpy.node import Node
+from std_srvs.srv import Trigger
+
+from cmd_vel_gate.gate_logic import GateState, Mode
+
+
+SOURCE_TIMEOUT = 0.5
+ZERO_PERIOD = 0.05
+
+
+class CmdVelGate(Node):
+    def __init__(self) -> None:
+        super().__init__("cmd_vel_gate")
+        self._state = GateState()
+        self._publisher = self.create_publisher(TwistStamped, "/cmd_vel", 1)
+        self._automatic_subscription = self.create_subscription(
+            TwistStamped,
+            "/cmd_vel_auto",
+            self._automatic_callback,
+            1,
+        )
+        self._manual_subscription = self.create_subscription(
+            TwistStamped,
+            "/cmd_vel_manual",
+            self._manual_callback,
+            1,
+        )
+        self._manual_service = self.create_service(
+            Trigger,
+            "/cmd_vel_gate/takeover_manual",
+            self._takeover_manual,
+        )
+        self._automatic_service = self.create_service(
+            Trigger,
+            "/cmd_vel_gate/resume_automatic",
+            self._resume_automatic,
+        )
+        self._zero_timer = self.create_timer(ZERO_PERIOD, self._on_timer)
+
+    def _automatic_callback(self, message: TwistStamped) -> None:
+        self._forward(Mode.AUTOMATIC, message)
+
+    def _manual_callback(self, message: TwistStamped) -> None:
+        self._forward(Mode.MANUAL, message)
+
+    def _forward(self, source: Mode, message: TwistStamped) -> None:
+        if self._state.accept(source, time.monotonic()):
+            output = self._new_output()
+            output.twist = message.twist
+            self._publisher.publish(output)
+
+    def _new_output(self) -> TwistStamped:
+        output = TwistStamped()
+        output.header.stamp = self.get_clock().now().to_msg()
+        output.header.frame_id = "base_link"
+        return output
+
+    def _publish_zero(self) -> None:
+        self._publisher.publish(self._new_output())
+
+    def _on_timer(self) -> None:
+        if self._state.selected_source_is_stale(
+            time.monotonic(),
+            SOURCE_TIMEOUT,
+        ):
+            self._publish_zero()
+
+    def _switch(self, target: Mode, response):
+        self._state.stop()
+        self._publish_zero()
+        self._state.select(target)
+        response.success = True
+        response.message = target.value
+        return response
+
+    def _takeover_manual(self, _request, response):
+        return self._switch(Mode.MANUAL, response)
+
+    def _resume_automatic(self, _request, response):
+        return self._switch(Mode.AUTOMATIC, response)
+
+
+def main(args=None) -> None:
+    rclpy.init(args=args)
+    node = CmdVelGate()
+    try:
+        rclpy.spin(node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()
