@@ -202,6 +202,7 @@
   const motionButtons = document.querySelectorAll("[data-direction]");
   let currentMode = null;
   let modeSwitchPending = false;
+  let modeSwitchTarget = null;
   let buttonMotionOwner = null;
 
   speed.addEventListener("input", () => {
@@ -253,7 +254,8 @@
   }
 
   function renderControls() {
-    if (modeSwitchPending) {
+    const modePending = modeSwitchPending || modeSwitchTarget !== null;
+    if (modePending) {
       modeToggle.textContent = "切换中…";
       modeToggle.disabled = true;
     } else if (currentMode === "automatic") {
@@ -267,7 +269,7 @@
       modeToggle.disabled = true;
     }
     motionButtons.forEach((button) => {
-      button.disabled = currentMode !== "manual" || modeSwitchPending;
+      button.disabled = currentMode !== "manual" || modePending;
     });
   }
 
@@ -275,6 +277,10 @@
     currentMode = mode === "manual" || mode === "automatic"
       ? mode
       : null;
+    if (currentMode === modeSwitchTarget) {
+      modeSwitchPending = false;
+      modeSwitchTarget = null;
+    }
     if (currentMode !== "manual") stopMotion();
     renderControls();
   }
@@ -389,6 +395,9 @@
       || (currentMode !== "manual" && currentMode !== "automatic")
     ) return;
     const observedMode = currentMode;
+    modeSwitchTarget = currentMode === "automatic"
+      ? "manual"
+      : "automatic";
     const path = currentMode === "automatic"
       ? "/api/takeover-manual"
       : "/api/resume-automatic";
@@ -407,9 +416,10 @@
         : successMessage;
     } catch (error) {
       if (error.payload) applyResponseMode(error.payload);
+      modeSwitchPending = false;
+      modeSwitchTarget = null;
       showRequestFailure(error, "mode");
     } finally {
-      modeSwitchPending = false;
       renderControls();
     }
   }

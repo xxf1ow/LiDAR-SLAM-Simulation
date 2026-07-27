@@ -496,9 +496,11 @@ def _run_browser_scenario(scenario):
               elements.get("notice").textContent,
               "人工接管请求已完成"
             );
+            assert.strictEqual(desiredDirection, "stop");
             assert.strictEqual(currentMode, "manual");
-            assert.strictEqual(modeToggle.disabled, false);
-            assert.strictEqual(modeToggle.textContent, "恢复自动导航");
+            assert.strictEqual(modeToggle.disabled, true);
+            assert.strictEqual(modeToggle.textContent, "切换中…");
+            assert(directionButtons.every((button) => button.disabled));
 
             await tick();
             assert.strictEqual(requests.at(-1).body.direction, "stop");
@@ -510,7 +512,23 @@ def _run_browser_scenario(scenario):
             }});
             await flush();
             assert.strictEqual(currentMode, "manual");
-            assert(directionButtons.every((button) => !button.disabled));
+            assert.strictEqual(modeToggle.disabled, true);
+            assert.strictEqual(modeToggle.textContent, "切换中…");
+            assert(directionButtons.every((button) => button.disabled));
+
+            await tick();
+            assert.strictEqual(requests.at(-1).body.direction, "stop");
+            const convergenceIndex = pending.findIndex((request) =>
+              request.path === "/api/manual-command"
+            );
+            pending.splice(convergenceIndex, 1)[0].resolve({{
+              payload: {{ok: true, mode: "automatic"}}
+            }});
+            await flush();
+            assert.strictEqual(currentMode, "automatic");
+            assert.strictEqual(modeToggle.disabled, false);
+            assert.strictEqual(modeToggle.textContent, "人工接管");
+            assert(directionButtons.every((button) => button.disabled));
             return;
           }}
 
