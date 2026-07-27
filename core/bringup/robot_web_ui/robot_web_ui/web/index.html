@@ -253,8 +253,12 @@
     return payload;
   }
 
+  function modeSwitchInProgress() {
+    return modeSwitchPending || modeSwitchTarget !== null;
+  }
+
   function renderControls() {
-    const modePending = modeSwitchPending || modeSwitchTarget !== null;
+    const modePending = modeSwitchInProgress();
     if (modePending) {
       modeToggle.textContent = "切换中…";
       modeToggle.disabled = true;
@@ -320,7 +324,7 @@
   }
 
   function beginMotion(event) {
-    if (currentMode !== "manual") return;
+    if (currentMode !== "manual" || modeSwitchInProgress()) return;
     buttonMotionOwner = event.currentTarget;
     desiredDirection = event.currentTarget.dataset.direction;
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -338,7 +342,7 @@
   }
 
   function beginKeyboardMotion(event) {
-    if (currentMode !== "manual") return;
+    if (currentMode !== "manual" || modeSwitchInProgress()) return;
     if ((event.key !== " " && event.key !== "Enter") || event.repeat) return;
     event.preventDefault();
     buttonMotionOwner = event.currentTarget;
@@ -363,7 +367,7 @@
   };
 
   function beginWasdMotion(event) {
-    if (currentMode !== "manual") return;
+    if (currentMode !== "manual" || modeSwitchInProgress()) return;
     const key = event.key.toLowerCase();
     const direction = keyboardDirections[key];
     if (direction === undefined || event.repeat) return;

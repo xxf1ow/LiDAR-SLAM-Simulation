@@ -501,6 +501,12 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(modeToggle.disabled, true);
             assert.strictEqual(modeToggle.textContent, "切换中…");
             assert(directionButtons.every((button) => button.disabled));
+            documentListeners.get("keydown")({{
+              key: "w",
+              repeat: false,
+              preventDefault() {{}}
+            }});
+            assert.strictEqual(desiredDirection, "stop");
 
             await tick();
             assert.strictEqual(requests.at(-1).body.direction, "stop");
