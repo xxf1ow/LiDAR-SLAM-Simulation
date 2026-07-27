@@ -134,10 +134,14 @@ def _run_browser_scenario(scenario):
           }};
           requests.push(request);
           return new Promise((resolve) => {{
-            request.resolve = () => resolve({{
-              ok: true,
-              status: 200,
-              async json() {{ return {{ok: true}}; }}
+            request.resolve = ({{
+              ok = true,
+              status = 200,
+              payload = {{ok: true}}
+            }} = {{}}) => resolve({{
+              ok,
+              status,
+              async json() {{ return payload; }}
             }});
             pending.push(request);
           }});
@@ -270,6 +274,100 @@ def _run_browser_scenario(scenario):
             return;
           }}
 
+          if (scenario === "mode-notice-ownership") {{
+            await elements.get("takeover").emit("click");
+            await flush();
+            const modeIndex = pending.findIndex((request) =>
+              request.path === "/api/takeover-manual"
+            );
+            assert.notStrictEqual(modeIndex, -1);
+            pending.splice(modeIndex, 1)[0].resolve({{
+              ok: false,
+              status: 503,
+              payload: {{error: "manual service unavailable"}}
+            }});
+            await flush();
+            const expectedNotice = "请求失败：manual service unavailable";
+            assert.strictEqual(
+              elements.get("notice").textContent,
+              expectedNotice
+            );
+
+            const firstManualIndex = pending.findIndex((request) =>
+              request.path === "/api/manual-command"
+            );
+            pending.splice(firstManualIndex, 1)[0].resolve();
+            await flush();
+            assert.strictEqual(
+              elements.get("notice").textContent,
+              expectedNotice
+            );
+
+            await tick();
+            const nextManualIndex = pending.findIndex((request) =>
+              request.path === "/api/manual-command"
+            );
+            pending.splice(nextManualIndex, 1)[0].resolve({{
+              ok: false,
+              status: 503,
+              payload: {{error: "manual publisher unavailable"}}
+            }});
+            await flush();
+            assert.strictEqual(
+              elements.get("notice").textContent,
+              expectedNotice
+            );
+
+            await tick();
+            const finalManualIndex = pending.findIndex((request) =>
+              request.path === "/api/manual-command"
+            );
+            pending.splice(finalManualIndex, 1)[0].resolve();
+            await flush();
+            assert.strictEqual(
+              elements.get("notice").textContent,
+              expectedNotice
+            );
+            return;
+          }}
+
+          if (scenario === "wasd-rollover") {{
+            const keyEvent = (key) => ({{
+              key,
+              repeat: false,
+              preventDefault() {{}}
+            }});
+            documentListeners.get("keydown")(keyEvent("w"));
+            assert.strictEqual(desiredDirection, "forward");
+            documentListeners.get("keydown")(keyEvent("d"));
+            assert.strictEqual(desiredDirection, "right");
+            documentListeners.get("keyup")(keyEvent("d"));
+            assert.strictEqual(desiredDirection, "forward");
+
+            documentListeners.get("keydown")(keyEvent("a"));
+            assert.strictEqual(desiredDirection, "left");
+            documentListeners.get("keyup")(keyEvent("w"));
+            assert.strictEqual(desiredDirection, "left");
+            documentListeners.get("keyup")(keyEvent("a"));
+            assert.strictEqual(desiredDirection, "stop");
+
+            documentListeners.get("keydown")(keyEvent("w"));
+            documentListeners.get("keydown")(keyEvent("d"));
+            windowListeners.get("blur")();
+            assert.strictEqual(desiredDirection, "stop");
+            documentListeners.get("keyup")(keyEvent("d"));
+            assert.strictEqual(desiredDirection, "stop");
+
+            documentListeners.get("keydown")(keyEvent("w"));
+            documentListeners.get("keydown")(keyEvent("d"));
+            document.hidden = true;
+            documentListeners.get("visibilitychange")();
+            assert.strictEqual(desiredDirection, "stop");
+            documentListeners.get("keyup")(keyEvent("d"));
+            assert.strictEqual(desiredDirection, "stop");
+            return;
+          }}
+
           assert.fail(`unknown scenario: ${{scenario}}`);
         }}
 
@@ -298,6 +396,8 @@ def _run_browser_scenario(scenario):
         "all-stop-paths",
         "idle-and-mode-actions",
         "wasd-keyboard",
+        "mode-notice-ownership",
+        "wasd-rollover",
     ],
 )
 def test_mobile_control_behavior(scenario):

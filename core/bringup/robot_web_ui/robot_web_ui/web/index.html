@@ -174,6 +174,8 @@
   const notice = document.getElementById("notice");
   let desiredDirection = "stop";
   let commandLoopRunning = false;
+  let noticeOwner = null;
+  const heldMovementKeys = [];
 
   speed.addEventListener("input", () => {
     speedValue.textContent = speed.value;
@@ -196,7 +198,9 @@
     return payload;
   }
 
-  function showRequestFailure(error) {
+  function showRequestFailure(error, owner = "motion") {
+    if (noticeOwner === "mode" && owner === "motion") return;
+    noticeOwner = owner;
     notice.textContent = `请求失败：${error.message}`;
   }
 
@@ -209,7 +213,10 @@
           direction: desiredDirection,
           speed_percent: Number(speed.value)
         });
-        notice.textContent = "";
+        if (noticeOwner === "motion") {
+          noticeOwner = null;
+          notice.textContent = "";
+        }
       } catch (error) {
         showRequestFailure(error);
       }
@@ -223,6 +230,7 @@
   }
 
   function stopMotion() {
+    heldMovementKeys.length = 0;
     desiredDirection = "stop";
   }
 
@@ -235,7 +243,7 @@
   function endKeyboardMotion(event) {
     if (event.key !== " " && event.key !== "Enter") return;
     event.preventDefault();
-    desiredDirection = "stop";
+    stopMotion();
   }
 
   document.querySelectorAll("[data-direction]").forEach((button) => {
@@ -256,16 +264,26 @@
   };
 
   function beginWasdMotion(event) {
-    const direction = keyboardDirections[event.key.toLowerCase()];
+    const key = event.key.toLowerCase();
+    const direction = keyboardDirections[key];
     if (direction === undefined || event.repeat) return;
     event.preventDefault();
+    const previousIndex = heldMovementKeys.indexOf(key);
+    if (previousIndex !== -1) heldMovementKeys.splice(previousIndex, 1);
+    heldMovementKeys.push(key);
     desiredDirection = direction;
   }
 
   function endWasdMotion(event) {
-    if (keyboardDirections[event.key.toLowerCase()] === undefined) return;
+    const key = event.key.toLowerCase();
+    if (keyboardDirections[key] === undefined) return;
     event.preventDefault();
-    desiredDirection = "stop";
+    const keyIndex = heldMovementKeys.indexOf(key);
+    if (keyIndex !== -1) heldMovementKeys.splice(keyIndex, 1);
+    const activeKey = heldMovementKeys[heldMovementKeys.length - 1];
+    desiredDirection = activeKey === undefined
+      ? "stop"
+      : keyboardDirections[activeKey];
   }
 
   document.addEventListener("keydown", beginWasdMotion);
@@ -274,9 +292,10 @@
   async function requestMode(path, successMessage) {
     try {
       await post(path, {});
+      noticeOwner = "mode";
       notice.textContent = successMessage;
     } catch (error) {
-      showRequestFailure(error);
+      showRequestFailure(error, "mode");
     }
   }
 
@@ -284,12 +303,12 @@
     requestMode("/api/takeover-manual", "人工接管请求已完成");
   });
   document.getElementById("resume").addEventListener("click", () => {
-    desiredDirection = "stop";
+    stopMotion();
     requestMode("/api/resume-automatic", "恢复自动导航请求已完成");
   });
 
   document.addEventListener("visibilitychange", () => {
-    if (document.hidden) desiredDirection = "stop";
+    if (document.hidden) stopMotion();
   });
   window.addEventListener("pagehide", stopMotion);
   window.addEventListener("blur", stopMotion);
