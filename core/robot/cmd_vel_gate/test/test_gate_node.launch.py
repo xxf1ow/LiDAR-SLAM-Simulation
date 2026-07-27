@@ -7,6 +7,13 @@ import launch_testing.actions
 import pytest
 import rclpy
 from geometry_msgs.msg import TwistStamped
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 
@@ -64,6 +71,19 @@ class TestCmdVelGate(unittest.TestCase):
             Trigger,
             "/cmd_vel_gate/resume_automatic",
         )
+        self._modes = []
+        mode_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._mode_subscription = self._node.create_subscription(
+            String,
+            "/cmd_vel_gate/mode",
+            lambda message: self._modes.append(message.data),
+            mode_qos,
+        )
 
         self.assertTrue(self._manual_client.wait_for_service(timeout_sec=5.0))
         self.assertTrue(
@@ -79,6 +99,12 @@ class TestCmdVelGate(unittest.TestCase):
             )
         )
         self.assertIsNotNone(self._wait_for_value(0.0, timeout=2.0))
+        self.assertTrue(
+            self._wait_until(
+                lambda: "automatic" in self._modes,
+                timeout=2.0,
+            )
+        )
         self._outputs.clear()
 
     def tearDown(self):
@@ -142,6 +168,12 @@ class TestCmdVelGate(unittest.TestCase):
         self.assertTrue(response.success)
         self.assertEqual(response.message, expected_message)
         self.assertIsNotNone(self._wait_for_value(0.0, timeout=1.0))
+        self.assertTrue(
+            self._wait_until(
+                lambda: self._modes[-1:] == [expected_message],
+                timeout=1.0,
+            )
+        )
 
     def test_source_selection_and_timeout(self):
         self._publish_and_wait(self._automatic_publisher, 1.0)
@@ -178,3 +210,4 @@ class TestCmdVelGate(unittest.TestCase):
             for message in self._outputs
         }
         self.assertGreaterEqual(len(zero_stamps), 2)
+        self.assertNotIn("stopped", self._modes)

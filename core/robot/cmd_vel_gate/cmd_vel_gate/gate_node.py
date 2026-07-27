@@ -3,6 +3,13 @@ import time
 import rclpy
 from geometry_msgs.msg import TwistStamped
 from rclpy.node import Node
+from rclpy.qos import (
+    DurabilityPolicy,
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+)
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
 
 from cmd_vel_gate.gate_logic import GateState, Mode
@@ -17,6 +24,18 @@ class CmdVelGate(Node):
         super().__init__("cmd_vel_gate")
         self._state = GateState()
         self._publisher = self.create_publisher(TwistStamped, "/cmd_vel", 1)
+        mode_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._mode_publisher = self.create_publisher(
+            String,
+            "/cmd_vel_gate/mode",
+            mode_qos,
+        )
+        self._publish_mode(Mode.AUTOMATIC)
         self._automatic_subscription = self.create_subscription(
             TwistStamped,
             "/cmd_vel_auto",
@@ -62,6 +81,9 @@ class CmdVelGate(Node):
     def _publish_zero(self) -> None:
         self._publisher.publish(self._new_output())
 
+    def _publish_mode(self, mode: Mode) -> None:
+        self._mode_publisher.publish(String(data=mode.value))
+
     def _on_timer(self) -> None:
         if self._state.selected_source_is_stale(
             time.monotonic(),
@@ -73,6 +95,7 @@ class CmdVelGate(Node):
         self._state.stop()
         self._publish_zero()
         self._state.select(target)
+        self._publish_mode(target)
         response.success = True
         response.message = target.value
         return response

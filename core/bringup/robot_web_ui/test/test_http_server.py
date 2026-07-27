@@ -9,6 +9,7 @@ from http.server import HTTPServer, ThreadingHTTPServer
 
 import pytest
 
+import robot_web_ui.http_server as http_server
 from robot_web_ui.http_server import ActionUnavailable, create_server
 from robot_web_ui.manual_command import command_values
 
@@ -17,22 +18,45 @@ class FakeActions:
     def __init__(self):
         self.calls = []
         self.unavailable = False
+        self.conflict = False
+        self.pending = False
+        self.mode = "manual"
 
     def manual_command(self, direction, speed_percent):
         command_values(direction, speed_percent, 1.5, 2.0)
+        if self.conflict:
+            raise http_server.ActionConflict(
+                "manual control is not active",
+                self.mode,
+            )
         if self.unavailable:
             raise ActionUnavailable("publisher unavailable")
         self.calls.append(("manual_command", direction, speed_percent))
+        return self.mode
 
     def takeover_manual(self):
         if self.unavailable:
             raise ActionUnavailable("manual service unavailable")
+        if self.pending:
+            raise http_server.ActionPending(
+                "manual takeover unconfirmed",
+                self.mode,
+            )
         self.calls.append(("takeover_manual",))
+        self.mode = "manual"
+        return self.mode
 
     def resume_automatic(self):
         if self.unavailable:
             raise ActionUnavailable("automatic service unavailable")
+        if self.pending:
+            raise http_server.ActionPending(
+                "automatic resume unconfirmed",
+                self.mode,
+            )
         self.calls.append(("resume_automatic",))
+        self.mode = "automatic"
+        return self.mode
 
 
 @contextmanager
@@ -99,7 +123,10 @@ def test_manual_command_calls_action_once(tmp_path):
         )
 
         assert response.status == 200
-        assert response_json(response) == {"ok": True}
+        assert response_json(response) == {
+            "ok": True,
+            "mode": "manual",
+        }
         assert actions.calls == [("manual_command", "forward", 20)]
 
 
@@ -121,7 +148,14 @@ def test_mode_endpoints_call_corresponding_action_once(
         response = post_json(base_url, path, {})
 
         assert response.status == 200
-        assert response_json(response) == {"ok": True}
+        assert response_json(response) == {
+            "ok": True,
+            "mode": (
+                "manual"
+                if path == "/api/takeover-manual"
+                else "automatic"
+            ),
+        }
         assert actions.calls == [expected_call]
 
 
@@ -241,6 +275,48 @@ def test_action_unavailable_returns_503(tmp_path):
         assert response.status == 503
         assert response_json(response) == {
             "error": "manual service unavailable"
+        }
+        assert actions.calls == []
+
+
+def test_manual_command_conflict_returns_409(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    actions.conflict = True
+    actions.mode = "automatic"
+
+    with running_server(actions, html_path) as base_url:
+        response = post_json(
+            base_url,
+            "/api/manual-command",
+            {"direction": "forward", "speed_percent": 20},
+        )
+
+        assert response.status == 409
+        assert response_json(response) == {
+            "error": "manual control is not active",
+            "mode": "automatic",
+        }
+        assert actions.calls == []
+
+
+def test_pending_mode_switch_returns_202_with_observed_mode(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    actions.pending = True
+    actions.mode = None
+
+    with running_server(actions, html_path) as base_url:
+        response = post_json(base_url, "/api/takeover-manual", {})
+
+        assert response.status == 202
+        assert response_json(response) == {
+            "ok": False,
+            "pending": True,
+            "error": "manual takeover unconfirmed",
+            "mode": None,
         }
         assert actions.calls == []
 

@@ -15,6 +15,7 @@ def test_package_declares_runtime_dependencies():
         "ament_index_python",
         "geometry_msgs",
         "rclpy",
+        "std_msgs",
         "std_srvs",
     }
 
@@ -43,6 +44,41 @@ def test_node_has_exact_ros_contract_and_parameters():
     assert len(publishers) == 1
     assert ast.unparse(publishers[0].args[0]) == "TwistStamped"
     assert ast.literal_eval(publishers[0].args[1]) == "/cmd_vel_manual"
+
+    subscriptions = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Attribute)
+        and call.func.attr == "create_subscription"
+    ]
+    assert len(subscriptions) == 1
+    assert ast.unparse(subscriptions[0].args[0]) == "String"
+    assert (
+        ast.literal_eval(subscriptions[0].args[1])
+        == "/cmd_vel_gate/mode"
+    )
+    assert (
+        ast.unparse(subscriptions[0].args[2])
+        == "self._gate_mode_callback"
+    )
+    assert ast.unparse(subscriptions[0].args[3]) == "mode_qos"
+
+    qos_profiles = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Name)
+        and call.func.id == "QoSProfile"
+    ]
+    assert len(qos_profiles) == 1
+    assert {
+        keyword.arg: ast.unparse(keyword.value)
+        for keyword in qos_profiles[0].keywords
+    } == {
+        "history": "HistoryPolicy.KEEP_LAST",
+        "depth": "1",
+        "reliability": "ReliabilityPolicy.RELIABLE",
+        "durability": "DurabilityPolicy.TRANSIENT_LOCAL",
+    }
 
     clients = [
         call

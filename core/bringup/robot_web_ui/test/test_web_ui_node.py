@@ -26,9 +26,20 @@ def node_module(monkeypatch):
         class Request:
             pass
 
+    class FakeString:
+        def __init__(self, data=""):
+            self.data = data
+
     rclpy = types.ModuleType("rclpy")
     rclpy_node = types.ModuleType("rclpy.node")
     rclpy_node.Node = FakeNode
+    rclpy_qos = types.ModuleType("rclpy.qos")
+    rclpy_qos.QoSProfile = object
+    rclpy_qos.HistoryPolicy = types.SimpleNamespace(KEEP_LAST=object())
+    rclpy_qos.ReliabilityPolicy = types.SimpleNamespace(RELIABLE=object())
+    rclpy_qos.DurabilityPolicy = types.SimpleNamespace(
+        TRANSIENT_LOCAL=object()
+    )
     ament = types.ModuleType("ament_index_python")
     ament_packages = types.ModuleType("ament_index_python.packages")
     ament_packages.get_package_share_directory = lambda _name: ""
@@ -38,14 +49,20 @@ def node_module(monkeypatch):
     std_srvs = types.ModuleType("std_srvs")
     std_srvs_srv = types.ModuleType("std_srvs.srv")
     std_srvs_srv.Trigger = FakeTrigger
+    std_msgs = types.ModuleType("std_msgs")
+    std_msgs_msg = types.ModuleType("std_msgs.msg")
+    std_msgs_msg.String = FakeString
 
     modules = {
         "rclpy": rclpy,
         "rclpy.node": rclpy_node,
+        "rclpy.qos": rclpy_qos,
         "ament_index_python": ament,
         "ament_index_python.packages": ament_packages,
         "geometry_msgs": geometry_msgs,
         "geometry_msgs.msg": geometry_msgs_msg,
+        "std_msgs": std_msgs,
+        "std_msgs.msg": std_msgs_msg,
         "std_srvs": std_srvs,
         "std_srvs.srv": std_srvs_srv,
     }
@@ -124,12 +141,13 @@ def test_manual_command_publishes_one_stamped_base_link_message(node_module):
     stamp = object()
     node._max_linear = 1.5
     node._max_angular = 2.0
+    node._gate_mode = "manual"
     node._manual_publisher = publisher
     node.get_clock = lambda: types.SimpleNamespace(
         now=lambda: types.SimpleNamespace(to_msg=lambda: stamp)
     )
 
-    node.manual_command("forward", 20)
+    assert node.manual_command("forward", 20) == "manual"
 
     assert len(publisher.messages) == 1
     message = publisher.messages[0]
@@ -137,6 +155,65 @@ def test_manual_command_publishes_one_stamped_base_link_message(node_module):
     assert message.header.frame_id == "base_link"
     assert message.twist.linear.x == pytest.approx(0.3)
     assert message.twist.angular.z == 0.0
+
+
+def test_nonzero_manual_command_is_rejected_outside_manual_mode(node_module):
+    node = bare_node(node_module)
+    publisher = FakePublisher()
+    node._max_linear = 1.5
+    node._max_angular = 2.0
+    node._gate_mode = "automatic"
+    node._manual_publisher = publisher
+
+    with pytest.raises(
+        node_module.ActionConflict,
+        match="manual control is not active",
+    ) as raised:
+        node.manual_command("forward", 20)
+
+    assert raised.value.mode == "automatic"
+    assert publisher.messages == []
+
+
+def test_zero_manual_command_remains_a_safe_noop_outside_manual_mode(
+    node_module,
+):
+    node = bare_node(node_module)
+    publisher = FakePublisher()
+    node._max_linear = 1.5
+    node._max_angular = 2.0
+    node._gate_mode = "automatic"
+    node._manual_publisher = publisher
+    node.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(to_msg=lambda: object())
+    )
+
+    assert node.manual_command("stop", 20) == "automatic"
+
+    assert len(publisher.messages) == 1
+    assert publisher.messages[0].twist.linear.x == 0.0
+    assert publisher.messages[0].twist.angular.z == 0.0
+
+
+def test_gate_mode_callback_tracks_authoritative_mode(node_module):
+    node = bare_node(node_module)
+    node._gate_mode = None
+
+    node._gate_mode_callback(types.SimpleNamespace(data="manual"))
+
+    assert node._gate_mode == "manual"
+
+
+@pytest.mark.parametrize("reported_mode", ["", "stopped", "MANUAL"])
+def test_gate_mode_callback_ignores_non_stable_modes(
+    node_module, reported_mode
+):
+    node = bare_node(node_module)
+    node._gate_mode = "automatic"
+
+    node._gate_mode_callback(types.SimpleNamespace(data=reported_mode))
+
+    assert node._gate_mode == "automatic"
 
 
 def test_mode_service_rejects_unavailable_client(node_module):
@@ -163,23 +240,39 @@ def test_mode_service_propagates_success_false(node_module):
     assert len(client.requests) == 1
 
 
-def test_mode_service_propagates_future_exception(node_module):
+def test_future_exception_is_success_when_target_is_observed(node_module):
     node = bare_node(node_module)
-    client = FakeClient(
+    node._gate_mode = "manual"
+    node._takeover_client = FakeClient(
         FakeFuture(error=RuntimeError("transport failed"))
     )
-    node._takeover_client = client
+
+    assert node.takeover_manual() == "manual"
+    assert len(node._takeover_client.requests) == 1
+
+
+def test_future_exception_is_pending_when_target_is_not_observed(
+    node_module,
+):
+    node = bare_node(node_module)
+    node._gate_mode = "automatic"
+    node._takeover_client = FakeClient(
+        FakeFuture(error=RuntimeError("transport failed"))
+    )
 
     with pytest.raises(
-        node_module.ActionUnavailable,
+        node_module.ActionPending,
         match="transport failed",
-    ):
+    ) as raised:
         node.takeover_manual()
 
-    assert len(client.requests) == 1
+    assert raised.value.mode == "automatic"
+    assert len(node._takeover_client.requests) == 1
 
 
-def test_mode_service_waits_at_most_one_second(node_module, monkeypatch):
+def test_timeout_is_success_when_target_is_observed(
+    node_module, monkeypatch
+):
     waits = []
 
     class TimeoutEvent:
@@ -192,26 +285,67 @@ def test_mode_service_waits_at_most_one_second(node_module, monkeypatch):
 
     monkeypatch.setattr(node_module.threading, "Event", TimeoutEvent)
     node = bare_node(node_module)
-    client = FakeClient(FakeFuture(complete=False))
-    node._takeover_client = client
+    node._gate_mode = "manual"
+    node._takeover_client = FakeClient(FakeFuture(complete=False))
 
-    with pytest.raises(node_module.ActionUnavailable, match="timed out"):
+    assert node.takeover_manual() == "manual"
+    assert waits == [1.0]
+    assert len(node._takeover_client.requests) == 1
+
+
+def test_timeout_is_pending_when_target_is_not_observed(
+    node_module, monkeypatch
+):
+    waits = []
+
+    class TimeoutEvent:
+        def set(self):
+            pass
+
+        def wait(self, timeout):
+            waits.append(timeout)
+            return False
+
+    monkeypatch.setattr(node_module.threading, "Event", TimeoutEvent)
+    node = bare_node(node_module)
+    node._gate_mode = None
+    node._takeover_client = FakeClient(FakeFuture(complete=False))
+
+    with pytest.raises(
+        node_module.ActionPending,
+        match="timed out",
+    ) as raised:
         node.takeover_manual()
 
     assert waits == [1.0]
-    assert len(client.requests) == 1
+    assert raised.value.mode is None
+    assert len(node._takeover_client.requests) == 1
 
 
 def test_mode_service_accepts_successful_async_completion(node_module):
     node = bare_node(node_module)
+    node._gate_mode = None
     client = FakeClient(
         FakeFuture(response=response(), delay=0.01)
     )
     node._resume_client = client
 
-    node.resume_automatic()
+    assert node.resume_automatic() == "automatic"
 
     assert len(client.requests) == 1
+
+
+def test_successful_mode_services_update_local_observation(node_module):
+    node = bare_node(node_module)
+    node._gate_mode = "automatic"
+    node._takeover_client = FakeClient(FakeFuture(response=response()))
+    node._resume_client = FakeClient(FakeFuture(response=response()))
+
+    assert node.takeover_manual() == "manual"
+    assert node._gate_mode == "manual"
+
+    assert node.resume_automatic() == "automatic"
+    assert node._gate_mode == "automatic"
 
 
 def test_destroy_cleans_up_once_and_is_idempotent(node_module):

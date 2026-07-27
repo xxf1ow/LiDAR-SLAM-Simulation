@@ -18,7 +18,7 @@ HTML = (
 def test_page_contains_only_the_required_mobile_controls():
     source = HTML.read_text(encoding="utf-8")
 
-    assert source.count('<button data-direction="') == 4
+    assert source.count('<button disabled data-direction="') == 4
     for direction in ("forward", "backward", "left", "right"):
         assert f'data-direction="{direction}"' in source
     assert 'id="speed"' in source
@@ -65,6 +65,7 @@ def _run_browser_scenario(scenario):
             this.value = id === "speed" ? "20" : "";
             this.textContent = "";
             this.dataset = {{}};
+            this.disabled = false;
             this.listeners = new Map();
             this.classList = {{
               values: new Set(),
@@ -99,6 +100,7 @@ def _run_browser_scenario(scenario):
           (direction) => {{
             const button = new FakeElement(direction);
             button.dataset.direction = direction;
+            button.disabled = true;
             return button;
           }}
         );
@@ -137,7 +139,7 @@ def _run_browser_scenario(scenario):
             request.resolve = ({{
               ok = true,
               status = 200,
-              payload = {{ok: true}}
+              payload = {{ok: true, mode: "manual"}}
             }} = {{}}) => resolve({{
               ok,
               status,
@@ -152,9 +154,9 @@ def _run_browser_scenario(scenario):
           await new Promise((resolve) => setImmediate(resolve));
         }}
 
-        async function resolveNext() {{
+        async function resolveNext(options) {{
           assert(pending.length > 0, "missing pending request");
-          pending.shift().resolve();
+          pending.shift().resolve(options);
           await flush();
         }}
 
@@ -177,13 +179,51 @@ def _run_browser_scenario(scenario):
             speed_percent: 20
           }});
 
+          if (scenario === "initial-and-authoritative-interlock") {{
+            assert.strictEqual(currentMode, null);
+            assert(directionButtons.every((button) => button.disabled));
+
+            await directionButtons[0].emit("pointerdown");
+            assert.strictEqual(desiredDirection, "stop");
+            documentListeners.get("keydown")({{
+              key: "w",
+              repeat: false,
+              preventDefault() {{}}
+            }});
+            assert.strictEqual(desiredDirection, "stop");
+
+            applyMode("manual");
+            assert.strictEqual(currentMode, "manual");
+            assert(directionButtons.every((button) => !button.disabled));
+            desiredDirection = "forward";
+            heldMovementKeys.push("w");
+            applyMode("automatic");
+            assert.strictEqual(currentMode, "automatic");
+            assert.strictEqual(desiredDirection, "stop");
+            assert.deepStrictEqual(heldMovementKeys, []);
+            assert(directionButtons.every((button) => button.disabled));
+
+            applyMode("manual");
+            desiredDirection = "forward";
+            applyMode(null);
+            assert.strictEqual(currentMode, null);
+            assert.strictEqual(desiredDirection, "stop");
+            assert(directionButtons.every((button) => button.disabled));
+            return;
+          }}
+
+          await resolveNext({{
+            payload: {{ok: true, mode: "manual"}}
+          }});
+          assert.strictEqual(currentMode, "manual");
+          assert(directionButtons.every((button) => !button.disabled));
+
           if (scenario === "single-flight-and-stop") {{
             commandLoop();
             await flush();
             assert.strictEqual(requests.length, 1);
             await directionButtons[0].emit("pointerdown");
             assert.strictEqual(desiredDirection, "forward");
-            await resolveNext();
             await tick();
             assert.strictEqual(requests.length, 2);
             assert.strictEqual(requests[1].body.direction, "forward");
@@ -218,10 +258,10 @@ def _run_browser_scenario(scenario):
           }}
 
           if (scenario === "idle-and-mode-actions") {{
-            await resolveNext();
             await tick();
             assert.strictEqual(requests[1].body.direction, "stop");
             await elements.get("takeover").emit("click");
+            assert(directionButtons.every((button) => button.disabled));
             await elements.get("resume").emit("click");
             assert(requests.some((request) =>
               request.path === "/api/takeover-manual"
@@ -229,6 +269,73 @@ def _run_browser_scenario(scenario):
             assert(requests.some((request) =>
               request.path === "/api/resume-automatic"
             ));
+            return;
+          }}
+
+          if (scenario === "manual-conflict-applies-mode") {{
+            await directionButtons[0].emit("pointerdown");
+            assert.strictEqual(desiredDirection, "forward");
+            await tick();
+            assert.strictEqual(requests[1].body.direction, "forward");
+            pending.shift().resolve({{
+              ok: false,
+              status: 409,
+              payload: {{
+                error: "manual control is not active",
+                mode: "automatic"
+              }}
+            }});
+            await flush();
+            assert.strictEqual(currentMode, "automatic");
+            assert.strictEqual(desiredDirection, "stop");
+            assert(directionButtons.every((button) => button.disabled));
+            return;
+          }}
+
+          if (scenario === "mode-pending-and-zero-convergence") {{
+            await directionButtons[0].emit("pointerdown");
+            assert.strictEqual(desiredDirection, "forward");
+            const modePromise = elements.get("takeover").emit("click");
+            assert.strictEqual(desiredDirection, "stop");
+            assert.strictEqual(currentMode, null);
+            assert(directionButtons.every((button) => button.disabled));
+
+            const modeIndex = pending.findIndex((request) =>
+              request.path === "/api/takeover-manual"
+            );
+            pending.splice(modeIndex, 1)[0].resolve({{
+              ok: true,
+              status: 202,
+              payload: {{
+                ok: false,
+                pending: true,
+                error: "manual takeover unconfirmed",
+                mode: "automatic"
+              }}
+            }});
+            await modePromise;
+            await flush();
+            assert.strictEqual(
+              elements.get("notice").textContent,
+              "切换结果尚未确认"
+            );
+            assert.notStrictEqual(
+              elements.get("notice").textContent,
+              "人工接管请求已完成"
+            );
+            assert.strictEqual(currentMode, "automatic");
+
+            await tick();
+            assert.strictEqual(requests.at(-1).body.direction, "stop");
+            const zeroIndex = pending.findIndex((request) =>
+              request.path === "/api/manual-command"
+            );
+            pending.splice(zeroIndex, 1)[0].resolve({{
+              payload: {{ok: true, mode: "manual"}}
+            }});
+            await flush();
+            assert.strictEqual(currentMode, "manual");
+            assert(directionButtons.every((button) => !button.disabled));
             return;
           }}
 
@@ -293,6 +400,7 @@ def _run_browser_scenario(scenario):
               expectedNotice
             );
 
+            await tick();
             const firstManualIndex = pending.findIndex((request) =>
               request.path === "/api/manual-command"
             );
@@ -392,9 +500,12 @@ def _run_browser_scenario(scenario):
 @pytest.mark.parametrize(
     "scenario",
     [
+        "initial-and-authoritative-interlock",
         "single-flight-and-stop",
         "all-stop-paths",
         "idle-and-mode-actions",
+        "manual-conflict-applies-mode",
+        "mode-pending-and-zero-convergence",
         "wasd-keyboard",
         "mode-notice-ownership",
         "wasd-rollover",

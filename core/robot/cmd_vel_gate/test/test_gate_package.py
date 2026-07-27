@@ -105,6 +105,7 @@ def test_package_dependencies_are_minimal_and_complete():
     assert {node.text for node in package.findall("exec_depend")} == {
         "rclpy",
         "geometry_msgs",
+        "std_msgs",
         "std_srvs",
     }
     assert {node.text for node in package.findall("test_depend")} == {
@@ -133,11 +134,18 @@ def test_node_uses_only_the_required_interfaces():
         ("TwistStamped", "/cmd_vel_manual", "_manual_callback", 1),
     }
 
-    publishers = [
-        (_name(call.args[0]), _constant(call.args[1]), _constant(call.args[2]))
-        for call in _attribute_calls(init, "create_publisher")
-    ]
-    assert publishers == [("TwistStamped", "/cmd_vel", 1)]
+    publishers = _attribute_calls(init, "create_publisher")
+    assert len(publishers) == 2
+    assert (
+        _name(publishers[0].args[0]),
+        _constant(publishers[0].args[1]),
+        _constant(publishers[0].args[2]),
+    ) == ("TwistStamped", "/cmd_vel", 1)
+    assert (
+        _name(publishers[1].args[0]),
+        _constant(publishers[1].args[1]),
+        _name(publishers[1].args[2]),
+    ) == ("String", "/cmd_vel_gate/mode", "mode_qos")
 
     services = [
         (
@@ -165,6 +173,41 @@ def test_node_uses_only_the_required_interfaces():
     }
     assert "/driver" not in created_interface_literals
     assert "/motor_speed" not in created_interface_literals
+
+
+def test_mode_publisher_uses_latched_reliable_depth_one_qos():
+    init = _function("__init__")
+    qos_calls = [
+        call
+        for call in ast.walk(init)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "QoSProfile"
+    ]
+    assert len(qos_calls) == 1
+    keywords = {
+        keyword.arg: ast.unparse(keyword.value)
+        for keyword in qos_calls[0].keywords
+    }
+    assert keywords == {
+        "history": "HistoryPolicy.KEEP_LAST",
+        "depth": "1",
+        "reliability": "ReliabilityPolicy.RELIABLE",
+        "durability": "DurabilityPolicy.TRANSIENT_LOCAL",
+    }
+
+    source = NODE_PATH.read_text(encoding="utf-8")
+    assert "from std_msgs.msg import String" in source
+    assert "self._publish_mode(Mode.AUTOMATIC)" in source
+
+    publish_mode = _function("_publish_mode")
+    assert any(
+        isinstance(call.func, ast.Attribute)
+        and call.func.attr == "publish"
+        and ast.unparse(call.args[0]) == "String(data=mode.value)"
+        for call in ast.walk(publish_mode)
+        if isinstance(call, ast.Call)
+    )
 
 
 def test_node_uses_exact_timeout_and_zero_period():
@@ -201,9 +244,26 @@ def test_switch_stops_before_zero_and_selects_after_zero():
         if isinstance(call.func.value, ast.Attribute)
         and _self_attribute(call.func.value) == "_state"
     ]
+    mode_calls = [
+        call
+        for call in _attribute_calls(switch, "_publish_mode")
+        if isinstance(call.func.value, ast.Name)
+        and call.func.value.id == "self"
+    ]
 
-    assert len(stop_calls) == len(zero_calls) == len(select_calls) == 1
-    assert stop_calls[0].lineno < zero_calls[0].lineno < select_calls[0].lineno
+    assert (
+        len(stop_calls)
+        == len(zero_calls)
+        == len(select_calls)
+        == len(mode_calls)
+        == 1
+    )
+    assert (
+        stop_calls[0].lineno
+        < zero_calls[0].lineno
+        < select_calls[0].lineno
+        < mode_calls[0].lineno
+    )
 
 
 def test_launch_test_is_wired_for_pytest():

@@ -155,10 +155,10 @@
   </section>
 
   <section class="panel controls" aria-label="移动方向">
-    <button data-direction="forward" aria-label="前进">前进</button>
-    <button data-direction="left" aria-label="左转">左转</button>
-    <button data-direction="right" aria-label="右转">右转</button>
-    <button data-direction="backward" aria-label="后退">后退</button>
+    <button disabled data-direction="forward" aria-label="前进">前进</button>
+    <button disabled data-direction="left" aria-label="左转">左转</button>
+    <button disabled data-direction="right" aria-label="右转">右转</button>
+    <button disabled data-direction="backward" aria-label="后退">后退</button>
   </section>
 
   <section class="actions" aria-label="控制模式">
@@ -176,6 +176,8 @@
   let commandLoopRunning = false;
   let noticeOwner = null;
   const heldMovementKeys = [];
+  const motionButtons = document.querySelectorAll("[data-direction]");
+  let currentMode = null;
 
   speed.addEventListener("input", () => {
     speedValue.textContent = speed.value;
@@ -193,9 +195,29 @@
     });
     const payload = await response.json();
     if (!response.ok) {
-      throw new Error(payload.error || `HTTP ${response.status}`);
+      const error = new Error(
+        payload.error || `HTTP ${response.status}`
+      );
+      error.payload = payload;
+      throw error;
     }
     return payload;
+  }
+
+  function applyMode(mode) {
+    currentMode = mode === "manual" || mode === "automatic"
+      ? mode
+      : null;
+    if (currentMode !== "manual") stopMotion();
+    motionButtons.forEach((button) => {
+      button.disabled = currentMode !== "manual";
+    });
+  }
+
+  function applyResponseMode(payload) {
+    if (Object.prototype.hasOwnProperty.call(payload, "mode")) {
+      applyMode(payload.mode);
+    }
   }
 
   function showRequestFailure(error, owner = "motion") {
@@ -209,15 +231,17 @@
     commandLoopRunning = true;
     while (commandLoopRunning) {
       try {
-        await post("/api/manual-command", {
+        const payload = await post("/api/manual-command", {
           direction: desiredDirection,
           speed_percent: Number(speed.value)
         });
+        applyResponseMode(payload);
         if (noticeOwner === "motion") {
           noticeOwner = null;
           notice.textContent = "";
         }
       } catch (error) {
+        if (error.payload) applyResponseMode(error.payload);
         showRequestFailure(error);
       }
       await delay(100);
@@ -225,6 +249,7 @@
   }
 
   function beginMotion(event) {
+    if (currentMode !== "manual") return;
     desiredDirection = event.currentTarget.dataset.direction;
     event.currentTarget.setPointerCapture(event.pointerId);
   }
@@ -235,6 +260,7 @@
   }
 
   function beginKeyboardMotion(event) {
+    if (currentMode !== "manual") return;
     if ((event.key !== " " && event.key !== "Enter") || event.repeat) return;
     event.preventDefault();
     desiredDirection = event.currentTarget.dataset.direction;
@@ -246,7 +272,7 @@
     stopMotion();
   }
 
-  document.querySelectorAll("[data-direction]").forEach((button) => {
+  motionButtons.forEach((button) => {
     button.addEventListener("pointerdown", beginMotion);
     button.addEventListener("pointerup", stopMotion);
     button.addEventListener("pointercancel", stopMotion);
@@ -264,6 +290,7 @@
   };
 
   function beginWasdMotion(event) {
+    if (currentMode !== "manual") return;
     const key = event.key.toLowerCase();
     const direction = keyboardDirections[key];
     if (direction === undefined || event.repeat) return;
@@ -290,11 +317,16 @@
   document.addEventListener("keyup", endWasdMotion);
 
   async function requestMode(path, successMessage) {
+    applyMode(null);
     try {
-      await post(path, {});
+      const payload = await post(path, {});
+      applyResponseMode(payload);
       noticeOwner = "mode";
-      notice.textContent = successMessage;
+      notice.textContent = payload.pending
+        ? "切换结果尚未确认"
+        : successMessage;
     } catch (error) {
+      if (error.payload) applyResponseMode(error.payload);
       showRequestFailure(error, "mode");
     }
   }
@@ -303,7 +335,6 @@
     requestMode("/api/takeover-manual", "人工接管请求已完成");
   });
   document.getElementById("resume").addEventListener("click", () => {
-    stopMotion();
     requestMode("/api/resume-automatic", "恢复自动导航请求已完成");
   });
 
@@ -312,6 +343,7 @@
   });
   window.addEventListener("pagehide", stopMotion);
   window.addEventListener("blur", stopMotion);
+  applyMode(null);
   commandLoop();
 </script>
 </body>

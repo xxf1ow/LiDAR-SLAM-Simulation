@@ -13,6 +13,20 @@ class ActionUnavailable(RuntimeError):
     pass
 
 
+class _ActionWithMode(RuntimeError):
+    def __init__(self, message: str, mode: str | None) -> None:
+        super().__init__(message)
+        self.mode = mode
+
+
+class ActionConflict(_ActionWithMode):
+    pass
+
+
+class ActionPending(_ActionWithMode):
+    pass
+
+
 def _handler_for(actions, html_path: Path):
     class RobotWebRequestHandler(BaseHTTPRequestHandler):
         def setup(self) -> None:
@@ -87,21 +101,38 @@ def _handler_for(actions, html_path: Path):
             try:
                 payload = self._read_json()
                 if path == "/api/manual-command":
-                    actions.manual_command(
+                    mode = actions.manual_command(
                         payload.get("direction"),
                         payload.get("speed_percent"),
                     )
                 elif path == "/api/takeover-manual":
-                    actions.takeover_manual()
+                    mode = actions.takeover_manual()
                 else:
-                    actions.resume_automatic()
+                    mode = actions.resume_automatic()
             except ValueError as exc:
                 self._send_json(400, {"error": str(exc)})
+                return
+            except ActionConflict as exc:
+                self._send_json(
+                    409,
+                    {"error": str(exc), "mode": exc.mode},
+                )
+                return
+            except ActionPending as exc:
+                self._send_json(
+                    202,
+                    {
+                        "ok": False,
+                        "pending": True,
+                        "error": str(exc),
+                        "mode": exc.mode,
+                    },
+                )
                 return
             except ActionUnavailable as exc:
                 self._send_json(503, {"error": str(exc)})
                 return
-            self._send_json(200, {"ok": True})
+            self._send_json(200, {"ok": True, "mode": mode})
 
         def log_message(self, format: str, *args: object) -> None:
             return
