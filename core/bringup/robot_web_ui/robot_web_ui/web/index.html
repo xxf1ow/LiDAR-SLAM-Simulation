@@ -108,18 +108,33 @@
     [data-direction="backward"] { grid-column: 2; grid-row: 3; }
     .actions {
       display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 10px;
     }
     .actions button {
       min-height: 52px;
       padding: 8px;
     }
-    #takeover {
+    #modeToggle {
       border-color: #8e6726;
       background: #59431f;
     }
-    #resume { background: #26364d; }
+    .feedback {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px 16px;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: .85rem;
+    }
+    .feedback strong {
+      display: block;
+      margin-top: 4px;
+      color: var(--text);
+      font-family: ui-monospace, "Cascadia Mono", monospace;
+    }
+    #feedbackState {
+      grid-column: 1 / -1;
+      margin: 0;
+    }
     .notice {
       min-height: 1.4em;
       margin: 10px 2px 0;
@@ -162,8 +177,12 @@
   </section>
 
   <section class="actions" aria-label="控制模式">
-    <button id="takeover">人工接管</button>
-    <button id="resume">恢复自动导航</button>
+    <button id="modeToggle" disabled>状态同步中…</button>
+  </section>
+  <section class="panel feedback" aria-label="底盘反馈">
+    <span>线速度<strong id="linearVelocity">--</strong></span>
+    <span>角速度<strong id="angularVelocity">--</strong></span>
+    <p id="feedbackState">底盘反馈中断</p>
   </section>
   <p id="notice" class="notice" role="status" aria-live="polite"></p>
 </main>
@@ -172,12 +191,15 @@
   const speed = document.getElementById("speed");
   const speedValue = document.getElementById("speedValue");
   const notice = document.getElementById("notice");
+  const modeToggle = document.getElementById("modeToggle");
   let desiredDirection = "stop";
   let commandLoopRunning = false;
   let noticeOwner = null;
   const heldMovementKeys = [];
   const motionButtons = document.querySelectorAll("[data-direction]");
   let currentMode = null;
+  let modeSwitchPending = false;
+  let buttonMotionOwner = null;
 
   speed.addEventListener("input", () => {
     speedValue.textContent = speed.value;
@@ -204,14 +226,31 @@
     return payload;
   }
 
+  function renderControls() {
+    if (modeSwitchPending) {
+      modeToggle.textContent = "切换中…";
+      modeToggle.disabled = true;
+    } else if (currentMode === "automatic") {
+      modeToggle.textContent = "人工接管";
+      modeToggle.disabled = false;
+    } else if (currentMode === "manual") {
+      modeToggle.textContent = "恢复自动导航";
+      modeToggle.disabled = false;
+    } else {
+      modeToggle.textContent = "状态同步中…";
+      modeToggle.disabled = true;
+    }
+    motionButtons.forEach((button) => {
+      button.disabled = currentMode !== "manual" || modeSwitchPending;
+    });
+  }
+
   function applyMode(mode) {
     currentMode = mode === "manual" || mode === "automatic"
       ? mode
       : null;
     if (currentMode !== "manual") stopMotion();
-    motionButtons.forEach((button) => {
-      button.disabled = currentMode !== "manual";
-    });
+    renderControls();
   }
 
   function applyResponseMode(payload) {
@@ -221,7 +260,7 @@
   }
 
   function showRequestFailure(error, owner = "motion") {
-    if (noticeOwner === "mode" && owner === "motion") return;
+    if (modeSwitchPending && owner === "motion") return;
     noticeOwner = owner;
     notice.textContent = `请求失败：${error.message}`;
   }
@@ -250,36 +289,38 @@
 
   function beginMotion(event) {
     if (currentMode !== "manual") return;
+    buttonMotionOwner = event.currentTarget;
     desiredDirection = event.currentTarget.dataset.direction;
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function stopMotion() {
+    buttonMotionOwner = null;
     heldMovementKeys.length = 0;
     desiredDirection = "stop";
+  }
+
+  function stopOwnedButtonMotion(event) {
+    if (buttonMotionOwner !== event.currentTarget) return;
+    stopMotion();
   }
 
   function beginKeyboardMotion(event) {
     if (currentMode !== "manual") return;
     if ((event.key !== " " && event.key !== "Enter") || event.repeat) return;
     event.preventDefault();
+    buttonMotionOwner = event.currentTarget;
     desiredDirection = event.currentTarget.dataset.direction;
-  }
-
-  function endKeyboardMotion(event) {
-    if (event.key !== " " && event.key !== "Enter") return;
-    event.preventDefault();
-    stopMotion();
   }
 
   motionButtons.forEach((button) => {
     button.addEventListener("pointerdown", beginMotion);
-    button.addEventListener("pointerup", stopMotion);
-    button.addEventListener("pointercancel", stopMotion);
-    button.addEventListener("lostpointercapture", stopMotion);
+    button.addEventListener("pointerup", stopOwnedButtonMotion);
+    button.addEventListener("pointercancel", stopOwnedButtonMotion);
+    button.addEventListener("lostpointercapture", stopOwnedButtonMotion);
     button.addEventListener("keydown", beginKeyboardMotion);
-    button.addEventListener("keyup", endKeyboardMotion);
-    button.addEventListener("blur", stopMotion);
+    button.addEventListener("keyup", stopOwnedButtonMotion);
+    button.addEventListener("blur", stopOwnedButtonMotion);
   });
 
   const keyboardDirections = {
@@ -316,8 +357,21 @@
   document.addEventListener("keydown", beginWasdMotion);
   document.addEventListener("keyup", endWasdMotion);
 
-  async function requestMode(path, successMessage) {
-    applyMode(null);
+  async function requestMode() {
+    if (
+      modeSwitchPending
+      || (currentMode !== "manual" && currentMode !== "automatic")
+    ) return;
+    const observedMode = currentMode;
+    const path = currentMode === "automatic"
+      ? "/api/takeover-manual"
+      : "/api/resume-automatic";
+    const successMessage = observedMode === "automatic"
+      ? "人工接管请求已完成"
+      : "恢复自动导航请求已完成";
+    modeSwitchPending = true;
+    stopMotion();
+    renderControls();
     try {
       const payload = await post(path, {});
       applyResponseMode(payload);
@@ -328,15 +382,13 @@
     } catch (error) {
       if (error.payload) applyResponseMode(error.payload);
       showRequestFailure(error, "mode");
+    } finally {
+      modeSwitchPending = false;
+      renderControls();
     }
   }
 
-  document.getElementById("takeover").addEventListener("click", () => {
-    requestMode("/api/takeover-manual", "人工接管请求已完成");
-  });
-  document.getElementById("resume").addEventListener("click", () => {
-    requestMode("/api/resume-automatic", "恢复自动导航请求已完成");
-  });
+  modeToggle.addEventListener("click", requestMode);
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopMotion();

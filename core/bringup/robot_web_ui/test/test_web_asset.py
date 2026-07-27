@@ -25,18 +25,27 @@ def test_page_contains_only_the_required_mobile_controls():
     assert 'type="range"' in source
     assert 'min="0"' in source
     assert 'max="100"' in source
-    assert "人工接管" in source
-    assert "恢复自动导航" in source
+    assert (
+        source.count(
+            '<button id="modeToggle" disabled>状态同步中…</button>'
+        )
+        == 1
+    )
+    assert 'id="takeover"' not in source
+    assert 'id="resume"' not in source
+    assert 'id="linearVelocity"' in source
+    assert 'id="angularVelocity"' in source
+    assert 'id="feedbackState"' in source
     assert ":focus-visible" in source
     assert "prefers-reduced-motion: reduce" in source
 
 
-def test_page_uses_neutral_api_and_has_no_hardware_feedback_surface():
+def test_page_uses_neutral_api_without_vendor_surface():
     source = HTML.read_text(encoding="utf-8")
 
     assert 'post("/api/manual-command"' in source
-    assert 'requestMode("/api/takeover-manual"' in source
-    assert 'requestMode("/api/resume-automatic"' in source
+    assert '"/api/takeover-manual"' in source
+    assert '"/api/resume-automatic"' in source
     for forbidden in (
         "/api/status",
         "/api/driver",
@@ -92,9 +101,10 @@ def _run_browser_scenario(scenario):
         }}
 
         const elements = new Map(
-          ["speed", "speedValue", "notice", "takeover", "resume"].map(
-            (id) => [id, new FakeElement(id)]
-          )
+          ["speed", "speedValue", "notice", "modeToggle",
+           "linearVelocity", "angularVelocity", "feedbackState"].map(
+             (id) => [id, new FakeElement(id)]
+           )
         );
         const directionButtons = ["forward", "backward", "left", "right"].map(
           (direction) => {{
@@ -182,6 +192,11 @@ def _run_browser_scenario(scenario):
           if (scenario === "initial-and-authoritative-interlock") {{
             assert.strictEqual(currentMode, null);
             assert(directionButtons.every((button) => button.disabled));
+            assert.strictEqual(elements.get("modeToggle").disabled, true);
+            assert.strictEqual(
+              elements.get("modeToggle").textContent,
+              "状态同步中…"
+            );
 
             await directionButtons[0].emit("pointerdown");
             assert.strictEqual(desiredDirection, "stop");
@@ -195,6 +210,11 @@ def _run_browser_scenario(scenario):
             applyMode("manual");
             assert.strictEqual(currentMode, "manual");
             assert(directionButtons.every((button) => !button.disabled));
+            assert.strictEqual(elements.get("modeToggle").disabled, false);
+            assert.strictEqual(
+              elements.get("modeToggle").textContent,
+              "恢复自动导航"
+            );
             desiredDirection = "forward";
             heldMovementKeys.push("w");
             applyMode("automatic");
@@ -202,6 +222,11 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(desiredDirection, "stop");
             assert.deepStrictEqual(heldMovementKeys, []);
             assert(directionButtons.every((button) => button.disabled));
+            assert.strictEqual(elements.get("modeToggle").disabled, false);
+            assert.strictEqual(
+              elements.get("modeToggle").textContent,
+              "人工接管"
+            );
 
             applyMode("manual");
             desiredDirection = "forward";
@@ -209,6 +234,11 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(currentMode, null);
             assert.strictEqual(desiredDirection, "stop");
             assert(directionButtons.every((button) => button.disabled));
+            assert.strictEqual(elements.get("modeToggle").disabled, true);
+            assert.strictEqual(
+              elements.get("modeToggle").textContent,
+              "状态同步中…"
+            );
             return;
           }}
 
@@ -240,10 +270,15 @@ def _run_browser_scenario(scenario):
             for (const eventName of [
               "pointerup", "pointercancel", "lostpointercapture", "blur"
             ]) {{
-              desiredDirection = "forward";
+              await button.emit("pointerdown");
+              assert.strictEqual(desiredDirection, "forward");
               await button.emit(eventName);
               assert.strictEqual(desiredDirection, "stop", eventName);
             }}
+            await button.emit("keydown", {{key: "Enter"}});
+            assert.strictEqual(desiredDirection, "forward");
+            await button.emit("keyup", {{key: "Enter"}});
+            assert.strictEqual(desiredDirection, "stop", "keyup");
             desiredDirection = "forward";
             windowListeners.get("blur")();
             assert.strictEqual(desiredDirection, "stop");
@@ -257,18 +292,77 @@ def _run_browser_scenario(scenario):
             return;
           }}
 
-          if (scenario === "idle-and-mode-actions") {{
-            await tick();
-            assert.strictEqual(requests[1].body.direction, "stop");
-            await elements.get("takeover").emit("click");
+          if (scenario === "stale-button-events") {{
+            await directionButtons[0].emit("pointerdown");
+            await directionButtons[0].emit("pointerup");
+            await directionButtons[1].emit("pointerdown");
+            await directionButtons[0].emit("blur");
+            assert.strictEqual(desiredDirection, "backward");
+            await directionButtons[0].emit("lostpointercapture");
+            assert.strictEqual(desiredDirection, "backward");
+            await directionButtons[1].emit("blur");
+            assert.strictEqual(desiredDirection, "stop");
+            return;
+          }}
+
+          if (scenario === "authoritative-mode-button") {{
+            const modeToggle = elements.get("modeToggle");
+            applyMode(null);
+            assert.strictEqual(modeToggle.disabled, true);
+            assert.strictEqual(modeToggle.textContent, "状态同步中…");
+            const requestCount = requests.length;
+            await modeToggle.emit("click");
+            assert.strictEqual(requests.length, requestCount);
+
+            applyMode("automatic");
+            assert.strictEqual(modeToggle.disabled, false);
+            assert.strictEqual(modeToggle.textContent, "人工接管");
+            const takeoverPromise = modeToggle.emit("click");
+            assert.strictEqual(modeToggle.textContent, "切换中…");
+            assert.strictEqual(modeToggle.disabled, true);
+            assert.strictEqual(desiredDirection, "stop");
             assert(directionButtons.every((button) => button.disabled));
-            await elements.get("resume").emit("click");
-            assert(requests.some((request) =>
-              request.path === "/api/takeover-manual"
-            ));
-            assert(requests.some((request) =>
-              request.path === "/api/resume-automatic"
-            ));
+            assert.strictEqual(requests.at(-1).path, "/api/takeover-manual");
+            const pendingRequestCount = requests.length;
+            await modeToggle.emit("click");
+            assert.strictEqual(requests.length, pendingRequestCount);
+            pending.splice(
+              pending.findIndex((request) =>
+                request.path === "/api/takeover-manual"
+              ),
+              1
+            )[0].resolve({{
+              payload: {{ok: true, mode: "manual"}}
+            }});
+            await takeoverPromise;
+            await flush();
+            assert.strictEqual(currentMode, "manual");
+            assert.strictEqual(modeToggle.disabled, false);
+            assert.strictEqual(modeToggle.textContent, "恢复自动导航");
+            assert(directionButtons.every((button) => !button.disabled));
+
+            await directionButtons[0].emit("pointerdown");
+            assert.strictEqual(desiredDirection, "forward");
+            const resumePromise = modeToggle.emit("click");
+            assert.strictEqual(modeToggle.textContent, "切换中…");
+            assert.strictEqual(modeToggle.disabled, true);
+            assert.strictEqual(desiredDirection, "stop");
+            assert(directionButtons.every((button) => button.disabled));
+            assert.strictEqual(requests.at(-1).path, "/api/resume-automatic");
+            pending.splice(
+              pending.findIndex((request) =>
+                request.path === "/api/resume-automatic"
+              ),
+              1
+            )[0].resolve({{
+              payload: {{ok: true, mode: "automatic"}}
+            }});
+            await resumePromise;
+            await flush();
+            assert.strictEqual(currentMode, "automatic");
+            assert.strictEqual(modeToggle.disabled, false);
+            assert.strictEqual(modeToggle.textContent, "人工接管");
+            assert(directionButtons.every((button) => button.disabled));
             return;
           }}
 
@@ -295,13 +389,16 @@ def _run_browser_scenario(scenario):
           if (scenario === "mode-pending-and-zero-convergence") {{
             await directionButtons[0].emit("pointerdown");
             assert.strictEqual(desiredDirection, "forward");
-            const modePromise = elements.get("takeover").emit("click");
+            const modeToggle = elements.get("modeToggle");
+            const modePromise = modeToggle.emit("click");
             assert.strictEqual(desiredDirection, "stop");
-            assert.strictEqual(currentMode, null);
+            assert.strictEqual(currentMode, "manual");
+            assert.strictEqual(modeToggle.textContent, "切换中…");
+            assert.strictEqual(modeToggle.disabled, true);
             assert(directionButtons.every((button) => button.disabled));
 
             const modeIndex = pending.findIndex((request) =>
-              request.path === "/api/takeover-manual"
+              request.path === "/api/resume-automatic"
             );
             pending.splice(modeIndex, 1)[0].resolve({{
               ok: true,
@@ -309,8 +406,8 @@ def _run_browser_scenario(scenario):
               payload: {{
                 ok: false,
                 pending: true,
-                error: "manual takeover unconfirmed",
-                mode: "automatic"
+                error: "automatic resume unconfirmed",
+                mode: "manual"
               }}
             }});
             await modePromise;
@@ -323,7 +420,9 @@ def _run_browser_scenario(scenario):
               elements.get("notice").textContent,
               "人工接管请求已完成"
             );
-            assert.strictEqual(currentMode, "automatic");
+            assert.strictEqual(currentMode, "manual");
+            assert.strictEqual(modeToggle.disabled, false);
+            assert.strictEqual(modeToggle.textContent, "恢复自动导航");
 
             await tick();
             assert.strictEqual(requests.at(-1).body.direction, "stop");
@@ -382,40 +481,27 @@ def _run_browser_scenario(scenario):
           }}
 
           if (scenario === "mode-notice-ownership") {{
-            await elements.get("takeover").emit("click");
-            await flush();
+            const modeToggle = elements.get("modeToggle");
+            const resumePromise = modeToggle.emit("click");
             const modeIndex = pending.findIndex((request) =>
-              request.path === "/api/takeover-manual"
+              request.path === "/api/resume-automatic"
             );
             assert.notStrictEqual(modeIndex, -1);
             pending.splice(modeIndex, 1)[0].resolve({{
-              ok: false,
-              status: 503,
-              payload: {{error: "manual service unavailable"}}
+              payload: {{ok: true, mode: "automatic"}}
             }});
+            await resumePromise;
             await flush();
-            const expectedNotice = "请求失败：manual service unavailable";
             assert.strictEqual(
               elements.get("notice").textContent,
-              expectedNotice
+              "恢复自动导航请求已完成"
             );
 
             await tick();
             const firstManualIndex = pending.findIndex((request) =>
               request.path === "/api/manual-command"
             );
-            pending.splice(firstManualIndex, 1)[0].resolve();
-            await flush();
-            assert.strictEqual(
-              elements.get("notice").textContent,
-              expectedNotice
-            );
-
-            await tick();
-            const nextManualIndex = pending.findIndex((request) =>
-              request.path === "/api/manual-command"
-            );
-            pending.splice(nextManualIndex, 1)[0].resolve({{
+            pending.splice(firstManualIndex, 1)[0].resolve({{
               ok: false,
               status: 503,
               payload: {{error: "manual publisher unavailable"}}
@@ -423,14 +509,47 @@ def _run_browser_scenario(scenario):
             await flush();
             assert.strictEqual(
               elements.get("notice").textContent,
+              "请求失败：manual publisher unavailable"
+            );
+
+            await tick();
+            const nextManualIndex = pending.findIndex((request) =>
+              request.path === "/api/manual-command"
+            );
+            pending.splice(nextManualIndex, 1)[0].resolve({{
+              payload: {{ok: true, mode: "automatic"}}
+            }});
+            await flush();
+            assert.strictEqual(elements.get("notice").textContent, "");
+
+            const takeoverPromise = modeToggle.emit("click");
+            const takeoverIndex = pending.findIndex((request) =>
+              request.path === "/api/takeover-manual"
+            );
+            pending.splice(takeoverIndex, 1)[0].resolve({{
+              ok: false,
+              status: 503,
+              payload: {{error: "manual service unavailable"}}
+            }});
+            await takeoverPromise;
+            await flush();
+            const expectedNotice = "请求失败：manual service unavailable";
+            assert.strictEqual(
+              elements.get("notice").textContent,
               expectedNotice
             );
+            assert.strictEqual(currentMode, "automatic");
+            assert.strictEqual(modeToggle.disabled, false);
+            assert.strictEqual(modeToggle.textContent, "人工接管");
+            assert(directionButtons.every((button) => button.disabled));
 
             await tick();
             const finalManualIndex = pending.findIndex((request) =>
               request.path === "/api/manual-command"
             );
-            pending.splice(finalManualIndex, 1)[0].resolve();
+            pending.splice(finalManualIndex, 1)[0].resolve({{
+              payload: {{ok: true, mode: "automatic"}}
+            }});
             await flush();
             assert.strictEqual(
               elements.get("notice").textContent,
@@ -503,7 +622,8 @@ def _run_browser_scenario(scenario):
         "initial-and-authoritative-interlock",
         "single-flight-and-stop",
         "all-stop-paths",
-        "idle-and-mode-actions",
+        "stale-button-events",
+        "authoritative-mode-button",
         "manual-conflict-applies-mode",
         "mode-pending-and-zero-convergence",
         "wasd-keyboard",
