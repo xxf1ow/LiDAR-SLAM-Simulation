@@ -5,7 +5,7 @@ from xml.etree import ElementTree
 
 ROOT = Path(__file__).parents[1]
 NODE_PATH = ROOT / "cmd_vel_gate" / "gate_node.py"
-LAUNCH_TEST_PATH = ROOT / "test" / "test_gate_node.launch.py"
+LAUNCH_TEST_PATH = ROOT / "test" / "test_gate_node_launch.py"
 
 
 def _setup_call():
