@@ -240,6 +240,18 @@ def test_mode_service_propagates_success_false(node_module):
     assert len(client.requests) == 1
 
 
+def test_mode_service_rejects_none_response(node_module):
+    node = bare_node(node_module)
+    node._gate_mode = "automatic"
+    node._takeover_client = FakeClient(FakeFuture(response=None))
+
+    with pytest.raises(
+        node_module.ActionUnavailable,
+        match="manual takeover service returned no response",
+    ):
+        node.takeover_manual()
+
+
 def test_future_exception_is_success_when_target_is_observed(node_module):
     node = bare_node(node_module)
     node._gate_mode = "manual"

@@ -182,6 +182,10 @@ class WebUiNode(Node):
             )
 
         response = result["response"]
+        if response is None:
+            raise ActionUnavailable(
+                f"{action_name} service returned no response"
+            )
         if not response.success:
             raise ActionUnavailable(
                 response.message or f"{action_name} request rejected"
