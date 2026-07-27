@@ -82,8 +82,15 @@ Phase 4 `models/factory_model` + `GZ_SIM_RESOURCE_PATH` 就位;**5b 先验图在
 cd core && colcon build --packages-up-to fast_lio robot_gz_bringup && source install/setup.bash
 ros2 launch robot_gz_bringup robot_gz.launch.py                                   # 终端1 仿真(默认不起看模型的 RViz;要看传 rviz:=true)
 ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true  # 终端2 里程计
-ros2 run robot_gz_bringup sticky_teleop.py                                        # 终端3 开车
+# 终端3：仅在这种分阶段 standalone 诊断中直接持续发低速 TwistStamped
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/TwistStamped \
+  '{header: {frame_id: base_link}, twist: {linear: {x: 0.15}, angular: {z: 0.2}}}'
 ```
+
+完整栈不要直接发布 `/cmd_vel`：用 `system_bringup` 启动后，手机访问
+`http://<机器人或仿真主机IP>:8080`。mapping 点击“人工接管”后按住方向按钮
+驾驶；navigation 默认自动，点击“人工接管”屏蔽 Nav2，点击“恢复自动导航”恢复。
+完整栈的 `/cmd_vel` 唯一发布者是 `cmd_vel_gate`。
 
 ### 5d — GICP 先验图定位(在 5c 跑通的基础上加一个终端)
 ```bash

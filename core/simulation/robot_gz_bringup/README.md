@@ -56,6 +56,17 @@ ros2 topic pub /cmd_vel geometry_msgs/msg/TwistStamped \
 预期:Gz GUI 3D 窗口里机器人沿弧线前进;`ros2 topic echo /base_controller/odom --field pose.pose.position` 数值变化。
 > RViz 的 Fixed Frame 默认是 `base_link`(跟车),看不出平移;要在 RViz 看运动把 Fixed Frame 改成 `odom`。
 
+上面的 `ros2 topic pub /cmd_vel ...` 只用于独立启动仿真底层时诊断控制器。
+完整栈改用 `ros2 launch system_bringup bringup.launch.py`，此时只有
+`cmd_vel_gate` 发布 `/cmd_vel`，不要再直接向该话题发布：
+
+- 手机访问 `http://<机器人或仿真主机IP>:8080`
+- mapping：点击“人工接管”后按住方向按钮驾驶
+- navigation：默认自动；点击“人工接管”屏蔽 Nav2，点击“恢复自动导航”恢复
+
+Web 在仿真和真机都走相同的 `/cmd_vel_manual → cmd_vel_gate → /cmd_vel`
+控制器路径，不直接操作或失能硬件，也不能替代物理急停。
+
 ## 5. 裁决
 
 **PASS(Phase 1 完成、进 Phase 2)需全部满足:**

@@ -76,8 +76,10 @@ def _bringup(context, *args, **kwargs):
         ]
         return control_layer + flow_log + [base] + ready_gate(
             ["/points_raw", "/joint_states"], 300.0, "robot_gz(lidar+controller)",
-            [flow("sim 全栈启动中。开车另开终端:cd ~/xxsim/core && source install/setup.bash && "
-                  "ros2 run robot_gz_bringup sticky_teleop.py --ros-args -p use_sim_time:=true"),
+            [flow("手机访问 http://<机器人或仿真主机IP>:8080\n"
+                  "mapping：点击“人工接管”后按住方向按钮驾驶\n"
+                  "navigation：默认自动；点击“人工接管”屏蔽 Nav2，"
+                  "点击“恢复自动导航”恢复"),
              slam_stack],
             settling=stack_cfg["settling"])
 

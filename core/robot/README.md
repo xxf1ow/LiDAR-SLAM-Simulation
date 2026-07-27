@@ -12,43 +12,50 @@
 当前真实设备：
 
 - [`drivers/chassis_8030d/`](drivers/chassis_8030d/README.md)：ZL-8030D
-  厂商 CAN 节点和手机网页手动验收工具。
+  厂商 CAN 节点；正式网页入口位于 `core/bringup/robot_web_ui/`。
 - 真实雷达（含内置 IMU）到货后放入
   `drivers/lidar_<model>/`，保持厂商包与项目适配包分离。
 
 ## 控制链边界
 
-正式底盘链为：
+完整栈的控制链为：
 
 ```text
-/cmd_vel → diff_drive_controller → robot_hardware → can_driver → 8030D → /current_speed → wheel state/odom
+Nav2 → /cmd_vel_auto ─┐
+                      ├→ cmd_vel_gate → /cmd_vel → diff_drive_controller
+Web  → /cmd_vel_manual┘                    → robot_hardware → can_driver → 8030D
+                                                     → /current_speed → wheel state/odom
 ```
 
-一条命令启动厂商节点和真实 ros2_control 底盘：
+`cmd_vel_gate` 是完整 bringup 中唯一的 `/cmd_vel` 发布者。Web 在仿真和真机
+使用同一条控制器路径，不再直接发布厂商输入话题。真机底层由
+`robot_hardware` 独占 `/motor_speed` 和 `/driver`，并从 `/current_speed`
+取得实测轮速。
+
+单独启动真实 ros2_control 底盘做底层诊断：
 
 ```bash
 ros2 launch robot_bringup real_chassis.launch.py
 ```
 
-正式链运行时，`robot_hardware` 独占厂商输入话题 `/motor_speed` 和
-`/driver`，并从 `/current_speed` 取得实测轮速。Web 网页工具是独立的
-设备验收入口：
+此 standalone 场景仍可用 `ros2 topic pub /cmd_vel ...` 测试控制器；完整
+bringup 运行时不要直接发布 `/cmd_vel`。
 
-```text
-手机网页 → can_driver_web_control → can_driver → USBCAN2 → 8030D
-```
+手机访问 `http://<机器人或仿真主机IP>:8080`
 
-Web 网页工具与正式链会发布相同的厂商输入话题，必须互斥运行。当前正式链没有
-软件急停，也没有手动/自动 `/cmd_vel` 仲裁；这些安全与控制权能力留待后续
-Spec，现阶段不能替代物理急停或断电手段。
+- mapping：点击“人工接管”后按住方向按钮驾驶
+- navigation：默认自动；点击“人工接管”屏蔽 Nav2，点击“恢复自动导航”恢复
+
+接管不取消已有 Nav2 goal。浏览器断连且仍处于 manual 模式时，0.5 秒源超时
+会停车。Web 不会失能硬件，不能替代物理急停或断电手段。
 
 ## 构建
 
 ```bash
 cd core
 colcon build --packages-select \
-  robot_description robot_hardware robot_bringup \
-  can_driver can_driver_web_control
+  robot_description robot_hardware robot_bringup cmd_vel_gate \
+  can_driver robot_web_ui system_bringup
 ```
 
 底盘专用构建、启动和验收步骤见设备组 README。

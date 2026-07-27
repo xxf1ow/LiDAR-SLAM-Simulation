@@ -6,6 +6,8 @@
 - **唯一入口 + 集中配置**:`bringup.launch.py` 读 `config/bringup.yaml` 的 `platform`(sim/real) + `mode`(navigation/mapping) 选底层与模式;可变参数按节点分组(`robot_gz`/`robot_bringup`/`slam_stack.*`)。launch 用 `find_repo_root()` 读**源码** config(不经 install),**改 config 不用 rebuild**。无命令行参数。
 - **闸门**:`consistency_check.run()` 同步先跑,失败 `raise`(launch 直接报错、零节点)。无逃生口。
 - **共享上层** `slam_stack.launch.py`:`mode=navigation` 错峰起 fast_lio→gicp→nav2;`mode=mapping` 起 lio_sam(互斥)。
+- **唯一控制出口**:完整 bringup 中 Nav2 发 `/cmd_vel_auto`、Web 发 `/cmd_vel_manual`，
+  只有 `cmd_vel_gate` 发布 `/cmd_vel`；仿真和真机共用这条控制器入口。
 - **一致性检查**(`consistency_check.py`,纯 Python、本机可跑):几何 G1–G5(footprint / 轮参 / weld 常量 / 共位外参 / 限速 ≤ 底盘)、雷达 L1–L4(线数 / 水平 / 频率 / 盲区)。契约类(帧/话题)不纳入。权威源 = `robot_macro.urdf.xacro`。
 
 ## 本机自查(无需 ROS/构建)
@@ -29,6 +31,21 @@ colcon test --packages-select system_bringup && colcon test-result --verbose   #
 ros2 launch system_bringup bringup.launch.py
 #   源码根自动检测(从 launch 文件上溯 core/bringup/system_bringup 或 .git),无需配置。
 ```
+
+## 手机手动控制
+
+手机访问 `http://<机器人或仿真主机IP>:8080`
+
+- mapping：点击“人工接管”后按住方向按钮驾驶
+- navigation：默认自动；点击“人工接管”屏蔽 Nav2，点击“恢复自动导航”恢复
+
+接管只切换 `cmd_vel_gate` 接受的速度源，不会取消已有 Nav2 goal；恢复自动后
+Nav2 可继续输出。浏览器断连且仍处于 manual 模式时，所选源超过 0.5 秒无新命令，
+gate 会持续发布零速。Web 不会失能硬件，不能替代物理急停或断电。
+
+只启动 `robot_gz_bringup` 或 `robot_bringup` 做底层诊断时，仍可用
+`ros2 topic pub /cmd_vel ...` 直接测试控制器；完整 bringup 运行时不要这样做，
+因为 `/cmd_vel` 必须只有 `cmd_vel_gate` 一个发布者。
 
 ## config/bringup.yaml 切换矩阵
 | platform | mode | 底层 | 上层栈 |

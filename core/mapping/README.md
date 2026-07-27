@@ -41,12 +41,9 @@ ros2 launch robot_gz_bringup robot_gz.launch.py
 cd core && source install/setup.bash
 ros2 launch lio_sam run.launch.py
 
-# 终端 3：sticky 键盘遥控,缓慢遍历工厂(use_sim_time 已默认 true,无需再传)
-ros2 run robot_gz_bringup sticky_teleop.py
-#   i/, = 前进/后退   j/l = 左/右转   k或空格 = 停   s = 回正   q = 退出
-#   按一下即设定速度并持续生效(松手照走,不用一直按),再按才改;先按一两下 i 慢速起步即可
-#   把工厂主要通道、墙面、货架都扫到,回环走一圈利于回环检测
-#   (节点以 ~20Hz 持续重发 TwistStamped,压过 diff_drive 的 0.5s cmd_vel_timeout)
+# 分步启动只用于底层诊断；可持续发布低速 TwistStamped 验证控制器，Ctrl+C 即停止
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/TwistStamped \
+  '{header: {frame_id: base_link}, twist: {linear: {x: 0.15}, angular: {z: 0.2}}}'
 
 # 建够后存图 + 转 2D 栅格(一键脚本)
 #   注意:LIO-SAM 存盘前 rm -r 目标目录重建(mapOptmization.cpp:188/414),故脚本存到专门子目录
@@ -61,7 +58,15 @@ bash mapping/save_map.sh
 cd core && source install/setup.bash
 ros2 launch system_bringup bringup.launch.py
 ```
-链路:一致性闸门 → robot_gz → ready_gate[/points_raw, /joint_states] → lio_sam(4 节点 + 自带 RViz)。建图时仍用 `sticky_teleop`(另开终端)开车;**建够后先跑 `bash mapping/save_map.sh`**(此时 lio_sam 仍在跑、service 在线)存盘+转换,完成后再 Ctrl+C 停栈。
+链路:一致性闸门 → robot_gz → ready_gate[/points_raw, /joint_states] → lio_sam(4 节点 + 自带 RViz)。
+
+- 手机访问 `http://<机器人或仿真主机IP>:8080`
+- mapping：点击“人工接管”后按住方向按钮驾驶
+- navigation：默认自动；点击“人工接管”屏蔽 Nav2，点击“恢复自动导航”恢复
+
+完整 bringup 中只有 `cmd_vel_gate` 发布 `/cmd_vel`。浏览器断连且仍处于 manual
+模式时，0.5 秒源超时会停车。**建够后先跑 `bash mapping/save_map.sh`**
+(此时 lio_sam 仍在跑、service 在线)存盘+转换,完成后再 Ctrl+C 停栈。
 
 - ready_gate 把"手动判断起 lio_sam 的时机"换成"等 /points_raw + /joint_states 出现 + settling",其余等价于手动分步。
 - **use_sim_time**:lio_sam 不接收 launch arg(靠 `params.yaml` 的 `use_sim_time:true`),sim 下与 gz /clock 一致、无需处理。real mapping 需另备 `params_real.yaml`(`use_sim_time:false` + real topics,run.launch.py 已接收 `params_file` arg),属 real 实现范畴(本期骨架)。
@@ -77,4 +82,5 @@ ros2 launch system_bringup bringup.launch.py
 - LIO-SAM 起来即报 `extrinsic`/`frame` 或点云方向错乱 → 确认补丁已是最新(`lidarFrame:velodyne`、`extrinsicTrans:[0,0,0]`),且构建机重新 apply 并 `colcon build lio_sam`。
 - `map→base_footprint` TF 断 → 查 `base_footprint` 是否在 URDF(5a)、`robot_state_publisher` 是否在跑、轮式 TF 是否已关(否则与 LIO-SAM 抢 odom→base)。
 - 地图发散/重影 → 多为驱动太快或转太急(雷达 10Hz、RTF<1),少按几下 `i`/`j`/`l` 降速、多用 `s` 回正;或工厂特征不足处(空旷区)正常,回到特征区会收敛。
-- 车不动 → ① 确认 teleop 终端处于焦点(cbreak 读的是该窗口键入);② sticky_teleop 已默认 `use_sim_time=true`、发 `TwistStamped`(Humble diff_drive 默认),勿用 `-p use_sim_time:=false` / `-p stamped:=false` 覆盖回去。
+- 车不动 → 完整 bringup 确认网页已点击“人工接管”且仍在按住方向按钮；
+  分步底层诊断确认持续发布的是 `TwistStamped` 而不是 `Twist`。
