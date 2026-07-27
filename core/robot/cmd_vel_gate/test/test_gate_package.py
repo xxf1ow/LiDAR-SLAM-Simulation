@@ -279,3 +279,29 @@ def test_launch_test_is_wired_for_pytest():
         ast.unparse(decorator)
         for decorator in entrypoints[0].decorator_list
     ] == ["pytest.mark.launch_test"]
+
+
+def test_launch_mode_subscription_is_created_after_gate_is_ready():
+    tree = ast.parse(LAUNCH_TEST_PATH.read_text(encoding="utf-8"))
+    setup = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "setUp"
+    ]
+    assert len(setup) == 1
+
+    service_waits = _attribute_calls(setup[0], "wait_for_service")
+    mode_subscriptions = [
+        call
+        for call in _attribute_calls(setup[0], "create_subscription")
+        if len(call.args) >= 2
+        and isinstance(call.args[1], ast.Constant)
+        and call.args[1].value == "/cmd_vel_gate/mode"
+    ]
+
+    assert len(service_waits) == 2
+    assert len(mode_subscriptions) == 1
+    assert (
+        min(call.lineno for call in service_waits)
+        < mode_subscriptions[0].lineno
+    )

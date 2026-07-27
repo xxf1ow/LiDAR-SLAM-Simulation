@@ -71,6 +71,11 @@ class TestCmdVelGate(unittest.TestCase):
             Trigger,
             "/cmd_vel_gate/resume_automatic",
         )
+
+        self.assertTrue(self._manual_client.wait_for_service(timeout_sec=5.0))
+        self.assertTrue(
+            self._automatic_client.wait_for_service(timeout_sec=5.0)
+        )
         self._modes = []
         mode_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -83,11 +88,6 @@ class TestCmdVelGate(unittest.TestCase):
             "/cmd_vel_gate/mode",
             lambda message: self._modes.append(message.data),
             mode_qos,
-        )
-
-        self.assertTrue(self._manual_client.wait_for_service(timeout_sec=5.0))
-        self.assertTrue(
-            self._automatic_client.wait_for_service(timeout_sec=5.0)
         )
         self.assertTrue(
             self._wait_until(
