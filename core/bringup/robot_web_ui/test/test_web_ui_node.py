@@ -30,6 +30,15 @@ def node_module(monkeypatch):
         def __init__(self, data=""):
             self.data = data
 
+    class FakeOdometry:
+        def __init__(self):
+            self.twist = types.SimpleNamespace(
+                twist=types.SimpleNamespace(
+                    linear=types.SimpleNamespace(x=0.0),
+                    angular=types.SimpleNamespace(z=0.0),
+                )
+            )
+
     rclpy = types.ModuleType("rclpy")
     rclpy_node = types.ModuleType("rclpy.node")
     rclpy_node.Node = FakeNode
@@ -46,6 +55,9 @@ def node_module(monkeypatch):
     geometry_msgs = types.ModuleType("geometry_msgs")
     geometry_msgs_msg = types.ModuleType("geometry_msgs.msg")
     geometry_msgs_msg.TwistStamped = FakeTwistStamped
+    nav_msgs = types.ModuleType("nav_msgs")
+    nav_msgs_msg = types.ModuleType("nav_msgs.msg")
+    nav_msgs_msg.Odometry = FakeOdometry
     std_srvs = types.ModuleType("std_srvs")
     std_srvs_srv = types.ModuleType("std_srvs.srv")
     std_srvs_srv.Trigger = FakeTrigger
@@ -61,6 +73,8 @@ def node_module(monkeypatch):
         "ament_index_python.packages": ament_packages,
         "geometry_msgs": geometry_msgs,
         "geometry_msgs.msg": geometry_msgs_msg,
+        "nav_msgs": nav_msgs,
+        "nav_msgs.msg": nav_msgs_msg,
         "std_msgs": std_msgs,
         "std_msgs.msg": std_msgs_msg,
         "std_srvs": std_srvs,
@@ -202,6 +216,63 @@ def test_gate_mode_callback_tracks_authoritative_mode(node_module):
     node._gate_mode_callback(types.SimpleNamespace(data="manual"))
 
     assert node._gate_mode == "manual"
+
+
+def test_motion_status_is_absent_before_odometry_feedback(node_module):
+    node = bare_node(node_module)
+    node._odom_feedback = None
+
+    assert node.motion_status() == {
+        "linear_x": None,
+        "angular_z": None,
+        "feedback_fresh": False,
+    }
+
+
+def test_motion_status_returns_fresh_odometry_snapshot(
+    node_module, monkeypatch
+):
+    clock = iter((10.0, 10.49))
+    monkeypatch.setattr(
+        node_module.time,
+        "monotonic",
+        lambda: next(clock),
+    )
+    node = bare_node(node_module)
+    message = node_module.Odometry()
+    message.twist.twist.linear.x = 0.3
+    message.twist.twist.angular.z = -0.2
+
+    node._odom_callback(message)
+
+    assert node.motion_status() == {
+        "linear_x": 0.3,
+        "angular_z": -0.2,
+        "feedback_fresh": True,
+    }
+
+
+def test_motion_status_expires_at_timeout_boundary(
+    node_module, monkeypatch
+):
+    clock = iter((10.0, 10.5))
+    monkeypatch.setattr(
+        node_module.time,
+        "monotonic",
+        lambda: next(clock),
+    )
+    node = bare_node(node_module)
+    message = node_module.Odometry()
+    message.twist.twist.linear.x = 0.3
+    message.twist.twist.angular.z = -0.2
+
+    node._odom_callback(message)
+
+    assert node.motion_status() == {
+        "linear_x": None,
+        "angular_z": None,
+        "feedback_fresh": False,
+    }
 
 
 @pytest.mark.parametrize("reported_mode", ["", "stopped", "MANUAL"])

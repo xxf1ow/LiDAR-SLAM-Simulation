@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import threading
+import time
 from pathlib import Path
 
 import rclpy
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
+from nav_msgs.msg import Odometry
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -23,6 +25,9 @@ from .http_server import (
     create_server,
 )
 from .manual_command import command_values
+
+
+ODOM_TIMEOUT = 0.5
 
 
 class WebUiNode(Node):
@@ -43,6 +48,7 @@ class WebUiNode(Node):
         self._max_linear = float(max_linear)
         self._max_angular = float(max_angular)
         self._gate_mode = None
+        self._odom_feedback = None
 
         self._manual_publisher = self.create_publisher(
             TwistStamped,
@@ -60,6 +66,12 @@ class WebUiNode(Node):
             "/cmd_vel_gate/mode",
             self._gate_mode_callback,
             mode_qos,
+        )
+        self._odom_subscription = self.create_subscription(
+            Odometry,
+            "/base_controller/odom",
+            self._odom_callback,
+            10,
         )
         self._takeover_client = self.create_client(
             Trigger,
@@ -128,6 +140,30 @@ class WebUiNode(Node):
     def _gate_mode_callback(self, message: String) -> None:
         if message.data in {"manual", "automatic"}:
             self._gate_mode = message.data
+
+    def _odom_callback(self, message: Odometry) -> None:
+        self._odom_feedback = (
+            float(message.twist.twist.linear.x),
+            float(message.twist.twist.angular.z),
+            time.monotonic(),
+        )
+
+    def motion_status(self) -> dict[str, object]:
+        feedback = self._odom_feedback
+        if (
+            feedback is None
+            or time.monotonic() - feedback[2] >= ODOM_TIMEOUT
+        ):
+            return {
+                "linear_x": None,
+                "angular_z": None,
+                "feedback_fresh": False,
+            }
+        return {
+            "linear_x": feedback[0],
+            "angular_z": feedback[1],
+            "feedback_fresh": True,
+        }
 
     def takeover_manual(self) -> str:
         return self._call_mode_service(

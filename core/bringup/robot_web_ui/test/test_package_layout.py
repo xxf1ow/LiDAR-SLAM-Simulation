@@ -14,6 +14,7 @@ def test_package_declares_runtime_dependencies():
     assert dependencies == {
         "ament_index_python",
         "geometry_msgs",
+        "nav_msgs",
         "rclpy",
         "std_msgs",
         "std_srvs",
@@ -51,17 +52,19 @@ def test_node_has_exact_ros_contract_and_parameters():
         if isinstance(call.func, ast.Attribute)
         and call.func.attr == "create_subscription"
     ]
-    assert len(subscriptions) == 1
-    assert ast.unparse(subscriptions[0].args[0]) == "String"
-    assert (
-        ast.literal_eval(subscriptions[0].args[1])
-        == "/cmd_vel_gate/mode"
-    )
-    assert (
-        ast.unparse(subscriptions[0].args[2])
-        == "self._gate_mode_callback"
-    )
+    assert [
+        (
+            ast.unparse(call.args[0]),
+            ast.literal_eval(call.args[1]),
+            ast.unparse(call.args[2]),
+        )
+        for call in subscriptions
+    ] == [
+        ("String", "/cmd_vel_gate/mode", "self._gate_mode_callback"),
+        ("Odometry", "/base_controller/odom", "self._odom_callback"),
+    ]
     assert ast.unparse(subscriptions[0].args[3]) == "mode_qos"
+    assert ast.literal_eval(subscriptions[1].args[3]) == 10
 
     qos_profiles = [
         call

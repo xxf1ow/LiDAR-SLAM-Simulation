@@ -21,6 +21,15 @@ class FakeActions:
         self.conflict = False
         self.pending = False
         self.mode = "manual"
+        self.motion_status_calls = 0
+
+    def motion_status(self):
+        self.motion_status_calls += 1
+        return {
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
+        }
 
     def manual_command(self, direction, speed_percent):
         command_values(direction, speed_percent, 1.5, 2.0)
@@ -126,8 +135,12 @@ def test_manual_command_calls_action_once(tmp_path):
         assert response_json(response) == {
             "ok": True,
             "mode": "manual",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
         }
         assert actions.calls == [("manual_command", "forward", 20)]
+        assert actions.motion_status_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -155,8 +168,12 @@ def test_mode_endpoints_call_corresponding_action_once(
                 if path == "/api/takeover-manual"
                 else "automatic"
             ),
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
         }
         assert actions.calls == [expected_call]
+        assert actions.motion_status_calls == 1
 
 
 @pytest.mark.parametrize(
@@ -297,8 +314,12 @@ def test_manual_command_conflict_returns_409(tmp_path):
         assert response_json(response) == {
             "error": "manual control is not active",
             "mode": "automatic",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
         }
         assert actions.calls == []
+        assert actions.motion_status_calls == 1
 
 
 def test_pending_mode_switch_returns_202_with_observed_mode(tmp_path):
@@ -317,8 +338,12 @@ def test_pending_mode_switch_returns_202_with_observed_mode(tmp_path):
             "pending": True,
             "error": "manual takeover unconfirmed",
             "mode": None,
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
         }
         assert actions.calls == []
+        assert actions.motion_status_calls == 1
 
 
 def test_create_server_is_serial_http_server(tmp_path):

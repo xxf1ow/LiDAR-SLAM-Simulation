@@ -189,6 +189,67 @@ def _run_browser_scenario(scenario):
             speed_percent: 20
           }});
 
+          if (scenario === "motion-feedback") {{
+            applyMotionFeedback({{
+              linear_x: 0.25,
+              angular_z: -0.1,
+              feedback_fresh: true
+            }});
+            assert.strictEqual(
+              elements.get("linearVelocity").textContent,
+              "0.25 m/s"
+            );
+            assert.strictEqual(
+              elements.get("angularVelocity").textContent,
+              "-0.10 rad/s"
+            );
+            assert.strictEqual(
+              elements.get("feedbackState").textContent,
+              "底盘反馈正常"
+            );
+
+            applyMotionFeedback({{
+              linear_x: null,
+              angular_z: null,
+              feedback_fresh: false
+            }});
+            assert.strictEqual(
+              elements.get("linearVelocity").textContent,
+              "--"
+            );
+            assert.strictEqual(
+              elements.get("angularVelocity").textContent,
+              "--"
+            );
+            assert.strictEqual(
+              elements.get("feedbackState").textContent,
+              "底盘反馈中断"
+            );
+
+            await resolveNext({{
+              payload: {{
+                ok: true,
+                mode: "manual",
+                linear_x: 0.25,
+                angular_z: -0.1,
+                feedback_fresh: true
+              }}
+            }});
+            assert.strictEqual(
+              elements.get("linearVelocity").textContent,
+              "0.25 m/s"
+            );
+            assert.strictEqual(
+              elements.get("angularVelocity").textContent,
+              "-0.10 rad/s"
+            );
+            assert.strictEqual(
+              elements.get("feedbackState").textContent,
+              "底盘反馈正常"
+            );
+            return;
+          }}
+
           if (scenario === "initial-and-authoritative-interlock") {{
             assert.strictEqual(currentMode, null);
             assert(directionButtons.every((button) => button.disabled));
@@ -376,13 +437,28 @@ def _run_browser_scenario(scenario):
               status: 409,
               payload: {{
                 error: "manual control is not active",
-                mode: "automatic"
+                mode: "automatic",
+                linear_x: 0.25,
+                angular_z: -0.1,
+                feedback_fresh: true
               }}
             }});
             await flush();
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(desiredDirection, "stop");
             assert(directionButtons.every((button) => button.disabled));
+            assert.strictEqual(
+              elements.get("linearVelocity").textContent,
+              "0.25 m/s"
+            );
+            assert.strictEqual(
+              elements.get("angularVelocity").textContent,
+              "-0.10 rad/s"
+            );
+            assert.strictEqual(
+              elements.get("feedbackState").textContent,
+              "底盘反馈正常"
+            );
             return;
           }}
 
@@ -620,6 +696,7 @@ def _run_browser_scenario(scenario):
     "scenario",
     [
         "initial-and-authoritative-interlock",
+        "motion-feedback",
         "single-flight-and-stop",
         "all-stop-paths",
         "stale-button-events",

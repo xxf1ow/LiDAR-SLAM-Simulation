@@ -54,6 +54,16 @@ def _handler_for(actions, html_path: Path):
                 body,
             )
 
+        def _send_action_json(
+            self,
+            status: int,
+            payload: dict[str, object],
+        ) -> None:
+            self._send_json(
+                status,
+                {**payload, **actions.motion_status()},
+            )
+
         def _read_json(self) -> dict[str, object]:
             if self.headers.get_content_type() != "application/json":
                 raise ValueError("Content-Type must be application/json")
@@ -113,13 +123,13 @@ def _handler_for(actions, html_path: Path):
                 self._send_json(400, {"error": str(exc)})
                 return
             except ActionConflict as exc:
-                self._send_json(
+                self._send_action_json(
                     409,
                     {"error": str(exc), "mode": exc.mode},
                 )
                 return
             except ActionPending as exc:
-                self._send_json(
+                self._send_action_json(
                     202,
                     {
                         "ok": False,
@@ -132,7 +142,7 @@ def _handler_for(actions, html_path: Path):
             except ActionUnavailable as exc:
                 self._send_json(503, {"error": str(exc)})
                 return
-            self._send_json(200, {"ok": True, "mode": mode})
+            self._send_action_json(200, {"ok": True, "mode": mode})
 
         def log_message(self, format: str, *args: object) -> None:
             return

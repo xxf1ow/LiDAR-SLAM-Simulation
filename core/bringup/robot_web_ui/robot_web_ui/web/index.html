@@ -192,6 +192,9 @@
   const speedValue = document.getElementById("speedValue");
   const notice = document.getElementById("notice");
   const modeToggle = document.getElementById("modeToggle");
+  const linearVelocity = document.getElementById("linearVelocity");
+  const angularVelocity = document.getElementById("angularVelocity");
+  const feedbackState = document.getElementById("feedbackState");
   let desiredDirection = "stop";
   let commandLoopRunning = false;
   let noticeOwner = null;
@@ -209,6 +212,22 @@
     return new Promise((resolve) => setTimeout(resolve, milliseconds));
   }
 
+  function applyMotionFeedback(payload) {
+    if (
+      payload.feedback_fresh === true
+      && Number.isFinite(payload.linear_x)
+      && Number.isFinite(payload.angular_z)
+    ) {
+      linearVelocity.textContent = `${payload.linear_x.toFixed(2)} m/s`;
+      angularVelocity.textContent = `${payload.angular_z.toFixed(2)} rad/s`;
+      feedbackState.textContent = "底盘反馈正常";
+      return;
+    }
+    linearVelocity.textContent = "--";
+    angularVelocity.textContent = "--";
+    feedbackState.textContent = "底盘反馈中断";
+  }
+
   async function post(path, body) {
     const response = await fetch(path, {
       method: "POST",
@@ -216,6 +235,13 @@
       body: JSON.stringify(body)
     });
     const payload = await response.json();
+    if (
+      Object.prototype.hasOwnProperty.call(payload, "linear_x")
+      && Object.prototype.hasOwnProperty.call(payload, "angular_z")
+      && Object.prototype.hasOwnProperty.call(payload, "feedback_fresh")
+    ) {
+      applyMotionFeedback(payload);
+    }
     if (!response.ok) {
       const error = new Error(
         payload.error || `HTTP ${response.status}`
