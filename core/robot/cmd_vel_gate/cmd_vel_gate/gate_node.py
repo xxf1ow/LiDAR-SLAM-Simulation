@@ -2,6 +2,7 @@ import time
 
 import rclpy
 from geometry_msgs.msg import TwistStamped
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import (
     DurabilityPolicy,
@@ -112,9 +113,11 @@ def main(args=None) -> None:
     node = CmdVelGate()
     try:
         rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        rclpy.try_shutdown()
 
 
 if __name__ == "__main__":
