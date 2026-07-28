@@ -1,0 +1,20 @@
+vanjee_lidar:
+  ros__parameters:
+    lidar_type: vanjee_722
+    host_address: 192.168.2.88
+    lidar_address: 192.168.2.86
+    host_msop_port: 3001
+    lidar_msop_port: 3333
+    start_angle: 0.0
+    end_angle: 360.0
+    min_distance: 0.05
+    max_distance: 70.0
+    wait_for_difop: true
+    config_from_file: false
+    use_lidar_clock: false
+    ts_first_point: true
+    dense_points: false
+    lidar_frame: velodyne
+    imu_frame: imu_link
+    point_cloud_topic: /points_raw
+    imu_topic: /imu/data

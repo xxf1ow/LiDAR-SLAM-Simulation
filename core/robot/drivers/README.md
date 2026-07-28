@@ -19,5 +19,5 @@ drivers/
 - 正式网页控制位于 `core/bringup/robot_web_ui/`，通过 `cmd_vel_gate` 走统一
   `/cmd_vel` 控制器路径，不放在厂商驱动目录。
 - 正式运行时，同一个串口、CAN 或 USB 设备只能有一个进程独占。
-- 雷达驱动应向上层稳定提供 `/points_raw` 和 IMU 契约；若厂商输出不同，
-  由项目适配包负责 remap、字段和 frame 规范化。
+- [Vanjee 722 ROS 2 驱动](lidar_vanjee_722/vanjee_lidar_ros/README.md)
+  向上层提供 `/points_raw` 和 IMU 标准消息契约。

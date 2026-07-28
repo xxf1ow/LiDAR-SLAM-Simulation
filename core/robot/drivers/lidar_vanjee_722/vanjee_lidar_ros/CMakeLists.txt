@@ -31,6 +31,18 @@ ament_target_dependencies(vanjee_lidar_support PUBLIC
   sensor_msgs
 )
 
+add_executable(vanjee_lidar_node src/vanjee_lidar_node.cpp)
+target_compile_features(vanjee_lidar_node PUBLIC cxx_std_17)
+target_link_libraries(vanjee_lidar_node vanjee_lidar_support)
+ament_target_dependencies(vanjee_lidar_node rclcpp sensor_msgs)
+
+install(TARGETS vanjee_lidar_node
+  RUNTIME DESTINATION lib/${PROJECT_NAME}
+)
+install(DIRECTORY config launch doc
+  DESTINATION share/${PROJECT_NAME}
+)
+
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_driver_config test/test_driver_config.cpp)

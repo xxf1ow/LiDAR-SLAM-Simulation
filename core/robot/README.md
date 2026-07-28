@@ -13,8 +13,8 @@
 
 - [`drivers/chassis_8030d/`](drivers/chassis_8030d/README.md)：ZL-8030D
   厂商 CAN 节点；正式网页入口位于 `core/bringup/robot_web_ui/`。
-- 真实雷达（含内置 IMU）到货后放入
-  `drivers/lidar_<model>/`，保持厂商包与项目适配包分离。
+- [Vanjee 722 ROS 2 驱动](drivers/lidar_vanjee_722/vanjee_lidar_ros/README.md)：
+  向上层提供 `/points_raw` 和 `/imu/data` 标准消息。
 
 ## 控制链边界
 
