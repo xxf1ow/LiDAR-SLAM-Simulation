@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 
+#include <array>
+#include <limits>
+#include <utility>
+
 #include "vanjee_lidar_ros/driver_config.hpp"
 
 namespace vlr = vanjee_lidar_ros;
@@ -50,4 +54,83 @@ TEST(DriverConfig, RejectsInvalidInputsWithoutVendorExit) {
   config.max_distance = config.min_distance;
   EXPECT_FALSE(vlr::make_driver_param(config, param, error));
   EXPECT_EQ(error, "max_distance must be greater than min_distance");
+}
+
+TEST(DriverConfig, RejectsNonFiniteDistanceLimits) {
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float infinity = std::numeric_limits<float>::infinity();
+  const std::array<std::pair<float, float>, 3> limits{{
+      {nan, 70.0F},
+      {0.05F, nan},
+      {0.05F, infinity},
+  }};
+
+  for (const auto &[min_distance, max_distance] : limits) {
+    vlr::DriverConfig config;
+    config.min_distance = min_distance;
+    config.max_distance = max_distance;
+    vjl::WJDriverParam param;
+    std::string error;
+
+    EXPECT_FALSE(vlr::make_driver_param(config, param, error));
+    EXPECT_EQ(error, "distance limits must be finite");
+  }
+}
+
+TEST(DriverConfig, RejectsZeroMsopPorts) {
+  for (const bool host_port : {true, false}) {
+    vlr::DriverConfig config;
+    if (host_port) {
+      config.host_msop_port = 0;
+    } else {
+      config.lidar_msop_port = 0;
+    }
+    vjl::WJDriverParam param;
+    std::string error;
+
+    EXPECT_FALSE(vlr::make_driver_param(config, param, error));
+    EXPECT_EQ(error, "MSOP ports must be non-zero");
+  }
+}
+
+TEST(DriverConfig, RejectsNegativeMinimumDistance) {
+  vlr::DriverConfig config;
+  config.min_distance = -0.01F;
+  vjl::WJDriverParam param;
+  std::string error;
+
+  EXPECT_FALSE(vlr::make_driver_param(config, param, error));
+  EXPECT_EQ(error, "min_distance must be non-negative");
+}
+
+TEST(DriverConfig, RejectsEmptyFrameNames) {
+  for (const bool lidar_frame : {true, false}) {
+    vlr::DriverConfig config;
+    if (lidar_frame) {
+      config.lidar_frame.clear();
+    } else {
+      config.imu_frame.clear();
+    }
+    vjl::WJDriverParam param;
+    std::string error;
+
+    EXPECT_FALSE(vlr::make_driver_param(config, param, error));
+    EXPECT_EQ(error, "frame names must be non-empty");
+  }
+}
+
+TEST(DriverConfig, RejectsEmptyTopicNames) {
+  for (const bool point_cloud_topic : {true, false}) {
+    vlr::DriverConfig config;
+    if (point_cloud_topic) {
+      config.point_cloud_topic.clear();
+    } else {
+      config.imu_topic.clear();
+    }
+    vjl::WJDriverParam param;
+    std::string error;
+
+    EXPECT_FALSE(vlr::make_driver_param(config, param, error));
+    EXPECT_EQ(error, "topic names must be non-empty");
+  }
 }

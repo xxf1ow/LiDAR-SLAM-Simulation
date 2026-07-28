@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cctype>
+#include <cmath>
 #include <string>
 #include <utility>
 
@@ -86,6 +87,11 @@ bool make_driver_param(
   }
   if (config.host_msop_port == 0 || config.lidar_msop_port == 0) {
     error = "MSOP ports must be non-zero";
+    return false;
+  }
+  if (!std::isfinite(config.min_distance) ||
+      !std::isfinite(config.max_distance)) {
+    error = "distance limits must be finite";
     return false;
   }
   if (config.min_distance < 0.0F) {
