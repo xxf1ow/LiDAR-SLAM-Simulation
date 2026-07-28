@@ -1,0 +1,128 @@
+Lio-Sam算法建图
+本算法在Orin-Nano主板上编译通过并且成功运行，Orin-Nano主板系统环境：Ubuntu22.04+ROS2- Humble。
+
+1、启动指令
+打开终端1，输入以下指令，启动Lio-Sam建图程序，
+
+ros2 launch lio_sam run.launch.py
+程序启动后，会打开一个rviz，用于显示建图过程，
+
+打开终端2，输入以下指令，启动32线激光雷达
+
+ros2 launch vanjee_lidar_sdk start.py
+然后，缓慢移动雷达，rviz中的点云地图会逐渐生成.
+
+2、保存地图
+打开终端3，输入以下指令保存地图，
+
+ros2 service call /lio_sam/save_map lio_sam/srv/SaveMap "{resolution: 0.5 , destination: /Downloads/LioSam}"
+这里的resolution表示采样率，destination表示要保存的文件夹，这里给定的/Dowloads/LioSam，表示保存的点云地图会放在~/Dowloads/LioSam目录下，代码中是加上了个~。
+
+然后，我们可以在~/Dowloads/LioSam的目录下，看到生成了5个.pcd文件，其中GlobalMap.pcd就是全局点云地图，可以用在图像化界面中，使用以下指令查看全局点云地图，
+
+cd ~/Dowloads/LioSam #这里的路径根据实际保存的地址做修改
+pcl_viewer GlobalMap.pcd
+参数表如下，
+
+/**:
+  ros__parameters:
+
+    # Topics
+    pointCloudTopic: "/rslidar_points"                   # Point cloud data
+    imuTopic: "/vanjee_lidar_imu_packets"                        # IMU data
+    odomTopic: "odometry/imu"                    # IMU pre-preintegration odometry, same frequency as IMU
+    gpsTopic: "odometry/gpsz"                    # GPS odometry topic from navsat, see module_navsat.launch file
+
+    # Frames
+    lidarFrame: "vanjee_lidar"
+    baselinkFrame: "base_link"
+    odometryFrame: "odom"
+    mapFrame: "map"
+
+    # GPS Settings
+    useImuHeadingInitialization: false           # if using GPS data, set to "true"
+    useGpsElevation: false                       # if GPS elevation is bad, set to "false"
+    gpsCovThreshold: 2.0                         # m^2, threshold for using GPS data
+    poseCovThreshold: 25.0                       # m^2, threshold for using GPS data
+
+    # Export settings
+    savePCD: true                               # https://github.com/TixiaoShan/LIO-SAM/issues/3
+
+    # Sensor Settings
+    sensor: velodyne                               # lidar sensor type, either 'velodyne', 'ouster' or 'livox'
+    N_SCAN: 32                                   # number of lidar channels (i.e., Velodyne/Ouster: 16, 32, 64, 128, Livox Horizon: 6)
+    Horizon_SCAN: 2000                            # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
+    downsampleRate: 1                            # default: 1. Downsample your data if too many
+    # points. i.e., 16 = 64 / 4, 16 = 16 / 1
+    lidarMinRange: 0.3                           # default: 1.0, minimum lidar range to be used
+    lidarMaxRange: 40.0                        # default: 1000.0, maximum lidar range to be used
+    maxFeatureNum: 300
+    
+
+    # IMU Settings
+    imuAccNoise: 3.9939570888238808e-03
+    imuGyrNoise: 1.5636343949698187e-03
+    imuAccBiasN: 6.4356659353532566e-05
+    imuGyrBiasN: 3.5640318696367613e-05
+
+    imuGravity: 9.80511
+    imuRPYWeight: 0.01
+    
+    maxVel: 50.0       
+    maxIter: 4          
+    maxNoise: 0.01       
+    accGating: 0.5     
+    gyrGating: 0.5
+
+    extrinsicTrans:  [ 0.0,  0.0,  0.0 ]
+    extrinsicRot:    [1.0,  0.0,  0.0,
+                       0.0,  1.0,  0.0,
+                       0.0,  0.0, 1.0 ]
+    extrinsicRPY: [1.0, 0.0, 0.0,
+                      0.0, 1.0, 0.0,
+                      0.0, 0.0, 1.0]
+
+    # LOAM feature threshold
+    edgeThreshold: 0.1
+    surfThreshold: 0.1
+    edgeFeatureMinValidNum: 5
+    surfFeatureMinValidNum: 30
+
+    # voxel filter paprams
+    odometrySurfLeafSize: 0.2                     # default: 0.4 - outdoor, 0.2 - indoor
+    mappingCornerLeafSize: 0.1                    # default: 0.2 - outdoor, 0.1 - indoor
+    mappingSurfLeafSize: 0.2                      # default: 0.4 - outdoor, 0.2 - indoor
+
+    # robot motion constraint (in case you are using a 2D robot)
+    z_tollerance: 1000.0                          # meters
+    rotation_tollerance: 1000.0                   # radians
+
+    # CPU Params
+    numberOfCores: 3                              # number of cores for mapping optimization
+    mappingProcessInterval: 0.                  # seconds, regulate mapping frequency
+
+    # Surrounding map
+    surroundingkeyframeAddingDistThreshold: 1.0   # meters, regulate keyframe adding threshold
+    surroundingkeyframeAddingAngleThreshold: 0.2  # radians, regulate keyframe adding threshold
+    surroundingKeyframeDensity: 2.0               # meters, downsample surrounding keyframe poses   
+    surroundingKeyframeSearchRadius: 50.0         # meters, within n meters scan-to-map optimization
+    # (when loop closure disabled)
+
+    # Loop closure
+    loopClosureEnableFlag: false
+    loopClosureFrequency: 1.0                     # Hz, regulate loop closure constraint add frequency
+    surroundingKeyframeSize: 25                   # submap size (when loop closure enabled)
+    historyKeyframeSearchRadius: 15.0             # meters, key frame that is within n meters from
+    # current pose will be considerd for loop closure
+    historyKeyframeSearchTimeDiff: 30.0           # seconds, key frame that is n seconds older will be
+    # considered for loop closure
+    historyKeyframeSearchNum: 25                  # number of hostory key frames will be fused into a
+    # submap for loop closure
+    historyKeyframeFitnessScore: 0.3              # icp threshold, the smaller the better alignment
+
+    # Visualization
+    globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius
+    globalMapVisualizationPoseDensity: 10.0       # meters, global map visualization keyframe density
+    globalMapVisualizationLeafSize: 1.0           # meters, global map visualization cloud density
+    
+根据实际情况进行调试修改。

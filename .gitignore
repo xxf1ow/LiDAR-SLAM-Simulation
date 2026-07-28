@@ -1,22 +1,12 @@
-*codegraph*
-
+/.*/
 *superpowers*
-
-models/*
-results/*
-
-# 上游依赖 clone 落各 core 模块名下(gitignore clone、跟踪 patch)
-core/mapping/LIO-SAM/
-core/localization/FAST_LIO/
-core/localization/small_gicp/
-
-# 厂商原始交付压缩包仅作本地留档；Git 跟踪解压后的可构建 ROS 包
-core/robot/drivers/**/vendor_archives/
-
-# Python 运行产物
-__pycache__/
-
-# colcon 构建产物(workspace 根 + 各包内残留)
+*__pycache__*
 **/build/
 **/install/
 **/log/
+
+/models/*
+/results/*
+/core/mapping/LIO-SAM/
+/core/localization/FAST_LIO/
+/core/localization/small_gicp/

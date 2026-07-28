@@ -10,3 +10,4 @@
 # Preserve imported vendor drops byte-for-byte; do not report their original
 # formatting as project-authored whitespace errors.
 core/robot/drivers/chassis_8030d/can_driver_8030D_sdk/** -whitespace
+core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/vendor/vanjee_driver/** -text -whitespace
