@@ -12,6 +12,7 @@ setup(
         ('share/' + package_name, ['package.xml']),
     ],
     install_requires=['setuptools'],
+    tests_require=['pytest'],
     zip_safe=True,
     maintainer='xxf1ow',
     maintainer_email='20twenty.degree@gmail.com',

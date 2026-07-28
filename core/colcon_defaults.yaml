@@ -1,0 +1,15 @@
+# colcon_defaults.yaml — core/ 工作区 colcon 默认参数
+#
+# 在 core/ 下直接 `colcon test`(不指定包)时,跳过以下包:
+#   - 上游 clone(lio_sam / small_gicp / fast_lio / livox_ros_driver2): vendor 代码
+#     不符合 ament lint 规范,跑 lint 只产生噪音,不代表本项目代码质量。
+#   - can_driver(ZL-8030D 厂商 SDK,aarch64-only): x86 开发机无法链接 libcontrolcan.so,
+#     且为厂商代码。真机(aarch64)上需显式 `colcon test --packages-select can_driver` 单独测试。
+# 仅作用于 test verb;build 行为不变(仍按 CLAUDE.md 的 --packages-select 分组构建)。
+test:
+  packages-skip:
+    - can_driver
+    - lio_sam
+    - small_gicp
+    - fast_lio
+    - livox_ros_driver2

@@ -44,6 +44,12 @@ def main():
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
+    except RuntimeError as exc:
+        # humble shutdown 期偶发 "Unable to convert call argument to Python object"
+        # (context 关闭时,半成品回调反序列化失败)。此时 context 已不在,属良性退出,
+        # 忽略以免 exit 1 被 test_exit_codes 断言成失败;正常期仍抛出,不掩盖真异常。
+        if rclpy.ok():
+            raise
     finally:
         node.destroy_node()
         rclpy.try_shutdown()

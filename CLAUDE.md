@@ -70,6 +70,10 @@ colcon build --packages-up-to gicp_localization --cmake-args -DGICP_DIAGNOSTICS=
 colcon build --packages-select robot_navigation
 
 # Unit tests
+# 直接 `colcon test`(不指定包)会经 colcon_defaults.yaml 自动跳过上游 clone
+# (lio_sam/small_gicp/fast_lio/livox_ros_driver2)与厂商 SDK(can_driver,aarch64-only):
+# 前者跑 ament lint 只有噪音,后者 x86 无法链接 libcontrolcan.so。
+# 真机/厂商包需显式 --packages-select 单独测。
 colcon test --packages-select gicp_localization && colcon test-result --verbose
 colcon test --packages-select robot_description robot_navigation lidar_pointcloud_adapter
 
