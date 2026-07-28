@@ -65,6 +65,18 @@ bool to_point_cloud2(
     error = "point cloud frame_id must be non-empty";
     return false;
   }
+  constexpr uint32_t point_step = 24;
+  const uint64_t row_step =
+      static_cast<uint64_t>(input.width) * point_step;
+  if (row_step > std::numeric_limits<uint32_t>::max()) {
+    error = "point cloud row_step exceeds uint32 range";
+    return false;
+  }
+  const uint64_t data_size = row_step * input.height;
+  if (data_size > output.data.max_size()) {
+    error = "point cloud data size exceeds platform range";
+    return false;
+  }
   const uint64_t expected =
       static_cast<uint64_t>(input.height) * static_cast<uint64_t>(input.width);
   if (expected != input.points.size()) {
@@ -87,10 +99,10 @@ bool to_point_cloud2(
       field("time", 20, sensor_msgs::msg::PointField::FLOAT32),
   };
   output.is_bigendian = false;
-  output.point_step = 24;
-  output.row_step = output.point_step * output.width;
+  output.point_step = point_step;
+  output.row_step = static_cast<uint32_t>(row_step);
   output.is_dense = input.is_dense;
-  output.data.assign(input.points.size() * output.point_step, 0);
+  output.data.assign(static_cast<std::size_t>(data_size), 0);
 
   for (std::size_t i = 0; i < input.points.size(); ++i) {
     const auto &point = input.points[i];
