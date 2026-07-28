@@ -17,7 +17,8 @@ map →[GICP]→ camera_init →[FAST-LIO]→ body →[本包静态焊接]→ ba
 - behavior_server：spin/backup/wait 恢复。
 - bt_navigator：行为树大脑，编排 planner/controller/behavior。
 - lifecycle_manager：autostart 上述五节点。
-- twist_stamper：`/cmd_vel_nav`(Twist) → `/cmd_vel`(TwistStamped) → diff_drive。
+- twist_stamper：`/cmd_vel_nav`(Twist) → 可配置输出；独立启动默认 `/cmd_vel`，
+  完整 bringup 改为 `/cmd_vel_auto`，再经 `cmd_vel_gate` 输出 `/cmd_vel`。
 
 ## 关键设计点
 - **双 frame**：全局 costmap=map（含 GICP 校正、会跳变，全局重规划无害）；局部 costmap+behavior=camera_init（FAST-LIO 连续、不跳变，MPPI 高频环要平滑）。
@@ -25,6 +26,8 @@ map →[GICP]→ camera_init →[FAST-LIO]→ body →[本包静态焊接]→ ba
 - **全局+局部障碍层统一 STVL**(`spatio_temporal_voxel_layer`)：视锥+时间衰减清除(非 VoxelLayer raytrace)；`combination_method:1`(max)不覆盖 static_layer；为未来运动障碍预留(届时调 `voxel_decay`/`decay_acceleration`)。STVL 的 3D voxel 层结构性规避了旧 VoxelLayer 的 `Sensor origin out of map bounds`(`origin_z:0.0` 即可,无需旧的 `-1.0` hack)。
 - **odom_topic `/base_controller/odom`**：diff_drive 真实 twist；FAST-LIO `/Odometry` twist 恒零，MPPI 不能用。
 - **换底盘只改 CHASSIS-DEPENDENT 参数**（`nav2_params.yaml` 顶部注释块列清单：转弯半径/运动模型/footprint/限速）。
+- **人工接管**：Web 只切换 gate 接受的速度源，不取消当前 Nav2 goal；点击
+  “恢复自动导航”后 Nav2 继续输出。manual 模式浏览器断连时，0.5 秒源超时停车。
 
 ## 构建机：验证流程
 前提：**构建根 `core/`**；5c/5d 已 build；`apt install ros-humble-navigation2 ros-humble-nav2-bringup`（含 smac-planner、mppi-controller）；**先验图 5b 已在 `~/result/GlobalMap.pcd`**。
@@ -36,18 +39,19 @@ pip install open3d
 ros2 run robot_navigation pcd_to_occupancy --pcd ~/result/GlobalMap.pcd \
     --out ~/result/factory_map.yaml --resolution 0.05 --z-min 0.1 --z-max 2.0 --min-pts 2
 
-# 1-4) 起现有栈(各一终端，均 cd core && source install/setup.bash)
-ros2 launch robot_gz_bringup robot_gz.launch.py
-ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true
-ros2 launch gicp_localization localization.launch.py
-ros2 run robot_gz_bringup sticky_teleop.py        # 开到已知起点附近
+# 1) config/bringup.yaml 设 platform: sim、mode: navigation，然后起完整栈
+ros2 launch system_bringup bringup.launch.py
 
-# 锁定 GICP：RViz「2D Pose Estimate」(/initialpose) 设到机器人真实 map 位姿，等 /localization 稳定
-
-# 5) 起导航
-ros2 launch robot_navigation navigation.launch.py
-#   先验图非默认路径则传 map:=/path/to/factory_map.yaml
+# 2) 锁定 GICP：RViz「2D Pose Estimate」(/initialpose) 设到机器人真实 map 位姿，等 /localization 稳定
 ```
+
+手机访问 `http://<机器人或仿真主机IP>:8080`
+
+- mapping：点击“人工接管”后按住方向按钮驾驶
+- navigation：默认自动；点击“人工接管”屏蔽 Nav2，点击“恢复自动导航”恢复
+
+完整 bringup 中只有 `cmd_vel_gate` 发布 `/cmd_vel`，Web 和 Nav2 分别只发布
+`/cmd_vel_manual`、`/cmd_vel_auto`。Web 不会失能硬件，不能替代物理急停。
 
 ## 验收判据（PASS → 5e 完成）
 1. 五个 nav 生命周期节点全 active（`ros2 lifecycle get /bt_navigator` 等）；启动无报错。
@@ -57,7 +61,8 @@ ros2 launch robot_navigation navigation.launch.py
    `ros2 param get /local_costmap/local_costmap global_frame`=`camera_init`；
    `ros2 param get /global_costmap/global_costmap global_frame`=`map`。
 4. RViz 给「Nav2 Goal」→ Smac Hybrid-A\* 规划出**平滑可行路径**（无原地转尖角）；`/plan` 有路径。
-5. **车实际开到目标**（不反向、不贴墙——走通道中央）；`/cmd_vel_nav` 有 Twist、`/cmd_vel` 有 TwistStamped、底盘响应。
+5. **车实际开到目标**（不反向、不贴墙——走通道中央）；`/cmd_vel_nav` 有 Twist、
+   `/cmd_vel_auto` 和 gate 输出 `/cmd_vel` 有 TwistStamped、底盘响应。
 6. 局部 costmap 不刷 `Sensor origin out of map bounds`；障碍正常 mark+clear；MPPI 不报控制超时。
 
 ## FAIL 排查
@@ -80,5 +85,4 @@ ros2 launch robot_navigation navigation.launch.py
 ## 后续路线图（不在 5e）
 - **穿点导航**：启用 `waypoint_follower` + `navigate_through_poses`（参数/BT 已内置默认）。
 - **动态障碍**：新建动态障碍仿真包（重新设计，不复用旧实现）+ MPPI 调避让（差速 + MPPI 预测式，目标超越旧栈 DWB 的 stop-and-wait）。
-- **手动接管**：加 `twist_mux` 多路复用 teleop + nav（都走 TwistStamped）。
 - **STVL / velocity_smoother / collision_monitor**：按需。

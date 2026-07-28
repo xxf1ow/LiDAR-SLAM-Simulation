@@ -32,12 +32,12 @@ Runtime TF chain (full stack): `map →[gicp_localization]→ camera_init →[FA
 
 | Module | Contents | Role |
 |---|---|---|
-| `core/robot/` | `robot_description` (single `robot.urdf.xacro`, gz/mock/real tri-state), `robot_hardware` (C++ ros2_control `SystemInterface`, currently a loopback placeholder), `robot_bringup`, `drivers/chassis_8030d` (vendor `can_driver` + manual web acceptance tool); future real lidar/IMU drivers live under `drivers/lidar_<model>` | Differential-drive robot model + ros2_control + real device drivers |
-| `core/simulation/` | `robot_gz_bringup` (`robot_gz.launch.py`, `worlds/factory.sdf`, `config/bridge.yaml`, `sticky_teleop.py`), `lidar_pointcloud_adapter` (Gz cloud → Velodyne-style `/points_raw`), `spike` (lidar smoke test) | Gz Harmonic world + sensor bridging |
+| `core/robot/` | `robot_description` (single `robot.urdf.xacro`, gz/mock/real tri-state), `robot_hardware` (8030D ros2_control `SystemInterface`), `robot_bringup`, `cmd_vel_gate`, `drivers/chassis_8030d` (vendor `can_driver`); future real lidar/IMU drivers live under `drivers/lidar_<model>` | Differential-drive robot model + ros2_control + command arbitration + real device drivers |
+| `core/simulation/` | `robot_gz_bringup` (`robot_gz.launch.py`, `worlds/factory.sdf`, `config/bridge.yaml`), `lidar_pointcloud_adapter` (Gz cloud → Velodyne-style `/points_raw`), `spike` (lidar smoke test) | Gz Harmonic world + sensor bridging |
 | `core/mapping/` | `lio-sam.patch` (+ `LIO-SAM` clone, gitignored) | LIO-SAM builds & saves the prior map PCD (`~/result/GlobalMap.pcd`) |
 | `core/localization/` | `gicp_localization` (in-repo package), `fast-lio2.patch` (+ `FAST_LIO` clone), `small_gicp` clone, `livox_ros_driver2` (msg stub, in-repo) | FAST-LIO2 odometry + GICP scan-to-prior-map localization |
 | `core/navigation/` | `robot_navigation` (ament_python: `pcd_to_occupancy`, `twist_stamper`, `nav2_params.yaml`, `navigation.launch.py`) | Nav2 autonomous navigation (Smac Hybrid-A\* + MPPI) |
-| `core/bringup/` | `system_bringup` (ament_python: `consistency_check.py`, `bringup.launch.py` + `config/bringup.yaml`, `slam_stack.launch.py`) | One-entry full-stack launch (sim/real × mapping/navigation) + pre-launch cross-module consistency gate |
+| `core/bringup/` | `system_bringup` (ament_python: `consistency_check.py`, `bringup.launch.py` + `config/bringup.yaml`, `slam_stack.launch.py`), `robot_web_ui` | One-entry full-stack launch (sim/real × mapping/navigation) + pre-launch consistency gate + formal Web manual control |
 
 Each functional module has its own `README.md` with detailed build + run + acceptance steps. The top-level `README.md` is an overview that points into them.
 
@@ -57,8 +57,8 @@ Each functional module has its own `README.md` with detailed build + run + accep
 cd core
 # Robot + simulation (Gz Harmonic; controller_manager comes from the gz_ros2_control URDF plugin)
 colcon build --packages-select robot_hardware robot_description robot_bringup lidar_pointcloud_adapter robot_gz_bringup
-# Real 8030D device acceptance (aarch64 only)
-colcon build --packages-select can_driver can_driver_web_control
+# Real 8030D bottom layer (aarch64 only) + formal control entry
+colcon build --packages-select can_driver robot_hardware robot_bringup cmd_vel_gate robot_web_ui system_bringup
 # Mapping (LIO-SAM clone must be cloned+patched first)
 colcon build --packages-up-to lio_sam
 # Localization: FAST-LIO (livox stub builds first) then GICP (small_gicp first; needs `sudo apt install libomp-dev`)
@@ -86,7 +86,7 @@ ros2 launch robot_navigation navigation.launch.py                               
 - `diff_drive_controller` is named **`base_controller`**; on Humble it subscribes **`TwistStamped`** (publishing plain `Twist` is silently ignored — the #1 "robot won't move" cause). `/cmd_vel` is remapped to `base_controller`. Wheel odom publishes `/base_controller/odom` (real twist) but **`enable_odom_tf:false`** — `odom→base_footprint` TF is owned by SLAM, not the wheels.
 - Sim sensors are **Gz-native** (`gpu_lidar` VLP-16-style 16-line organized cloud ~10 Hz on `/lidar/points`; `imu` 200 Hz). `config/bridge.yaml` bridges `/clock`, `/lidar/points`, and `/imu→/imu_plugin/out`. `lidar_pointcloud_adapter` converts the organized cloud to a Velodyne-style `/points_raw` (frame `velodyne`, fields incl. `ring`+synthesized `time`).
 - `controller_manager` is provided by the `gz_ros2_control` plugin inside the URDF — there is **no standalone `ros2_control_node`** in sim.
-- Real device packages live under `core/robot/drivers/`. `can_driver_web_control` is a manual acceptance tool only and must never be included by production `system_bringup`. The current `robot_hardware` implementation is still a loopback placeholder; `use_mock_hardware:=false` is not real-hardware-ready until it is adapted to the 8030D driver.
+- Real device packages live under `core/robot/drivers/`; `robot_hardware` exclusively owns the vendor `/motor_speed` and `/driver` commands. Formal manual control is `robot_web_ui → /cmd_vel_manual → cmd_vel_gate → /cmd_vel`, sharing the same sim/real controller path. In a full bringup, `cmd_vel_gate` must be the only `/cmd_vel` publisher.
 
 ## gicp_localization architecture (localization stage)
 
@@ -101,7 +101,7 @@ ros2 launch robot_navigation navigation.launch.py                               
 
 - Global planner **Smac Hybrid-A\*** (kinematics portable via `minimum_turning_radius` + `motion_model_for_search` — diff/Ackermann by params, not plugin swap); local controller **MPPI** (`motion_model: DiffDrive`). **Hard constraint: `1/controller_frequency ≤ model_dt`** (else controller_server fails to configure with "Controller period more then model dt").
 - Double-frame: global costmap = `map` (GICP jumps OK, replans); local costmap + behavior_server = `camera_init` (FAST-LIO continuous, MPPI needs smooth high-rate). No AMCL — GICP provides `map→camera_init`.
-- `body→base_footprint` static weld: **identity rotation** (NOT pitch=π), `z = -0.556`. cmd_vel: Nav2 publishes `Twist` on `/cmd_vel_nav` → `twist_stamper` → `/cmd_vel` (TwistStamped). `odom_topic = /base_controller/odom`. Local voxel layer source = `/cloud_registered` (sensor_frame `body`, `origin_z=-1.0`).
+- `body→base_footprint` static weld: **identity rotation** (NOT pitch=π), `z = -0.556`. cmd_vel: Nav2 publishes `Twist` on `/cmd_vel_nav` → `twist_stamper` → `/cmd_vel_auto`; Web publishes `/cmd_vel_manual`; `cmd_vel_gate` selects one and is the sole `/cmd_vel` (TwistStamped) publisher in full bringup. `odom_topic = /base_controller/odom`. Local voxel layer source = `/cloud_registered` (sensor_frame `body`, `origin_z=-1.0`).
 
 ## Simulation gotchas (already known — don't rediscover)
 

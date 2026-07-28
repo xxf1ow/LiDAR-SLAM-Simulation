@@ -1,10 +1,9 @@
 import os
-from glob import glob
 
 from setuptools import find_packages, setup
 
 
-package_name = "can_driver_web_control"
+package_name = "robot_web_ui"
 
 setup(
     name=package_name,
@@ -17,12 +16,8 @@ setup(
         ),
         ("share/" + package_name, ["package.xml"]),
         (
-            os.path.join("share", package_name, "launch"),
-            glob("launch/*.launch.py"),
-        ),
-        (
             os.path.join("share", package_name, "web"),
-            ["can_driver_web_control/web/index.html"],
+            ["robot_web_ui/web/index.html"],
         ),
     ],
     install_requires=["setuptools"],
@@ -30,11 +25,11 @@ setup(
     zip_safe=True,
     maintainer="xxf1ow",
     maintainer_email="20twenty.degree@gmail.com",
-    description="Phone web controller for standalone ZL-8030D testing",
+    description="Neutral mobile robot Web controls",
     license="MIT",
     entry_points={
         "console_scripts": [
-            "can_driver_web_control = can_driver_web_control.web_control_node:main",
+            "robot_web_ui = robot_web_ui.web_ui_node:main",
         ],
     },
 )
