@@ -17,6 +17,7 @@ set(VANJEE_DRIVER_INCLUDE
 
 add_library(vanjee_lidar_support STATIC
   src/driver_config.cpp
+  src/message_conversion.cpp
 )
 target_compile_features(vanjee_lidar_support PUBLIC cxx_std_17)
 target_compile_definitions(vanjee_lidar_support PUBLIC DISABLE_PCAP_PARSE)
@@ -34,6 +35,8 @@ if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   ament_add_gtest(test_driver_config test/test_driver_config.cpp)
   target_link_libraries(test_driver_config vanjee_lidar_support)
+  ament_add_gtest(test_message_conversion test/test_message_conversion.cpp)
+  target_link_libraries(test_message_conversion vanjee_lidar_support)
 endif()
 
 ament_package()
