@@ -11,7 +11,7 @@ namespace {
 
 using Entry = std::pair<const char *, vanjee::lidar::LidarType>;
 
-constexpr std::array<Entry, 17> kModels{{
+constexpr std::array<Entry, 16> kModels{{
     {"vanjee_716mini", vanjee::lidar::LidarType::vanjee_716mini},
     {"vanjee_718h", vanjee::lidar::LidarType::vanjee_718h},
     {"vanjee_719", vanjee::lidar::LidarType::vanjee_719},
@@ -26,7 +26,6 @@ constexpr std::array<Entry, 17> kModels{{
     {"vanjee_722h", vanjee::lidar::LidarType::vanjee_722h},
     {"vanjee_722z", vanjee::lidar::LidarType::vanjee_722z},
     {"vanjee_733", vanjee::lidar::LidarType::vanjee_733},
-    {"vanjee_738", vanjee::lidar::LidarType::vanjee_738},
     {"vanjee_750", vanjee::lidar::LidarType::vanjee_750},
     {"vanjee_760", vanjee::lidar::LidarType::vanjee_760},
 }};
@@ -56,6 +55,14 @@ bool valid_ipv4(const std::string &value) {
 }
 
 }  // namespace
+
+namespace detail {
+
+bool valid_scan_angle(double angle) {
+  return std::isfinite(angle) && angle >= 0.0 && angle <= 360.0;
+}
+
+}  // namespace detail
 
 bool parse_lidar_type(
     const std::string &name, vanjee::lidar::LidarType &type) {
@@ -87,6 +94,14 @@ bool make_driver_param(
   }
   if (config.host_msop_port == 0 || config.lidar_msop_port == 0) {
     error = "MSOP ports must be non-zero";
+    return false;
+  }
+  if (!detail::valid_scan_angle(config.start_angle)) {
+    error = "start_angle must be finite and in [0, 360]";
+    return false;
+  }
+  if (!detail::valid_scan_angle(config.end_angle)) {
+    error = "end_angle must be finite and in [0, 360]";
     return false;
   }
   if (!std::isfinite(config.min_distance) ||

@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cmath>
 #include <limits>
 #include <utility>
 
@@ -9,6 +10,10 @@
 namespace vlr = vanjee_lidar_ros;
 namespace vjl = vanjee::lidar;
 
+namespace vanjee_lidar_ros::detail {
+bool valid_scan_angle(double angle);
+}
+
 TEST(DriverConfig, ParsesInstalledAndAlternateModels) {
   vjl::LidarType type{};
   ASSERT_TRUE(vlr::parse_lidar_type("vanjee_722", type));
@@ -16,6 +21,18 @@ TEST(DriverConfig, ParsesInstalledAndAlternateModels) {
   ASSERT_TRUE(vlr::parse_lidar_type("vanjee_720_32", type));
   EXPECT_EQ(type, vjl::LidarType::vanjee_720_32);
   EXPECT_FALSE(vlr::parse_lidar_type("vanjee_722x", type));
+}
+
+TEST(DriverConfig, RejectsFactoryUnsupported738Model) {
+  vjl::LidarType type{};
+  EXPECT_FALSE(vlr::parse_lidar_type("vanjee_738", type));
+
+  vlr::DriverConfig config;
+  config.lidar_type = "vanjee_738";
+  vjl::WJDriverParam param;
+  std::string error;
+  EXPECT_FALSE(vlr::make_driver_param(config, param, error));
+  EXPECT_EQ(error, "unsupported lidar_type: vanjee_738");
 }
 
 TEST(DriverConfig, BuildsOnline722Parameters) {
@@ -74,6 +91,69 @@ TEST(DriverConfig, RejectsNonFiniteDistanceLimits) {
 
     EXPECT_FALSE(vlr::make_driver_param(config, param, error));
     EXPECT_EQ(error, "distance limits must be finite");
+  }
+}
+
+TEST(DriverConfig, RejectsInvalidScanAngles) {
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float infinity = std::numeric_limits<float>::infinity();
+  const std::array<float, 5> invalid_angles{{
+      nan,
+      infinity,
+      -infinity,
+      -0.01F,
+      360.01F,
+  }};
+
+  for (const float angle : invalid_angles) {
+    vlr::DriverConfig config;
+    config.start_angle = angle;
+    vjl::WJDriverParam param;
+    std::string error;
+    EXPECT_FALSE(vlr::make_driver_param(config, param, error));
+    EXPECT_EQ(error, "start_angle must be finite and in [0, 360]");
+
+    config = vlr::DriverConfig{};
+    config.end_angle = angle;
+    EXPECT_FALSE(vlr::make_driver_param(config, param, error));
+    EXPECT_EQ(error, "end_angle must be finite and in [0, 360]");
+  }
+}
+
+TEST(DriverConfig, AcceptsSupportedScanAngleSemantics) {
+  const std::array<std::pair<float, float>, 3> angle_ranges{{
+      {0.0F, 0.0F},
+      {0.0F, 360.0F},
+      {350.0F, 10.0F},
+  }};
+
+  for (const auto &[start_angle, end_angle] : angle_ranges) {
+    vlr::DriverConfig config;
+    config.start_angle = start_angle;
+    config.end_angle = end_angle;
+    vjl::WJDriverParam param;
+    std::string error;
+    ASSERT_TRUE(vlr::make_driver_param(config, param, error)) << error;
+    EXPECT_EQ(param.decoder_param.start_angle, start_angle);
+    EXPECT_EQ(param.decoder_param.end_angle, end_angle);
+  }
+}
+
+TEST(DriverConfig, ValidatesDoubleScanAnglesBeforeNarrowing) {
+  const double infinity = std::numeric_limits<double>::infinity();
+  const std::array<double, 5> invalid_angles{{
+      std::numeric_limits<double>::quiet_NaN(),
+      infinity,
+      -infinity,
+      std::nextafter(0.0, -infinity),
+      std::nextafter(360.0, infinity),
+  }};
+  for (const double angle : invalid_angles) {
+    EXPECT_FALSE(vlr::detail::valid_scan_angle(angle));
+  }
+
+  for (const double angle : {0.0, 10.0, 350.0, 360.0}) {
+    EXPECT_TRUE(vlr::detail::valid_scan_angle(angle));
   }
 }
 

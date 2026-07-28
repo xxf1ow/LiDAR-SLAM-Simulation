@@ -11,3 +11,4 @@
 # formatting as project-authored whitespace errors.
 core/robot/drivers/chassis_8030d/can_driver_8030D_sdk/** -whitespace
 core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/vendor/vanjee_driver/** -text -whitespace
+"core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/doc/万集激光雷达 LIO-SAM 算法配置参考.txt" -text -whitespace

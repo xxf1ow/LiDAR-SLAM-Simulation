@@ -15,6 +15,10 @@
 
 namespace vanjee_lidar_ros {
 
+namespace detail {
+bool valid_scan_angle(double angle);
+}
+
 class VanjeeLidarNode final : public rclcpp::Node {
 public:
   VanjeeLidarNode() : Node("vanjee_lidar") {
@@ -87,10 +91,19 @@ private:
       throw std::runtime_error("lidar_msop_port must be in 1..65535");
     }
     config_.lidar_msop_port = static_cast<uint16_t>(lidar_msop_port);
-    config_.start_angle = static_cast<float>(
-        declare_parameter<double>("start_angle", config_.start_angle));
-    config_.end_angle = static_cast<float>(
-        declare_parameter<double>("end_angle", config_.end_angle));
+    const double start_angle =
+        declare_parameter<double>("start_angle", config_.start_angle);
+    if (!detail::valid_scan_angle(start_angle)) {
+      throw std::runtime_error(
+          "start_angle must be finite and in [0, 360]");
+    }
+    config_.start_angle = static_cast<float>(start_angle);
+    const double end_angle =
+        declare_parameter<double>("end_angle", config_.end_angle);
+    if (!detail::valid_scan_angle(end_angle)) {
+      throw std::runtime_error("end_angle must be finite and in [0, 360]");
+    }
+    config_.end_angle = static_cast<float>(end_angle);
     config_.min_distance = static_cast<float>(
         declare_parameter<double>("min_distance", config_.min_distance));
     config_.max_distance = static_cast<float>(
