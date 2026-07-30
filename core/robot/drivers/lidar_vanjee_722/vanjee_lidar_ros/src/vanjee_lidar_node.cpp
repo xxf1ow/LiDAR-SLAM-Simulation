@@ -12,6 +12,7 @@
 
 #include "vanjee_lidar_ros/driver_config.hpp"
 #include "vanjee_lidar_ros/message_conversion.hpp"
+#include "vendor_callback_registration.hpp"
 
 namespace vanjee_lidar_ros {
 
@@ -44,6 +45,7 @@ public:
         [this](std::shared_ptr<vanjee::lidar::ImuPacket> imu) {
           publish_imu(std::move(imu));
         });
+    detail::register_ignored_vendor_callbacks(driver_);
     driver_.regExceptionCallback(
         [this](const vanjee::lidar::Error &error_value) {
           RCLCPP_WARN(get_logger(), "%s", error_value.toString().c_str());

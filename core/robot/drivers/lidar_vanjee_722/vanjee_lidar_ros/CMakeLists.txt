@@ -49,6 +49,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_driver_config vanjee_lidar_support)
   ament_add_gtest(test_message_conversion test/test_message_conversion.cpp)
   target_link_libraries(test_message_conversion vanjee_lidar_support)
+  ament_add_gtest(test_vendor_callback_registration
+    test/test_vendor_callback_registration.cpp
+  )
+  target_link_libraries(test_vendor_callback_registration vanjee_lidar_support)
 endif()
 
 ament_package()
