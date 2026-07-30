@@ -86,8 +86,106 @@ index dd334c9..2e947c1 100644
  
      # robot motion constraint (in case you are using a 2D robot)
      z_tollerance: 1000.0                          # meters
+diff --git a/config/params_real.yaml b/config/params_real.yaml
+new file mode 100644
+index 0000000..2136f2f
+--- /dev/null
++++ b/config/params_real.yaml
+@@ -0,0 +1,92 @@
++/**:
++  ros__parameters:
++
++    # Real Vanjee 722 uses the host wall clock for both LiDAR and IMU messages.
++    use_sim_time: false
++
++    # Topics
++    pointCloudTopic: "/points_raw"
++    imuTopic: "/imu/data"
++    odomTopic: "odometry/imu"
++    gpsTopic: "odometry/gpsz"
++
++    # Frames
++    lidarFrame: "velodyne"
++    baselinkFrame: "base_footprint"
++    odometryFrame: "odom"
++    mapFrame: "map"
++
++    # GPS Settings
++    useImuHeadingInitialization: false
++    useGpsElevation: false
++    gpsCovThreshold: 2.0
++    poseCovThreshold: 25.0
++
++    # Export settings
++    savePCD: true
++    savePCDDirectory: "/result/loam/"
++
++    # Vanjee 722: the accepted PointCloud2 is organized as 32 x 1200.
++    sensor: velodyne
++    N_SCAN: 32
++    Horizon_SCAN: 1200
++    downsampleRate: 1
++    lidarMinRange: 0.3
++    lidarMaxRange: 40.0
++
++    # IMU Settings from the vendor's Vanjee LIO-SAM reference.
++    imuAccNoise: 3.9939570888238808e-03
++    imuGyrNoise: 1.5636343949698187e-03
++    imuAccBiasN: 6.4356659353532566e-05
++    imuGyrBiasN: 3.5640318696367613e-05
++    imuGravity: 9.80511
++    imuRPYWeight: 0.01
++
++    # Provisional vendor values. Replace after the IMU axes and physical
++    # LiDAR-to-base mounting transform have been measured.
++    extrinsicTrans: [0.0, 0.0, 0.0]
++    extrinsicRot: [1.0, 0.0, 0.0,
++                   0.0, 1.0, 0.0,
++                   0.0, 0.0, 1.0]
++    extrinsicRPY: [1.0, 0.0, 0.0,
++                   0.0, 1.0, 0.0,
++                   0.0, 0.0, 1.0]
++
++    # LOAM feature thresholds from the vendor reference.
++    edgeThreshold: 0.1
++    surfThreshold: 0.1
++    edgeFeatureMinValidNum: 5
++    surfFeatureMinValidNum: 30
++
++    # Indoor voxel filters from the vendor reference.
++    odometrySurfLeafSize: 0.2
++    mappingCornerLeafSize: 0.1
++    mappingSurfLeafSize: 0.2
++
++    # Robot motion constraints
++    z_tollerance: 1000.0
++    rotation_tollerance: 1000.0
++
++    # CPU Parameters
++    numberOfCores: 3
++    mappingProcessInterval: 0.0
++
++    # Surrounding map
++    surroundingkeyframeAddingDistThreshold: 1.0
++    surroundingkeyframeAddingAngleThreshold: 0.2
++    surroundingKeyframeDensity: 2.0
++    surroundingKeyframeSearchRadius: 50.0
++
++    # Loop closure
++    loopClosureEnableFlag: false
++    loopClosureFrequency: 1.0
++    surroundingKeyframeSize: 25
++    historyKeyframeSearchRadius: 15.0
++    historyKeyframeSearchTimeDiff: 30.0
++    historyKeyframeSearchNum: 25
++    historyKeyframeFitnessScore: 0.3
++
++    # Visualization
++    globalMapVisualizationSearchRadius: 1000.0
++    globalMapVisualizationPoseDensity: 10.0
++    globalMapVisualizationLeafSize: 1.0
 diff --git a/launch/run.launch.py b/launch/run.launch.py
-index cfde01d..e7ec96c 100644
+index cfde01d..ed8f877 100644
 --- a/launch/run.launch.py
 +++ b/launch/run.launch.py
 @@ -30,15 +30,17 @@ def generate_launch_description():
@@ -121,7 +219,7 @@ index cfde01d..e7ec96c 100644
              executable='rviz2',
              name='rviz2',
              arguments=['-d', rviz_config_file],
-+            parameters=[{'use_sim_time': True}],   # align rviz with Gazebo sim clock
++            parameters=[parameter_file],          # inherit use_sim_time from selected params file
              output='screen'
          )
      ])

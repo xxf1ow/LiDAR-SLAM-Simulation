@@ -1,11 +1,13 @@
 # core/mapping — LIO-SAM 建图(先验图制作)
 
-本模块负责用 **LIO-SAM** 在 Gz Harmonic 工厂世界里跑建图、保存先验地图 `GlobalMap.pcd`(供 localization 阶段的 GICP 用)。
+本模块负责用 **LIO-SAM** 在仿真或真实 Vanjee 722 数据上建图、保存先验地图
+`GlobalMap.pcd`(供 localization 阶段的 GICP 用)。
 
 ## 集成方式:clone + patch,落在本模块名下(core 自成一体)
 LIO-SAM 的源码 **clone 到本模块目录 `core/mapping/LIO-SAM`**(被 `.gitignore` 排除、不入库),再 `git apply` 本模块跟踪的 **`core/mapping/lio-sam.patch`**。**不放在 src 下**——core 是自成一体的完整 colcon 工作区,`colcon build` 从 `core/` 跑即可发现 `lio_sam` 包,无需 src。该补丁含全部 sim 适配:
 - `config/params.yaml`:话题 `points_raw` / `/imu_plugin/out`、帧 `lidarFrame=velodyne`、`baselinkFrame=base_footprint`、外参归零(雷达/IMU 共位)、VLP-16 16/1800、indoor leaf、`savePCD:true` + `savePCDDirectory:/result/loam/`(存盘前 rm -r 此目录,故用专门子目录,勿改 /result/)。
-- `launch/run.launch.py`:发 `map→odom` 静态 TF、禁用 LIO-SAM 自带 robot_state_publisher(TF 由仿真侧提供)、起 4 个 lio_sam 节点 + RViz。
+- `config/params_real.yaml`:Vanjee 722 真机话题 `/points_raw` / `/imu/data`、32×1200、厂商 IMU/特征参数、主机时钟；IMU→LiDAR 外参暂用厂商单位阵，待实测。
+- `launch/run.launch.py`:发 `map→odom` 静态 TF、禁用 LIO-SAM 自带 robot_state_publisher(TF 由外部提供)、起 4 个 lio_sam 节点 + RViz；RViz 与节点读取同一个 `params_file`。
 - `src/mapOptmization.cpp`:存图/行为微调。
 
 clone 命令(pinned SHA 见主文档,clone 到本模块):
@@ -69,8 +71,23 @@ ros2 launch system_bringup bringup.launch.py
 (此时 lio_sam 仍在跑、service 在线)存盘+转换,完成后再 Ctrl+C 停栈。
 
 - ready_gate 把"手动判断起 lio_sam 的时机"换成"等 /points_raw + /joint_states 出现 + settling",其余等价于手动分步。
-- **use_sim_time**:lio_sam 不接收 launch arg(靠 `params.yaml` 的 `use_sim_time:true`),sim 下与 gz /clock 一致、无需处理。real mapping 需另备 `params_real.yaml`(`use_sim_time:false` + real topics,run.launch.py 已接收 `params_file` arg),属 real 实现范畴(本期骨架)。
+- **use_sim_time**:lio_sam 与 RViz 都从所选参数文件读取；默认 `params.yaml` 使用仿真时钟，真机显式选择 `params_real.yaml` 使用主机时钟。
 - **存盘**:bringup 不含存盘/转换——靠 `save_map.sh` 完成(service 存 ~/result/loam + cp + 转 occupancy)。service 要 lio_sam 在线,**必须在 Ctrl+C 停栈前跑**(见上一行)。
+
+## Vanjee 722 真机分步启动
+
+本阶段只提供 LIO-SAM 真机入口，不接入 `system_bringup`。先确保驱动已持续发布
+`/points_raw`、`/imu/data`，并由外部提供 `base_footprint↔velodyne` TF，然后启动：
+
+```bash
+cd core && source install/setup.bash
+REAL_PARAMS="$(ros2 pkg prefix lio_sam)/share/lio_sam/config/params_real.yaml"
+ros2 launch lio_sam run.launch.py params_file:="$REAL_PARAMS"
+```
+
+初始配置按实测点云采用 32×1200；厂商参考中的 IMU 噪声和特征参数原样采用。
+当前单位外参只是首轮联调值，待实测 IMU 轴向和安装位姿后再调整。地图仍用
+`mapping/save_map.sh` 保存到现有的 `~/result/loam/` 和 `~/result/GlobalMap.pcd`。
 
 ## 验收判据(PASS → 进 5c 定位)
 18. 终端 2 起 LIO-SAM 后无 TF/参数报错;`ros2 topic hz /lio_sam/mapping/odometry` 持续发布。
