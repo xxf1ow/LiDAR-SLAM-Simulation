@@ -1,4 +1,5 @@
 #include <atomic>
+#include <cstdlib>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -27,6 +28,12 @@ public:
 
     std::string error;
     if (!make_driver_param(config_, driver_param_, error)) {
+      throw std::runtime_error(error);
+    }
+    const char *home_directory = std::getenv("HOME");
+    if (!configure_calibration_paths(
+            config_, home_directory == nullptr ? "" : home_directory,
+            driver_param_, error)) {
       throw std::runtime_error(error);
     }
 

@@ -34,5 +34,10 @@ bool make_driver_param(
     const DriverConfig &config,
     vanjee::lidar::WJDriverParam &param,
     std::string &error);
+bool configure_calibration_paths(
+    const DriverConfig &config,
+    const std::string &home_directory,
+    vanjee::lidar::WJDriverParam &param,
+    std::string &error);
 
 }  // namespace vanjee_lidar_ros

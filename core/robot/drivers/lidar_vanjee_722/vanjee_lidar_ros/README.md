@@ -23,3 +23,7 @@ ros2 launch vanjee_lidar_ros vanjee_lidar.launch.py
 `lidar_type` 切换，修改后重启节点；本包不支持运行中热切换。完整厂商 ROS
 SDK/msg 只存在于仓库根目录被忽略的 `.vanjee_lidar_sdk/`、
 `.vanjee_lidar_msg/`，不属于构建依赖。
+
+在线查询得到的角度和 IMU 标定文件按雷达 IP、型号保存到
+`~/result/lidar_calibration/<lidar_address>/`。该目录与 LIO-SAM 地图同属
+`~/result/`，但独立于保存地图时会被删除重建的 `~/result/loam/`。

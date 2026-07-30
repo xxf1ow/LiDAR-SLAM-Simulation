@@ -2,7 +2,9 @@
 
 #include <array>
 #include <cmath>
+#include <filesystem>
 #include <limits>
+#include <string>
 #include <utility>
 
 #include "vanjee_lidar_ros/driver_config.hpp"
@@ -51,6 +53,49 @@ TEST(DriverConfig, BuildsOnline722Parameters) {
   EXPECT_EQ(param.decoder_param.imu_enable, 1);
   EXPECT_TRUE(param.decoder_param.ts_first_point);
   EXPECT_FALSE(param.decoder_param.use_lidar_clock);
+}
+
+TEST(DriverConfig, BuildsModelScopedCalibrationPathsInMapDirectory) {
+  namespace fs = std::filesystem;
+  const fs::path home =
+      fs::temp_directory_path() / "vanjee_lidar_calibration_path_test";
+  fs::remove_all(home);
+
+  vlr::DriverConfig config;
+  vjl::WJDriverParam param_722;
+  std::string error;
+  ASSERT_TRUE(vlr::configure_calibration_paths(
+      config, home.string(), param_722, error)) << error;
+
+  const fs::path directory =
+      home / "result" / "lidar_calibration" / "192.168.2.86";
+  EXPECT_TRUE(fs::is_directory(directory));
+  EXPECT_EQ(fs::path(param_722.decoder_param.angle_path_ver),
+            directory / "vanjee_722_vertical_angles.csv");
+  EXPECT_EQ(fs::path(param_722.decoder_param.angle_path_hor),
+            directory / "vanjee_722_horizontal_angles.csv");
+  EXPECT_EQ(fs::path(param_722.decoder_param.imu_param_path),
+            directory / "vanjee_722_imu_params.csv");
+
+  config.lidar_type = "vanjee_720_32";
+  vjl::WJDriverParam param_720;
+  ASSERT_TRUE(vlr::configure_calibration_paths(
+      config, home.string(), param_720, error)) << error;
+  EXPECT_NE(param_722.decoder_param.angle_path_ver,
+            param_720.decoder_param.angle_path_ver);
+  EXPECT_EQ(fs::path(param_720.decoder_param.angle_path_ver),
+            directory / "vanjee_720_32_vertical_angles.csv");
+
+  fs::remove_all(home);
+}
+
+TEST(DriverConfig, RejectsMissingHomeForCalibrationPaths) {
+  vlr::DriverConfig config;
+  vjl::WJDriverParam param;
+  std::string error;
+
+  EXPECT_FALSE(vlr::configure_calibration_paths(config, "", param, error));
+  EXPECT_EQ(error, "HOME is not set");
 }
 
 TEST(DriverConfig, RejectsInvalidInputsWithoutVendorExit) {

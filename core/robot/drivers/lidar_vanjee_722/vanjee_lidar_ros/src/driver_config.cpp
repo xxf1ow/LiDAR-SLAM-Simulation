@@ -3,7 +3,9 @@
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <utility>
 
 namespace vanjee_lidar_ros {
@@ -150,6 +152,38 @@ bool make_driver_param(
   param.decoder_param.point_cloud_enable = true;
   param.decoder_param.imu_enable = 1;
   param.decoder_param.imu_orientation_enable = true;
+  error.clear();
+  return true;
+}
+
+bool configure_calibration_paths(
+    const DriverConfig &config,
+    const std::string &home_directory,
+    vanjee::lidar::WJDriverParam &param,
+    std::string &error) {
+  if (home_directory.empty()) {
+    error = "HOME is not set";
+    return false;
+  }
+
+  namespace fs = std::filesystem;
+  const fs::path directory = fs::path(home_directory) / "result" /
+                             "lidar_calibration" / config.lidar_address;
+  std::error_code filesystem_error;
+  fs::create_directories(directory, filesystem_error);
+  if (filesystem_error) {
+    error = "failed to create calibration directory " + directory.string() +
+            ": " + filesystem_error.message();
+    return false;
+  }
+
+  const std::string prefix = config.lidar_type + "_";
+  param.decoder_param.angle_path_ver =
+      (directory / (prefix + "vertical_angles.csv")).string();
+  param.decoder_param.angle_path_hor =
+      (directory / (prefix + "horizontal_angles.csv")).string();
+  param.decoder_param.imu_param_path =
+      (directory / (prefix + "imu_params.csv")).string();
   error.clear();
   return true;
 }
