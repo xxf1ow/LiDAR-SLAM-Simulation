@@ -15,7 +15,7 @@ robot_gz:
   spawn_y: "0.0"
   spawn_z: "0.05"
 
-# === 真机底层:robot_bringup(platform=real 时生效,本期骨架 TODO)===
+# === 真机底层:robot_bringup(platform=real 时生效,真实底盘 launch 已接线)===
 robot_bringup:
   use_mock_hardware: false
 

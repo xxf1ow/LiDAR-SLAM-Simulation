@@ -70,13 +70,13 @@ def _bringup(context, *args, **kwargs):
     mode = cfg["mode"]                  # navigation | mapping
     use_sim = "true" if platform == "sim" else "false"
     stack_cfg = cfg["slam_stack"]
-    profile = stack_cfg[platform]
     flow = lambda m: LogInfo(msg="======== [system_bringup] %s" % m)
 
     failures = consistency_check.run(repo_root)
     if failures:
         raise RuntimeError("一致性闸门未通过(已中止,未启动任何节点):\n" + "\n".join(failures))
 
+    profile = stack_cfg[platform]
     slam_stack = _inc(
         "system_bringup", "launch/slam_stack.launch.py",
         {"mode": mode, "use_sim_time": use_sim,

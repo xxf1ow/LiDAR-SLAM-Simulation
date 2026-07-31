@@ -70,6 +70,19 @@ def test_fastlio_sim_patch_yaml_reconstructed_by_path():
     }
 
 
+def test_fastlio_patch_uses_sensor_data_qos_for_imu_subscription():
+    patch = cc._read(_root(), cc.F_FASTLIO_PATCH)
+    section = cc._patch_file_section(patch, "src/laserMapping.cpp")
+    assert (
+        "-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
+        "(imu_topic, 10, imu_cbk);"
+    ) in section
+    assert (
+        "+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
+        "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);"
+    ) in section
+
+
 def test_liosam_sim_patch_values_are_scoped_by_path():
     patch = cc._read(_root(), cc.F_LIOSAM_PATCH)
     assert cc._patch_added_value(

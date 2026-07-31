@@ -1,14 +1,29 @@
-# Purpose: 为 FAST-LIO 新增 Gazebo Harmonic 仿真与 Vanjee 722 真实配置
-#          (gazebo_velodyne.yaml: 16线仿真; vanjee_722.yaml: 32线真实雷达)
+# Purpose: 为 FAST-LIO 新增 Gazebo Harmonic 仿真与 Vanjee 722 真实配置，并适配 IMU QoS
+#          (gazebo_velodyne.yaml: 16线仿真; vanjee_722.yaml: 32线真实雷达;
+#           laserMapping.cpp: SensorDataQoS 对齐 Vanjee BEST_EFFORT IMU)
 # Base:    FAST_LIO @ a4743b0 (ROS2 branch)
 # Apply:   cd core/localization/FAST_LIO && git apply ../fast-lio2.patch
 # Depends: 需配合 core/localization/livox_ros_driver2 消息桩包方可编译
-# Note:    本补丁中性(仅新增配置文件),对真实场景无害。
+# Note:    Vanjee /imu/data 使用 BEST_EFFORT；FAST-LIO IMU 订阅改用 SensorDataQoS，
+#          避免默认 RELIABLE 订阅与发布端不兼容。
 #          去畸变:lidar_pointcloud_adapter 已给点云补(合成)time,FAST-LIO 自动 given_offset_time=true
 #          并据此去畸变,无需额外补丁。Gz 是瞬时快照云,若旋转拖影,治本在 adapter 发常量 time。
 #          外参 [0,0,0]:新机器人 velodyne 与 imu_link 同位置(robot_macro.urdf.xacro,均挂 base_link
 #          的 xyz="0 0 sensor_z"),雷达-IMU 外参恒等;与 mapping(LIO-SAM)的 extrinsicTrans:[0,0,0] 一致。
 #
+diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp
+index e5d9950..4337f0f 100644
+--- a/src/laserMapping.cpp
++++ b/src/laserMapping.cpp
+@@ -925,7 +925,7 @@
+         {
+             sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);
+         }
+-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);
++        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);
+         pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 20);
+         pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 20);
+         pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", 20);
 diff --git a/config/gazebo_velodyne.yaml b/config/gazebo_velodyne.yaml
 new file mode 100644
 index 0000000..1111111

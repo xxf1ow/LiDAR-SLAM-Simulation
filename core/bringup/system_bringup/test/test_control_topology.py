@@ -427,6 +427,38 @@ def test_real_branch_does_not_publish_duplicate_lidar_static_tf():
     )
 
 
+def test_bringup_runs_consistency_gate_before_platform_profile_lookup():
+    function = _function(_tree(BRINGUP), "_bringup")
+    failures_index = next(
+        index
+        for index, node in enumerate(function.body)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "failures"
+            for target in node.targets
+        )
+    )
+    gate_index = next(
+        index
+        for index, node in enumerate(function.body)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name)
+        and node.test.id == "failures"
+    )
+    profile_index = next(
+        index
+        for index, node in enumerate(function.body)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "profile"
+            for target in node.targets
+        )
+        and _subscript_path(node.value) == ("stack_cfg", ("platform",))
+    )
+
+    assert failures_index < gate_index < profile_index
+
+
 def test_manifest_exec_depends_on_control_packages():
     manifest = ET.parse(MANIFEST)
     dependencies = {

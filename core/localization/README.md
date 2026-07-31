@@ -14,8 +14,9 @@
 FAST-LIO 源码 **clone 到本模块目录 `core/localization/FAST_LIO`**(被 `.gitignore` 排除、不入库),
 再 `git apply` 本模块跟踪的两个补丁。**不放在 src 下**——core 是自成一体的完整 colcon 工作区。
 
-- `fast-lio2.patch`(**中性**,对真实无害):新增 `config/gazebo_velodyne.yaml` 与
-  `config/vanjee_722.yaml`。前者使用 `points_raw` / `/imu_plugin/out`、velodyne
+- `fast-lio2.patch`:新增 `config/gazebo_velodyne.yaml` 与 `config/vanjee_722.yaml`，
+  并将 FAST-LIO 的 IMU 订阅改为 `rclcpp::SensorDataQoS()`，以兼容 Vanjee
+  `/imu/data` 的 BEST_EFFORT 发布端；点云订阅不变。前者使用 `points_raw` / `/imu_plugin/out`、velodyne
   `lidar_type:2`、`scan_line:16`、blind 1.0，且因**仿真模型**的 velodyne 与 imu_link
   frame 共位而使用零外参 `extrinsic_T:[0,0,0]`。后者使用真机 `/points_raw` /
   `/imu/data`、`scan_line:32`、blind 0.3；其单位平移/旋转外参仅是供静态集成使用的
