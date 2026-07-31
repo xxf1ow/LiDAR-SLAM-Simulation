@@ -19,6 +19,10 @@
   <exec_depend>lio_sam</exec_depend>
   <exec_depend>cmd_vel_gate</exec_depend>
   <exec_depend>robot_web_ui</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>robot_bringup</exec_depend>
+  <exec_depend>vanjee_lidar_ros</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 
