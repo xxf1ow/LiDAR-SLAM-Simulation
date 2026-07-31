@@ -131,6 +131,15 @@ def _subscript_path(node):
     return node.id if isinstance(node, ast.Name) else None, tuple(reversed(path))
 
 
+def _is_vanjee_config_call(node):
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_pkg_config"
+        and _string(node.args[0]) == "vanjee_lidar_ros"
+    )
+
+
 def test_navigation_declares_cmd_vel_output_topic_with_legacy_default():
     assert _declaration_default(_tree(NAVIGATION), "cmd_vel_output_topic") == "/cmd_vel"
 
@@ -363,16 +372,24 @@ def test_real_branch_starts_chassis_and_lidar_before_sensor_gate():
     result = next(node.value for node in real.body if isinstance(node, ast.Return))
     terms = _add_terms(result)
 
-    assert isinstance(terms[-2], ast.List)
-    assert [item.id for item in terms[-2].elts if isinstance(item, ast.Name)] == [
-        "chassis",
-        "lidar",
-    ]
-    assert isinstance(terms[-1], ast.Call)
-    assert isinstance(terms[-1].func, ast.Name)
-    assert terms[-1].func.id == "_real_sensor_gate"
-    assert isinstance(terms[-1].args[0], ast.List)
-    assert [item.id for item in terms[-1].args[0].elts if isinstance(item, ast.Name)] == [
+    gate_index = next(
+        index
+        for index, term in enumerate(terms)
+        if isinstance(term, ast.Call)
+        and isinstance(term.func, ast.Name)
+        and term.func.id == "_real_sensor_gate"
+    )
+    preceding_names = {
+        name.id
+        for term in terms[:gate_index]
+        for name in ast.walk(term)
+        if isinstance(name, ast.Name)
+    }
+    assert {"chassis", "lidar"} <= preceding_names
+
+    gate = terms[gate_index]
+    assert isinstance(gate.args[0], ast.List)
+    assert [item.id for item in gate.args[0].elts if isinstance(item, ast.Name)] == [
         "slam_stack"
     ]
 
@@ -390,13 +407,14 @@ def test_real_branch_resolves_vanjee_config_only_after_platform_selection():
         )
     )
 
-    assert isinstance(assignment.value, ast.Call)
-    assert isinstance(assignment.value.func, ast.Name)
-    assert assignment.value.func.id == "_pkg_config"
-    assert _string(assignment.value.args[0]) == "vanjee_lidar_ros"
+    assert _is_vanjee_config_call(assignment.value)
     assert _subscript_path(assignment.value.args[1]) == (
         "cfg", ("vanjee_lidar", "config")
     )
+    vanjee_config_calls = [
+        call for call in _calls(function, "_pkg_config") if _is_vanjee_config_call(call)
+    ]
+    assert vanjee_config_calls == [assignment.value]
 
 
 def test_real_branch_does_not_publish_duplicate_lidar_static_tf():
