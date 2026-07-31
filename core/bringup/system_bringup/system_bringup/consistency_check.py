@@ -251,20 +251,28 @@ def check_lidar(repo_root, platform="sim"):
         driver = _yaml(_read(repo_root, F_VANJEE_PARAMS))["vanjee_lidar"]["ros__parameters"]
         fl_pre = fastlio["preprocess"]
         fl_common = fastlio["common"]
+        fl_lidar_type = int(fl_pre["lidar_type"])
+        fl_scan_line = int(fl_pre["scan_line"])
+        fl_scan_rate = int(fl_pre["scan_rate"])
+        fl_timestamp_unit = int(fl_pre["timestamp_unit"])
+        fl_blind = float(fl_pre["blind"])
+        driver_min_distance = float(driver["min_distance"])
+        lio_n_scan = int(lio["N_SCAN"])
+        lio_horizon_scan = int(lio["Horizon_SCAN"])
 
-        if not (driver["lidar_type"] == "vanjee_722" and fl_pre["lidar_type"] == 2):
+        if not (driver["lidar_type"] == "vanjee_722" and fl_lidar_type == 2):
             fails.append("[R1] lidar_type 不一致: driver=%r, fast-lio=%r(应为 vanjee_722/2)。"
-                         % (driver["lidar_type"], fl_pre["lidar_type"]))
-        if not (fl_pre["scan_line"] == lio["N_SCAN"] == 32):
+                         % (driver["lidar_type"], fl_lidar_type))
+        if not (fl_scan_line == lio_n_scan == 32):
             fails.append("[R2] 线数不一致: fast-lio=%d, lio-sam=%d(应均为 32)。"
-                         % (fl_pre["scan_line"], lio["N_SCAN"]))
-        if fl_pre["scan_rate"] != 10:
-            fails.append("[R3] fast-lio scan_rate=%d(应为 10)。" % fl_pre["scan_rate"])
-        if fl_pre["timestamp_unit"] != 0:
-            fails.append("[R4] fast-lio timestamp_unit=%d(应为 0)。" % fl_pre["timestamp_unit"])
-        if not (fl_pre["blind"] == 0.3 and fl_pre["blind"] >= driver["min_distance"]):
+                         % (fl_scan_line, lio_n_scan))
+        if fl_scan_rate != 10:
+            fails.append("[R3] fast-lio scan_rate=%d(应为 10)。" % fl_scan_rate)
+        if fl_timestamp_unit != 0:
+            fails.append("[R4] fast-lio timestamp_unit=%d(应为 0)。" % fl_timestamp_unit)
+        if not (fl_blind == 0.3 and fl_blind >= driver_min_distance):
             fails.append("[R5] fast-lio blind=%.2f(应为 0.30且不小于 driver min_distance=%.2f)。"
-                         % (fl_pre["blind"], driver["min_distance"]))
+                         % (fl_blind, driver_min_distance))
         if not (driver["point_cloud_topic"] == fl_common["lid_topic"] == lio["pointCloudTopic"] == "/points_raw"):
             fails.append("[R6] 点云话题不一致: driver=%r, fast-lio=%r, lio-sam=%r(应均为 /points_raw)。"
                          % (driver["point_cloud_topic"], fl_common["lid_topic"], lio["pointCloudTopic"]))
@@ -277,9 +285,9 @@ def check_lidar(repo_root, platform="sim"):
         if lio["lidarFrame"] != driver["lidar_frame"]:
             fails.append("[R8] lio-sam lidarFrame=%r != driver lidar_frame=%r。"
                          % (lio["lidarFrame"], driver["lidar_frame"]))
-        if not (lio["Horizon_SCAN"] == 1200 and lio["use_sim_time"] is False):
+        if not (lio_horizon_scan == 1200 and lio["use_sim_time"] is False):
             fails.append("[R9] lio-sam Horizon_SCAN=%d/use_sim_time=%r(应为 1200/false)。"
-                         % (lio["Horizon_SCAN"], lio["use_sim_time"]))
+                         % (lio_horizon_scan, lio["use_sim_time"]))
         return fails
 
     gz = _gazebo_lidar(_read(repo_root, F_GAZEBO))
