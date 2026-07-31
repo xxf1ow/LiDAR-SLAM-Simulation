@@ -25,6 +25,10 @@ def _inc(pkg, rel, args=None):
         launch_arguments=(args or {}).items())
 
 
+def _pkg_config(package, filename):
+    return os.path.join(get_package_share_directory(package), "config", filename)
+
+
 def _bringup(context, *args, **kwargs):
     repo_root = consistency_check.find_repo_root()
     cfg = consistency_check.load_bringup_config(repo_root)
@@ -32,6 +36,7 @@ def _bringup(context, *args, **kwargs):
     mode = cfg["mode"]                  # navigation | mapping
     use_sim = "true" if platform == "sim" else "false"
     stack_cfg = cfg["slam_stack"]
+    profile = stack_cfg[platform]
     flow = lambda m: LogInfo(msg="======== [system_bringup] %s" % m)
 
     failures = consistency_check.run(repo_root)
@@ -41,9 +46,14 @@ def _bringup(context, *args, **kwargs):
     slam_stack = _inc(
         "system_bringup", "launch/slam_stack.launch.py",
         {"mode": mode, "use_sim_time": use_sim,
-         "fast_lio_config": stack_cfg["fast_lio"]["config"],
-         "prior_map_path": stack_cfg["gicp_localization"]["prior_map_path"],
-         "nav_map": stack_cfg["robot_navigation"]["map"],
+         "lio_sam_params_file": _pkg_config("lio_sam", profile["lio_sam"]["config"]),
+         "fast_lio_config": profile["fast_lio"]["config"],
+         "gicp_config_file": _pkg_config(
+             "gicp_localization", profile["gicp_localization"]["config"]),
+         "prior_map_path": profile["gicp_localization"]["prior_map_path"],
+         "nav2_params_file": _pkg_config(
+             "robot_navigation", profile["robot_navigation"]["config"]),
+         "nav_map": profile["robot_navigation"]["map"],
          "cmd_vel_output_topic": "/cmd_vel_auto",
          "settling": str(stack_cfg["settling"])})
 

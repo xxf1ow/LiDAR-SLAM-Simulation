@@ -19,12 +19,32 @@ robot_gz:
 robot_bringup:
   use_mock_hardware: false
 
-# === slam_stack:mode=navigation 起 fast_lio→gicp→nav2;mode=mapping 起 lio_sam ===
+# === 真机雷达驱动 ===
+vanjee_lidar:
+  config: vanjee_722.yaml
+
+# === 共享上层:两套参数文件互不覆盖 ===
 slam_stack:
   settling: 20.0              # ready_gate 就绪后再等的稳定秒数(所有 gate 共用)
-  fast_lio:
-    config: gazebo_velodyne.yaml
-  gicp_localization:
-    prior_map_path: ~/result/GlobalMap.pcd     # 先验图(save_map.sh 落 ~/result)
-  robot_navigation:
-    map: ~/result/factory_map.yaml             # 占据栅格(pcd_to_occupancy 生成)
+  sim:
+    lio_sam:
+      config: params.yaml
+    fast_lio:
+      config: gazebo_velodyne.yaml
+    gicp_localization:
+      config: gicp_localization.yaml
+      prior_map_path: ~/result/GlobalMap.pcd     # 先验图(save_map.sh 落 ~/result)
+    robot_navigation:
+      config: nav2_params.yaml
+      map: ~/result/factory_map.yaml             # 占据栅格(pcd_to_occupancy 生成)
+  real:
+    lio_sam:
+      config: params_real.yaml
+    fast_lio:
+      config: vanjee_722.yaml
+    gicp_localization:
+      config: gicp_localization_real.yaml
+      prior_map_path: ~/result/GlobalMap.pcd
+    robot_navigation:
+      config: nav2_params_real.yaml
+      map: ~/result/factory_map.yaml

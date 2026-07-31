@@ -152,6 +152,61 @@ def test_slam_stack_passes_cmd_vel_output_topic_to_navigation():
     assert output_topic.id == "cmd_vel_output_topic"
 
 
+def test_slam_stack_declares_profile_parameter_files():
+    tree = _tree(SLAM_STACK)
+    declared = {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+    }
+    assert {
+        "lio_sam_params_file",
+        "gicp_config_file",
+        "nav2_params_file",
+    } <= declared
+
+
+def test_slam_stack_passes_profile_parameter_files_to_includes():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    for variable, argument in (
+        ("lio_sam_params", "lio_sam_params_file"),
+        ("gicp_config", "gicp_config_file"),
+        ("nav2_params", "nav2_params_file"),
+    ):
+        assert _launch_configuration_assignment(
+            function, variable, argument, performed=True
+        )
+
+    mapping = _include_arguments(function, "lio_sam", "launch/run.launch.py")
+    mapping_params = _dict_value(mapping, "params_file")
+    assert isinstance(mapping_params, ast.Name)
+    assert mapping_params.id == "lio_sam_params"
+
+    gicp = _include_arguments(
+        function, "gicp_localization", "launch/localization.launch.py"
+    )
+    gicp_params = _dict_value(gicp, "config_file")
+    assert isinstance(gicp_params, ast.Name)
+    assert gicp_params.id == "gicp_config"
+
+    nav2 = _include_arguments(
+        function, "robot_navigation", "launch/navigation.launch.py"
+    )
+    nav2_params = _dict_value(nav2, "params_file")
+    assert isinstance(nav2_params, ast.Name)
+    assert nav2_params.id == "nav2_params"
+
+
+def test_slam_stack_waits_for_localization_and_base_controller_odom_before_nav2():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    assert any(
+        isinstance(call.args[0], ast.List)
+        and {_string(item) for item in call.args[0].elts}
+        == {"/localization", "/base_controller/odom"}
+        for call in _calls(function, "ready_gate")
+    )
+
+
 def test_bringup_routes_navigation_output_to_cmd_vel_auto():
     function = _function(_tree(BRINGUP), "_bringup")
     arguments = _include_arguments(
