@@ -16,9 +16,10 @@ FAST-LIO 源码 **clone 到本模块目录 `core/localization/FAST_LIO`**(被 `.
 
 - `fast-lio2.patch`(**中性**,对真实无害):新增 `config/gazebo_velodyne.yaml` 与
   `config/vanjee_722.yaml`。前者使用 `points_raw` / `/imu_plugin/out`、velodyne
-  `lidar_type:2`、`scan_line:16`、blind 1.0；后者使用真机 `/points_raw` / `/imu/data`、
-  `scan_line:32`、blind 0.3。两者均为 **lidar-IMU 外参归零**
-  `extrinsic_T:[0,0,0]`(当前模型 velodyne 与 imu_link 同位置,与 mapping 一致)。
+  `lidar_type:2`、`scan_line:16`、blind 1.0，且因**仿真模型**的 velodyne 与 imu_link
+  frame 共位而使用零外参 `extrinsic_T:[0,0,0]`。后者使用真机 `/points_raw` /
+  `/imu/data`、`scan_line:32`、blind 0.3；其单位平移/旋转外参仅是已用于静态集成的
+  临时初值，不能推断物理共位。真实 LiDAR/IMU/车体六自由度外参尚未测量，待动态标定。
 
 > **去畸变说明**:`lidar_pointcloud_adapter` 已给点云补 `time` 字段(按列号合成 `(i%width)/width*0.1`),
 > FAST-LIO 检测到非零 time 即自动 `given_offset_time=true`、用该 time 去畸变。注意这是**合成**的方位角
