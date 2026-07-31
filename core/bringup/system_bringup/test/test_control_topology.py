@@ -115,6 +115,12 @@ def _leftmost_add_name(node):
     return node.id if isinstance(node, ast.Name) else None
 
 
+def _add_terms(node):
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _add_terms(node.left) + _add_terms(node.right)
+    return [node]
+
+
 def _subscript_path(node):
     path = []
     while isinstance(node, ast.Subscript):
@@ -321,12 +327,76 @@ def test_real_branch_uses_sensor_gate_before_shared_stack():
     assert timeout.value == 300.0
 
     handler = next(call for call in _calls(gate_function, "OnProcessExit"))
+    target_action = _keyword(handler, "target_action")
+    assert isinstance(target_action, ast.Name)
+    assert target_action.id == "waiter"
+
     on_exit = _keyword(handler, "on_exit")
     assert isinstance(on_exit, ast.Lambda)
     assert isinstance(on_exit.body, ast.IfExp)
     assert isinstance(on_exit.body.test, ast.Compare)
+    assert isinstance(on_exit.body.test.left, ast.Attribute)
+    assert isinstance(on_exit.body.test.left.value, ast.Name)
+    assert on_exit.body.test.left.value.id == "event"
+    assert on_exit.body.test.left.attr == "returncode"
+    assert len(on_exit.body.test.ops) == 1
+    assert isinstance(on_exit.body.test.ops[0], ast.Eq)
     assert isinstance(on_exit.body.test.comparators[0], ast.Constant)
     assert on_exit.body.test.comparators[0].value == 0
+
+    assert isinstance(on_exit.body.body, ast.Name)
+    assert on_exit.body.body.id == "then_actions"
+    assert isinstance(on_exit.body.orelse, ast.List)
+    assert len(on_exit.body.orelse.elts) == 1
+    abort = on_exit.body.orelse.elts[0]
+    assert isinstance(abort, ast.Call)
+    assert isinstance(abort.func, ast.Name)
+    assert abort.func.id == "OpaqueFunction"
+    abort_function = _keyword(abort, "function")
+    assert isinstance(abort_function, ast.Name)
+    assert abort_function.id == "_abort_real_sensor_gate"
+
+
+def test_real_branch_starts_chassis_and_lidar_before_sensor_gate():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    result = next(node.value for node in real.body if isinstance(node, ast.Return))
+    terms = _add_terms(result)
+
+    assert isinstance(terms[-2], ast.List)
+    assert [item.id for item in terms[-2].elts if isinstance(item, ast.Name)] == [
+        "chassis",
+        "lidar",
+    ]
+    assert isinstance(terms[-1], ast.Call)
+    assert isinstance(terms[-1].func, ast.Name)
+    assert terms[-1].func.id == "_real_sensor_gate"
+    assert isinstance(terms[-1].args[0], ast.List)
+    assert [item.id for item in terms[-1].args[0].elts if isinstance(item, ast.Name)] == [
+        "slam_stack"
+    ]
+
+
+def test_real_branch_resolves_vanjee_config_only_after_platform_selection():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    assignment = next(
+        node
+        for node in real.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "vanjee_config"
+            for target in node.targets
+        )
+    )
+
+    assert isinstance(assignment.value, ast.Call)
+    assert isinstance(assignment.value.func, ast.Name)
+    assert assignment.value.func.id == "_pkg_config"
+    assert _string(assignment.value.args[0]) == "vanjee_lidar_ros"
+    assert _subscript_path(assignment.value.args[1]) == (
+        "cfg", ("vanjee_lidar", "config")
+    )
 
 
 def test_real_branch_does_not_publish_duplicate_lidar_static_tf():
