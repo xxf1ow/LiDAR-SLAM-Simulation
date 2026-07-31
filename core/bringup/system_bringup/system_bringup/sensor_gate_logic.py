@@ -26,7 +26,12 @@ class RateWindow:
         self._prune(now)
         if len(self.samples) < 2:
             return 0.0
-        return (len(self.samples) - 1) / (self.samples[-1] - self.samples[0])
+        if now - self.samples[-1] > MAX_STAMP_AGE:
+            return 0.0
+        duration = self.samples[-1] - self.samples[0]
+        if duration <= 0.0:
+            return 0.0
+        return (len(self.samples) - 1) / duration
 
     def _prune(self, now):
         cutoff = now - self.window
