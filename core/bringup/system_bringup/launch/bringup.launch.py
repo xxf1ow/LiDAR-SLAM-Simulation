@@ -1,7 +1,7 @@
 """全栈启动。config/bringup.yaml 选 platform(sim/real) + mode(nav/map),改 config 不 rebuild。
 
 唯一入口:ros2 launch system_bringup bringup.launch.py
-流程:① 一致性闸门(失败即中止)② 底层(platform=sim: robot_gz; platform=real: 骨架 TODO)
+流程:① 一致性闸门(失败即中止)② 底层(platform=sim: robot_gz; platform=real: chassis+Vanjee)
 ③ ready_gate 等 lidar(+ sim controller)④ slam_stack(mode=navigation: fast_lio→gicp→nav2;
 mode=mapping: lio_sam)。
 切 platform/mode 改 config/bringup.yaml 顶层两行即可,不用 rebuild。
@@ -11,7 +11,13 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (IncludeLaunchDescription, LogInfo, OpaqueFunction)
+from launch.actions import (
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+    RegisterEventHandler,
+)
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
@@ -27,6 +33,34 @@ def _inc(pkg, rel, args=None):
 
 def _pkg_config(package, filename):
     return os.path.join(get_package_share_directory(package), "config", filename)
+
+
+def _abort_real_sensor_gate(context, *args, **kwargs):
+    raise RuntimeError(
+        "真实传感器 gate 未通过；详细原因见 real_sensor_ready_gate 日志，"
+        "已中止整个 launch。"
+    )
+
+
+def _real_sensor_gate(then_actions):
+    waiter = Node(
+        package="system_bringup",
+        executable="real_sensor_ready_gate",
+        name="real_sensor_ready_gate",
+        output="screen",
+        parameters=[{"timeout": 300.0}],
+    )
+    handler = RegisterEventHandler(
+        OnProcessExit(
+            target_action=waiter,
+            on_exit=lambda event, context: (
+                then_actions
+                if event.returncode == 0
+                else [OpaqueFunction(function=_abort_real_sensor_gate)]
+            ),
+        )
+    )
+    return [waiter, handler]
 
 
 def _bringup(context, *args, **kwargs):
@@ -94,17 +128,29 @@ def _bringup(context, *args, **kwargs):
             settling=stack_cfg["settling"])
 
     if platform == "real":
-        actions = [
+        vanjee_config = _pkg_config(
+            "vanjee_lidar_ros", cfg["vanjee_lidar"]["config"]
+        )
+        chassis = _inc(
+            "robot_bringup",
+            "launch/real_chassis.launch.py",
+            {"gui": "false"},
+        )
+        lidar = _inc(
+            "vanjee_lidar_ros",
+            "launch/vanjee_lidar.launch.py",
+            {"config_file": vanjee_config},
+        )
+        flow_log = [
             flow("一致性闸门通过 | platform=real | mode=%s | config=源码 bringup.yaml(改它不 rebuild)" % mode),
-            flow("① 真机底层未实现(骨架);上真机时在此 include robot_bringup(真实硬件)+ velodyne/imu 驱动"),
+            flow("① 起真实底盘+Vanjee 722 → 真实传感器 gate 连续验收 2s → 起共享 slam_stack"),
         ]
-        # TODO(真机): 取消下行注释并补真机底层 ——
-        #   robot_bringup robot.launch.py use_mock_hardware:=false + 真实 velodyne/imu 驱动节点。
-        # actions.append(_inc("robot_bringup", "launch/robot.launch.py",
-        #     {"use_mock_hardware": str(cfg["robot_bringup"].get("use_mock_hardware", False))}))
-        actions += ready_gate("/points_raw", 300.0, "真机 velodyne→/points_raw",
-                              [slam_stack], settling=stack_cfg["settling"])
-        return control_layer + actions
+        return (
+            control_layer
+            + flow_log
+            + [chassis, lidar]
+            + _real_sensor_gate([slam_stack])
+        )
 
     raise RuntimeError("未知 platform='%s'(应为 sim|real)" % platform)
 

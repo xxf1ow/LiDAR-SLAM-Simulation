@@ -283,9 +283,66 @@ def test_bringup_prepends_control_layer_to_both_platform_returns():
         assert _leftmost_add_name(result) == "control_layer"
 
 
+def test_real_branch_includes_chassis_and_vanjee_driver():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+
+    chassis = _include_arguments(
+        real, "robot_bringup", "launch/real_chassis.launch.py"
+    )
+    assert _string(_dict_value(chassis, "gui")) == "false"
+
+    lidar = _include_arguments(
+        real, "vanjee_lidar_ros", "launch/vanjee_lidar.launch.py"
+    )
+    config_file = _dict_value(lidar, "config_file")
+    assert isinstance(config_file, ast.Name)
+    assert config_file.id == "vanjee_config"
+
+
+def test_real_branch_uses_sensor_gate_before_shared_stack():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    gate = next(call for call in _calls(real, "_real_sensor_gate"))
+    assert isinstance(gate.args[0], ast.List)
+    assert [item.id for item in gate.args[0].elts if isinstance(item, ast.Name)] == [
+        "slam_stack"
+    ]
+
+    gate_function = _function(_tree(BRINGUP), "_real_sensor_gate")
+    waiter = _node_call(gate_function, "system_bringup", "real_sensor_ready_gate")
+    assert _string(_keyword(waiter, "name")) == "real_sensor_ready_gate"
+    assert _string(_keyword(waiter, "output")) == "screen"
+    parameters = _keyword(waiter, "parameters")
+    assert isinstance(parameters, ast.List)
+    assert isinstance(parameters.elts[0], ast.Dict)
+    timeout = _dict_value(parameters.elts[0], "timeout")
+    assert isinstance(timeout, ast.Constant)
+    assert timeout.value == 300.0
+
+    handler = next(call for call in _calls(gate_function, "OnProcessExit"))
+    on_exit = _keyword(handler, "on_exit")
+    assert isinstance(on_exit, ast.Lambda)
+    assert isinstance(on_exit.body, ast.IfExp)
+    assert isinstance(on_exit.body.test, ast.Compare)
+    assert isinstance(on_exit.body.test.comparators[0], ast.Constant)
+    assert on_exit.body.test.comparators[0].value == 0
+
+
+def test_real_branch_does_not_publish_duplicate_lidar_static_tf():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    assert not any(
+        _string(_keyword(call, "package")) == "tf2_ros"
+        and _string(_keyword(call, "executable")) == "static_transform_publisher"
+        for call in _calls(real, "Node")
+    )
+
+
 def test_manifest_exec_depends_on_control_packages():
     manifest = ET.parse(MANIFEST)
     dependencies = {
         element.text for element in manifest.getroot().findall("exec_depend")
     }
     assert {"cmd_vel_gate", "robot_web_ui"} <= dependencies
+    assert {"robot_bringup", "vanjee_lidar_ros", "rclpy", "sensor_msgs"} <= dependencies
