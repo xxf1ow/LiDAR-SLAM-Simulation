@@ -115,6 +115,16 @@ def _leftmost_add_name(node):
     return node.id if isinstance(node, ast.Name) else None
 
 
+def _subscript_path(node):
+    path = []
+    while isinstance(node, ast.Subscript):
+        path.append(
+            node.slice.id if isinstance(node.slice, ast.Name) else _string(node.slice)
+        )
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None, tuple(reversed(path))
+
+
 def test_navigation_declares_cmd_vel_output_topic_with_legacy_default():
     assert _declaration_default(_tree(NAVIGATION), "cmd_vel_output_topic") == "/cmd_vel"
 
@@ -213,6 +223,44 @@ def test_bringup_routes_navigation_output_to_cmd_vel_auto():
         function, "system_bringup", "launch/slam_stack.launch.py"
     )
     assert _string(_dict_value(arguments, "cmd_vel_output_topic")) == "/cmd_vel_auto"
+
+
+def test_bringup_selects_the_slam_profile_from_platform():
+    function = _function(_tree(BRINGUP), "_bringup")
+    profile_assignment = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "profile"
+            for target in node.targets
+        )
+    )
+    assert _subscript_path(profile_assignment.value) == ("stack_cfg", ("platform",))
+
+
+def test_bringup_passes_selected_profile_configs_to_shared_slam_stack():
+    function = _function(_tree(BRINGUP), "_bringup")
+    arguments = _include_arguments(
+        function, "system_bringup", "launch/slam_stack.launch.py"
+    )
+    for argument, package, component in (
+        ("lio_sam_params_file", "lio_sam", "lio_sam"),
+        ("gicp_config_file", "gicp_localization", "gicp_localization"),
+        ("nav2_params_file", "robot_navigation", "robot_navigation"),
+    ):
+        value = _dict_value(arguments, argument)
+        assert isinstance(value, ast.Call)
+        assert isinstance(value.func, ast.Name)
+        assert value.func.id == "_pkg_config"
+        assert _string(value.args[0]) == package
+        assert _subscript_path(value.args[1]) == (
+            "profile", (component, "config")
+        )
+
+    assert _subscript_path(_dict_value(arguments, "fast_lio_config")) == (
+        "profile", ("fast_lio", "config")
+    )
 
 
 def test_bringup_creates_gate_and_web_nodes_before_platform_branching():
