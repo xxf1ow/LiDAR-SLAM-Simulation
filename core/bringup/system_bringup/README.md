@@ -52,10 +52,57 @@ gate 会持续发布零速。Web 不会失能硬件，不能替代物理急停�
 |---|---|---|---|
 | sim | navigation | robot_gz | fast_lio→gicp→nav2 |
 | sim | mapping | robot_gz | lio_sam 建图 |
-| real | navigation | TODO 骨架 | fast_lio→gicp→nav2 |
-| real | mapping | TODO 骨架 | lio_sam 建图 |
+| real | navigation | 真实 8030D 底盘 + Vanjee 722 + 真实传感器 gate | FAST-LIO(real) → GICP(real) → Nav2(real) |
+| real | mapping | 真实 8030D 底盘 + Vanjee 722 + 真实传感器 gate | LIO-SAM(real) 建图 |
 
-改 config 顶层 `platform` + `mode` 即切,不用 rebuild。`use_sim_time` 从 platform 推断(sim=true, real=false)。
+改 config 顶层 `platform` + `mode` 即切,不用 rebuild `system_bringup`。`use_sim_time` 从 platform 推断(sim=true, real=false)。首次使用新增 launch/YAML 或下游包时，仍须先构建对应包。
+
+### 真机传感器 gate
+
+`platform: real` 时，在真实底盘和 Vanjee 722 启动后，`real_sensor_ready_gate`
+才会放行共享 SLAM 栈。它连续观察 **2 秒**，同时要求：
+
+- `/points_raw` 是 `velodyne`、字段严格为 `x/y/z/intensity/ring/time`、组织形状 **32×1200**、频率至少 **8 Hz**；
+- `/imu/data` 是 `imu_link`、频率至少 **150 Hz**；
+- 两个消息的 header stamp 都是 fresh（相对当前 ROS 时钟年龄在 0–0.5 s）。
+
+任一契约、频率或新鲜度不满足都会重置连续观察时间；超时则整个 launch 中止而不启动上层。仿真的 graph-only `ready_gate` 保持原有 `/points_raw + /joint_states + settling` 行为，不受此真机 gate 替代。
+
+独立检查真机 gate（正常数据应约 2 秒后以 0 退出；停雷达后的失败路径应非 0）：
+
+```bash
+ros2 run system_bringup real_sensor_ready_gate
+echo $?
+
+ros2 run system_bringup real_sensor_ready_gate \
+  --ros-args -p timeout:=5.0
+echo $?
+```
+
+### 真机静态验收与 bag
+
+真机静态验收时临时把源码 `config/bringup.yaml` 设为 `platform: real`，再选
+`mode: mapping` 或 `mode: navigation`，启动 `ros2 launch system_bringup bringup.launch.py`。
+验收后必须恢复仓库默认 `platform: sim`、`mode: navigation`；该切换不需要 rebuild。
+
+建图模式应复验真实底盘、Vanjee、control gate、Web 与 LIO-SAM real 均启动，日志选用
+`params_real.yaml`，`/lio_sam/mapping/odometry` 持续发布，且 `map → base_footprint`
+可查询。这是既有 LIO-SAM 真机集成的静态复验，非重新调参。
+
+车身静止、雷达节点和 `robot_state_publisher` 正常运行时，录约 30 秒回归 bag 到仓库外：
+
+```bash
+mkdir -p ~/result/rosbag
+ros2 bag record \
+  -o ~/result/rosbag/vanjee_722_static_2026-07-31 \
+  /points_raw /imu/data /tf /tf_static
+
+# 约 30 秒后 Ctrl-C
+ros2 bag info ~/result/rosbag/vanjee_722_static_2026-07-31
+```
+
+预期约 300 条 `/points_raw`、约 6000 条 `/imu/data`（以 `ros2 bag info` 实际值为准）。
+bag 保留在 `~/result/rosbag/`，不提交 `.db3` 或 metadata；可用 `ros2 bag play` 回放。
 
 ## 验收判据(PASS)
 1. `colcon build` / `colcon test` 全绿;本机 `pytest core/bringup/system_bringup/test` 通过。
@@ -63,7 +110,7 @@ gate 会持续发布零速。Web 不会失能硬件，不能替代物理急停�
 3. 改 config `mode: mapping`(**不用 rebuild**)再起:闸门通过 → robot_gz + lio_sam,可建图存先验图。
 4. **闸门有效性**:临时把 `robot_controllers.yaml` 轮径改 0.10 → `ros2 launch system_bringup bringup.launch.py` 报"一致性闸门未通过 + [G2] wheel_radius ..."且**无任何节点启动**;改回即恢复。
 5. `weld_z` 不再是裸 `-0.556`,由 `navigation.launch.py` 几何常量算出;`tf2_echo map base_footprint` z≈-0.56。
-6. `platform: real` 时 bringup 进入 real 分支(骨架 TODO,底层不拉、提示上真机时补驱动),结构完整、不要求运行。
+6. `platform: real` 时 bringup 启动真实 8030D 底盘和 Vanjee 722，经真实传感器 gate 后选择 real SLAM/Nav2 参数。仅源码与纯测试已在本 Windows checkout 验证；真机运行验收须在 Ubuntu/ROS 2 与目标硬件上完成。
 
 ## 改参数去哪
 - 启动相关(platform/mode/gui/rviz/world/spawn/先验图路径/settling):**`config/bringup.yaml`** —— 按节点分组(`robot_gz`/`robot_bringup`/`slam_stack.*`),`bringup.launch.py` 读**源码** config,**改它不用 rebuild**。源码根由闸门自动检测。
@@ -73,5 +120,5 @@ gate 会持续发布零速。Web 不会失能硬件，不能替代物理急停�
 > 为什么 config 不进 `setup.py data_files`(不 install):ament_python 的 launch/config 是 data_files 拷贝到 install、改了要 rebuild。launch 用 `find_repo_root()` 读**源码** config 绕开 install。见 `consistency_check.load_bringup_config`。
 
 ## 已知边界
-- 契约类(帧/话题)不入测试;真机底层驱动未实现(platform=real 骨架 TODO);lio-sam `savePCDDirectory` 用 `/result/loam/`(存图以 `save_map` 服务 `destination` 为准,见 mapping 模块 `save_map.sh`)。
+- 契约类(帧/话题)不入仿真 graph-only gate;真实传感器 gate 对真机接口作独立强制检查。lio-sam `savePCDDirectory` 用 `/result/loam/`(存图以 `save_map` 服务 `destination` 为准,见 mapping 模块 `save_map.sh`)。
 - G3 守住 navigation.launch.py 的几何常量 == xacro,但不解析 weld_z 计算式本身。

@@ -45,6 +45,37 @@ ros2 launch system_bringup bringup.launch.py
 # 2) 锁定 GICP：RViz「2D Pose Estimate」(/initialpose) 设到机器人真实 map 位姿，等 /localization 稳定
 ```
 
+## 真机配置与验收边界
+
+`nav2_params_real.yaml` 只把 `use_sim_time` 切为 wall clock (`false`)；现有导航参数不因
+真机 profile 而改变。真实传感器高度、真实垂直 FOV，以及雷达/IMU/车体最终六自由度外参都还**未实测**。
+因此其中 STVL 视锥与障碍高度值是部署起点，不是已经完成的现场标定。
+
+真机**静态**验收使用 `platform: real`、`mode: navigation` 后启动完整 bringup，并检查：
+
+```bash
+ros2 launch system_bringup bringup.launch.py
+timeout 10 ros2 topic hz /Odometry
+timeout 10 ros2 topic hz /cloud_registered
+timeout 10 ros2 topic hz /localization
+timeout 10 ros2 topic hz /base_controller/odom
+timeout 5 ros2 run tf2_ros tf2_echo map base_footprint
+ros2 lifecycle get /map_server
+ros2 lifecycle get /planner_server
+ros2 lifecycle get /controller_server
+ros2 lifecycle get /behavior_server
+ros2 lifecycle get /bt_navigator
+```
+
+静态判据：Vanjee → FAST-LIO → GICP/base odom → Nav2 按序放行；`map → camera_init → body
+→ base_footprint → base_link → velodyne/imu_link` 连通；五个 Nav2 lifecycle 节点均为
+`active`；先验点云、地图和 costmap 能加载。小车保持静止，不发送 Nav2 goal。这些
+FAST-LIO/GICP/Nav2 的新一体化真机运行检查目前仍为 **待完成**。
+
+**动态行驶验收另行进行，不能从静态检查推断 PASS。** 它包括最终外参与 IMU 正负轴验证、
+FAST-LIO 去畸变和行驶轨迹、GICP fitness/错误初值恢复与 `/initialpose` 重定位、Nav2
+路径跟踪、障碍 mark/clear 和控制输出实际驱动车轮。仅在小车具备安全运动条件后执行。
+
 手机访问 `http://<机器人或仿真主机IP>:8080`
 
 - mapping：点击“人工接管”后按住方向按钮驾驶

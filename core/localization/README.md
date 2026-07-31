@@ -14,9 +14,11 @@
 FAST-LIO 源码 **clone 到本模块目录 `core/localization/FAST_LIO`**(被 `.gitignore` 排除、不入库),
 再 `git apply` 本模块跟踪的两个补丁。**不放在 src 下**——core 是自成一体的完整 colcon 工作区。
 
-- `fast-lio2.patch`(**中性**,对真实无害):新增 `config/gazebo_velodyne.yaml`——话题
-  `points_raw` / `/imu_plugin/out`、velodyne `lidar_type:2`、`scan_line:16`、blind 1.0、
-  **lidar-IMU 外参归零** `extrinsic_T:[0,0,0]`(新模型 velodyne 与 imu_link 同位置,与 mapping 一致)。
+- `fast-lio2.patch`(**中性**,对真实无害):新增 `config/gazebo_velodyne.yaml` 与
+  `config/vanjee_722.yaml`。前者使用 `points_raw` / `/imu_plugin/out`、velodyne
+  `lidar_type:2`、`scan_line:16`、blind 1.0；后者使用真机 `/points_raw` / `/imu/data`、
+  `scan_line:32`、blind 0.3。两者均为 **lidar-IMU 外参归零**
+  `extrinsic_T:[0,0,0]`(当前模型 velodyne 与 imu_link 同位置,与 mapping 一致)。
 
 > **去畸变说明**:`lidar_pointcloud_adapter` 已给点云补 `time` 字段(按列号合成 `(i%width)/width*0.1`),
 > FAST-LIO 检测到非零 time 即自动 `given_offset_time=true`、用该 time 去畸变。注意这是**合成**的方位角
@@ -25,6 +27,58 @@ FAST-LIO 源码 **clone 到本模块目录 `core/localization/FAST_LIO`**(被 `.
 
 `livox_ros_driver2`(本目录内,**入库**)是仅含 `CustomMsg`/`CustomPoint` 的**消息桩包**,只为满足
 FAST-LIO 在 velodyne-only 配置下的编译期类型依赖——无驱动、不需 Livox-SDK。
+
+### Vanjee 逐点时间单位与真机静态检查
+
+真实 `config/vanjee_722.yaml` 的 `timestamp_unit: 0` 指 **每个点的 `time` 字段以秒为单位**，
+不是雷达 10 Hz 发布周期。当前消息转换代码测试已覆盖 `0.099 s` 的逐点值；这只证明转换语义，
+并不替代真机帧的测量。真实 `/points_raw` 的 `time` 最小/最大值仍为 **待测**：应在驱动运行时
+解一帧，确认 min 接近 0、max 约 0.1 s 而非毫秒或微秒数量级；若不在秒范围，停止 FAST-LIO
+验收并检查驱动逐点时间，不能通过修改 `scan_rate` 掩盖问题。
+
+```bash
+python3 - <<'PY'
+import rclpy
+from rclpy.qos import qos_profile_sensor_data
+from sensor_msgs.msg import PointCloud2
+from sensor_msgs_py import point_cloud2
+
+rclpy.init()
+node = rclpy.create_node("inspect_vanjee_point_time")
+
+def callback(msg):
+    values = [row[0] for row in point_cloud2.read_points(
+        msg, field_names=("time",), skip_nans=False)]
+    print(f"count={len(values)} min={min(values):.9f}s max={max(values):.9f}s")
+    rclpy.shutdown()
+
+node.create_subscription(PointCloud2, "/points_raw", callback, qos_profile_sensor_data)
+rclpy.spin(node)
+node.destroy_node()
+PY
+```
+
+在 Ubuntu/ROS 2 和目标硬件上，先依 Task 7 的 patch 规则 apply 或 reapply
+`fast-lio2.patch`（旧 clone 只含 `gazebo_velodyne.yaml` 时先仅 reverse 该文件，再 apply
+完整 patch），然后构建。真机静态导航验收使用 `platform: real, mode: navigation`：
+
+```bash
+cd core
+colcon build --packages-up-to system_bringup
+source install/setup.bash
+ros2 launch system_bringup bringup.launch.py
+
+timeout 10 ros2 topic hz /Odometry
+timeout 10 ros2 topic hz /cloud_registered
+timeout 10 ros2 topic hz /localization
+timeout 10 ros2 topic hz /base_controller/odom
+timeout 5 ros2 run tf2_ros tf2_echo map base_footprint
+```
+
+静态通过条件是 Vanjee gate → FAST-LIO gate → GICP/base-odom gate → Nav2 的启动顺序，
+四个话题存在，且 `map → camera_init → body → base_footprint → base_link → velodyne/imu_link`
+连通、每条 TF 边只有一个发布者且没有额外 `base_footprint → velodyne`。本仓库的
+FAST-LIO/GICP 集成运行验收目前仍为 **待完成**，不得把上述命令或静态源码检查记为真机 PASS。
 
 clone + apply(从仓库根):
 ```bash
