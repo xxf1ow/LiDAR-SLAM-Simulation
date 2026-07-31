@@ -26,18 +26,31 @@ def test_xacro_joint_origin_colocated():
         cc._xacro_joint_origin_xyz(macro, "imu_joint")
 
 
-def test_patch_added_value_reads_plus_lines():
-    liosam = cc._read(_root(), cc.F_LIOSAM_PATCH)
-    assert cc._patch_added_value(liosam, "N_SCAN") == "16"
-    assert cc._patch_added_value(liosam, "Horizon_SCAN") == "1800"
-    assert cc._patch_added_value(liosam, "lidarFrame") == "velodyne"
+def test_fastlio_sim_patch_yaml_reconstructed_by_path():
+    patch = cc._read(_root(), cc.F_FASTLIO_PATCH)
+    params = cc._yaml(
+        cc._patch_added_file(patch, "config/gazebo_velodyne.yaml")
+    )["/**"]["ros__parameters"]
+    assert params["preprocess"] == {
+        "lidar_type": 2,
+        "scan_line": 16,
+        "scan_rate": 10,
+        "timestamp_unit": 2,
+        "blind": 1.0,
+    }
 
 
-def test_fastlio_patch_yaml_reconstructed():
-    pre = cc._yaml(cc._patch_added_text(cc._read(_root(), cc.F_FASTLIO_PATCH)))["/**"]["ros__parameters"]["preprocess"]
-    assert pre["scan_line"] == 16
-    assert pre["scan_rate"] == 10
-    assert pre["blind"] == 1.0
+def test_liosam_sim_patch_values_are_scoped_by_path():
+    patch = cc._read(_root(), cc.F_LIOSAM_PATCH)
+    assert cc._patch_added_value(
+        patch, "config/params.yaml", "N_SCAN"
+    ) == "16"
+    assert cc._patch_added_value(
+        patch, "config/params.yaml", "Horizon_SCAN"
+    ) == "1800"
+    assert cc._patch_added_value(
+        patch, "config/params.yaml", "lidarFrame"
+    ) == "velodyne"
 
 
 def test_gazebo_lidar_block():

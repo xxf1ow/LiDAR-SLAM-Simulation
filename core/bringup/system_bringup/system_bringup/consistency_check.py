@@ -83,25 +83,39 @@ def _xacro_joint_origin_xyz(text, joint_substr):
     return mo.group(1).strip() if mo else None
 
 
-def _patch_added_text(text):
-    """patch 的 '+'(新增)行内容(去前导 '+',跳过 '+++' 头),拼回文本。"""
-    out = []
-    for ln in text.splitlines():
-        if ln.startswith("+++"):
-            continue
-        if ln.startswith("+"):
-            out.append(ln[1:])
-    return "\n".join(out)
+def _patch_file_section(text, relative_path):
+    """从 unified diff 中取出指定文件的完整 diff 段。"""
+    marker = "diff --git a/%s b/%s" % (relative_path, relative_path)
+    start = text.find(marker)
+    if start < 0:
+        raise ValueError("patch 中找不到文件: %s" % relative_path)
+    return text[start:].split("\ndiff --git ", 1)[0]
 
 
-def _patch_added_value(text, key):
-    """在 patch '+' 行里找 `key: value`,返回去注释/去引号的 value 串。"""
-    for ln in text.splitlines():
-        if ln.startswith("+++") or not ln.startswith("+"):
+def _patch_added_file(text, relative_path):
+    """从 unified diff 中重建指定新增文件；找不到或不是新增文件时明确失败。"""
+    section = _patch_file_section(text, relative_path)
+    if "--- /dev/null" not in section:
+        raise ValueError("patch 目标不是新增文件: %s" % relative_path)
+    return "\n".join(
+        line[1:]
+        for line in section.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    )
+
+
+def _patch_added_value(text, relative_path, key):
+    """在指定文件 diff 的 '+' 行里读取 `key: value`。"""
+    section = _patch_file_section(text, relative_path)
+    for line in section.splitlines():
+        if line.startswith("+++") or not line.startswith("+"):
             continue
-        m = re.match(r'\s*' + re.escape(key) + r'\s*:\s*(.+?)\s*(#.*)?$', ln[1:])
-        if m:
-            return m.group(1).strip().strip('"')
+        match = re.match(
+            r"\s*" + re.escape(key) + r"\s*:\s*(.+?)\s*(#.*)?$",
+            line[1:],
+        )
+        if match:
+            return match.group(1).strip().strip('"')
     return None
 
 
@@ -179,7 +193,11 @@ def check_geometry(repo_root):
     ixyz = _xacro_joint_origin_xyz(macro, "imu_joint")
     if vxyz != ixyz:
         fails.append("[G4] velodyne_joint/imu_joint origin 不同(应共位): '%s' vs '%s'。" % (vxyz, ixyz))
-    flm = _yaml(_patch_added_text(_read(repo_root, F_FASTLIO_PATCH)))["/**"]["ros__parameters"]["mapping"]
+    fastlio = _yaml(_patch_added_file(
+        _read(repo_root, F_FASTLIO_PATCH),
+        "config/gazebo_velodyne.yaml",
+    ))["/**"]["ros__parameters"]
+    flm = fastlio["mapping"]
     if [float(v) for v in flm["extrinsic_T"]] != [0.0, 0.0, 0.0]:
         fails.append("[G4] fast-lio extrinsic_T 非零: %s(velodyne/imu 共位应为 [0,0,0])。" % flm["extrinsic_T"])
     if [float(v) for v in flm["extrinsic_R"]] != [1, 0, 0, 0, 1, 0, 0, 0, 1]:
@@ -199,10 +217,21 @@ def check_lidar(repo_root):
     """L1–L4:雷达规格在 gazebo.xacro / lio-sam.patch / fast-lio2.patch / adapter 间自洽。"""
     fails = []
     gz = _gazebo_lidar(_read(repo_root, F_GAZEBO))
-    fl_pre = _yaml(_patch_added_text(_read(repo_root, F_FASTLIO_PATCH)))["/**"]["ros__parameters"]["preprocess"]
-    liosam = _read(repo_root, F_LIOSAM_PATCH)
-    n_scan = int(_patch_added_value(liosam, "N_SCAN"))
-    horizon = int(_patch_added_value(liosam, "Horizon_SCAN"))
+    fastlio = _yaml(_patch_added_file(
+        _read(repo_root, F_FASTLIO_PATCH),
+        "config/gazebo_velodyne.yaml",
+    ))["/**"]["ros__parameters"]
+    fl_pre = fastlio["preprocess"]
+    n_scan = int(_patch_added_value(
+        _read(repo_root, F_LIOSAM_PATCH),
+        "config/params.yaml",
+        "N_SCAN",
+    ))
+    horizon = int(_patch_added_value(
+        _read(repo_root, F_LIOSAM_PATCH),
+        "config/params.yaml",
+        "Horizon_SCAN",
+    ))
     adapter_rate = round(1.0 / _adapter_scan_period(_read(repo_root, F_GZ_LAUNCH)))
 
     # L1 线数
