@@ -23,10 +23,28 @@ F_MACRO = "core/robot/robot_description/urdf/robot_macro.urdf.xacro"
 F_GAZEBO = "core/robot/robot_description/gazebo/robot.gazebo.xacro"
 F_CONTROLLERS = "core/robot/robot_bringup/config/robot_controllers.yaml"
 F_NAV_PARAMS = "core/navigation/robot_navigation/config/nav2_params.yaml"
+F_NAV_PARAMS_REAL = "core/navigation/robot_navigation/config/nav2_params_real.yaml"
 F_NAV_LAUNCH = "core/navigation/robot_navigation/launch/navigation.launch.py"
 F_GZ_LAUNCH = "core/simulation/robot_gz_bringup/launch/robot_gz.launch.py"
 F_FASTLIO_PATCH = "core/localization/fast-lio2.patch"
 F_LIOSAM_PATCH = "core/mapping/lio-sam.patch"
+F_VANJEE_PARAMS = (
+    "core/robot/drivers/lidar_vanjee_722/"
+    "vanjee_lidar_ros/config/vanjee_722.yaml"
+)
+
+FASTLIO_CONFIG = {
+    "sim": "config/gazebo_velodyne.yaml",
+    "real": "config/vanjee_722.yaml",
+}
+LIOSAM_CONFIG = {
+    "sim": "config/params.yaml",
+    "real": "config/params_real.yaml",
+}
+NAV_CONFIG = {
+    "sim": F_NAV_PARAMS,
+    "real": F_NAV_PARAMS_REAL,
+}
 
 _MARKER = os.path.join("core", "bringup", "system_bringup")
 
@@ -148,15 +166,17 @@ def _parse_footprint(s):
     return [(float(x), float(y)) for x, y in ast.literal_eval(s)]
 
 
-def check_geometry(repo_root):
+def check_geometry(repo_root, platform="sim"):
     """G1–G5:几何派生值在 xacro / controllers / nav2 / launch 间自洽。"""
+    if platform not in ("sim", "real"):
+        return ["未知 platform=%r(应为 sim|real)。" % platform]
     fails = []
     macro = _read(repo_root, F_MACRO)
     props = _xacro_props(macro)
     base_l, base_w, base_h = props["base_length"], props["base_width"], props["base_height"]
     wheel_r, lidar_h = props["wheel_radius"], props["lidar_height"]
 
-    nav = _yaml(_read(repo_root, F_NAV_PARAMS))
+    nav = _yaml(_read(repo_root, NAV_CONFIG[platform]))
     ctrl = _yaml(_read(repo_root, F_CONTROLLERS))
     cp = ctrl["base_controller"]["ros__parameters"]
 
@@ -195,7 +215,7 @@ def check_geometry(repo_root):
         fails.append("[G4] velodyne_joint/imu_joint origin 不同(应共位): '%s' vs '%s'。" % (vxyz, ixyz))
     fastlio = _yaml(_patch_added_file(
         _read(repo_root, F_FASTLIO_PATCH),
-        "config/gazebo_velodyne.yaml",
+        FASTLIO_CONFIG[platform],
     ))["/**"]["ros__parameters"]
     flm = fastlio["mapping"]
     if [float(v) for v in flm["extrinsic_T"]] != [0.0, 0.0, 0.0]:
@@ -213,23 +233,65 @@ def check_geometry(repo_root):
     return fails
 
 
-def check_lidar(repo_root):
-    """L1–L4:雷达规格在 gazebo.xacro / lio-sam.patch / fast-lio2.patch / adapter 间自洽。"""
+def check_lidar(repo_root, platform="sim"):
+    """sim 检查 L1–L4，real 检查 R1–R9。"""
+    if platform not in ("sim", "real"):
+        return ["未知 platform=%r(应为 sim|real)。" % platform]
     fails = []
-    gz = _gazebo_lidar(_read(repo_root, F_GAZEBO))
     fastlio = _yaml(_patch_added_file(
         _read(repo_root, F_FASTLIO_PATCH),
-        "config/gazebo_velodyne.yaml",
+        FASTLIO_CONFIG[platform],
     ))["/**"]["ros__parameters"]
+
+    if platform == "real":
+        lio = _yaml(_patch_added_file(
+            _read(repo_root, F_LIOSAM_PATCH),
+            LIOSAM_CONFIG[platform],
+        ))["/**"]["ros__parameters"]
+        driver = _yaml(_read(repo_root, F_VANJEE_PARAMS))["vanjee_lidar"]["ros__parameters"]
+        fl_pre = fastlio["preprocess"]
+        fl_common = fastlio["common"]
+
+        if not (driver["lidar_type"] == "vanjee_722" and fl_pre["lidar_type"] == 2):
+            fails.append("[R1] lidar_type 不一致: driver=%r, fast-lio=%r(应为 vanjee_722/2)。"
+                         % (driver["lidar_type"], fl_pre["lidar_type"]))
+        if not (fl_pre["scan_line"] == lio["N_SCAN"] == 32):
+            fails.append("[R2] 线数不一致: fast-lio=%d, lio-sam=%d(应均为 32)。"
+                         % (fl_pre["scan_line"], lio["N_SCAN"]))
+        if fl_pre["scan_rate"] != 10:
+            fails.append("[R3] fast-lio scan_rate=%d(应为 10)。" % fl_pre["scan_rate"])
+        if fl_pre["timestamp_unit"] != 0:
+            fails.append("[R4] fast-lio timestamp_unit=%d(应为 0)。" % fl_pre["timestamp_unit"])
+        if not (fl_pre["blind"] == 0.3 and fl_pre["blind"] >= driver["min_distance"]):
+            fails.append("[R5] fast-lio blind=%.2f(应为 0.30且不小于 driver min_distance=%.2f)。"
+                         % (fl_pre["blind"], driver["min_distance"]))
+        if not (driver["point_cloud_topic"] == fl_common["lid_topic"] == lio["pointCloudTopic"] == "/points_raw"):
+            fails.append("[R6] 点云话题不一致: driver=%r, fast-lio=%r, lio-sam=%r(应均为 /points_raw)。"
+                         % (driver["point_cloud_topic"], fl_common["lid_topic"], lio["pointCloudTopic"]))
+        if not (driver["imu_topic"] == fl_common["imu_topic"] == lio["imuTopic"] == "/imu/data"):
+            fails.append("[R7] IMU 话题不一致: driver=%r, fast-lio=%r, lio-sam=%r(应均为 /imu/data)。"
+                         % (driver["imu_topic"], fl_common["imu_topic"], lio["imuTopic"]))
+        if (driver["lidar_frame"], driver["imu_frame"]) != ("velodyne", "imu_link"):
+            fails.append("[R8] driver frame 不一致: lidar=%r, imu=%r(应为 velodyne/imu_link)。"
+                         % (driver["lidar_frame"], driver["imu_frame"]))
+        if lio["lidarFrame"] != driver["lidar_frame"]:
+            fails.append("[R8] lio-sam lidarFrame=%r != driver lidar_frame=%r。"
+                         % (lio["lidarFrame"], driver["lidar_frame"]))
+        if not (lio["Horizon_SCAN"] == 1200 and lio["use_sim_time"] is False):
+            fails.append("[R9] lio-sam Horizon_SCAN=%d/use_sim_time=%r(应为 1200/false)。"
+                         % (lio["Horizon_SCAN"], lio["use_sim_time"]))
+        return fails
+
+    gz = _gazebo_lidar(_read(repo_root, F_GAZEBO))
     fl_pre = fastlio["preprocess"]
     n_scan = int(_patch_added_value(
         _read(repo_root, F_LIOSAM_PATCH),
-        "config/params.yaml",
+        LIOSAM_CONFIG[platform],
         "N_SCAN",
     ))
     horizon = int(_patch_added_value(
         _read(repo_root, F_LIOSAM_PATCH),
-        "config/params.yaml",
+        LIOSAM_CONFIG[platform],
         "Horizon_SCAN",
     ))
     adapter_rate = round(1.0 / _adapter_scan_period(_read(repo_root, F_GZ_LAUNCH)))
@@ -258,9 +320,10 @@ def run(repo_root=None):
         return ["缺少 pyyaml(pip install pyyaml / apt install python3-yaml)。"]
     if repo_root is None:
         repo_root = find_repo_root()
+    platform = load_bringup_config(repo_root)["platform"]
     fails = []
-    fails += check_geometry(repo_root)
-    fails += check_lidar(repo_root)
+    fails += check_geometry(repo_root, platform)
+    fails += check_lidar(repo_root, platform)
     return fails
 
 

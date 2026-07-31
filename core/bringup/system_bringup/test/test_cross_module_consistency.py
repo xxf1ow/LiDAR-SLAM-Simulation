@@ -1,6 +1,8 @@
 """跨模块一致性:对真实仓库源文件跑(纯解析,无 ROS,本机 pytest 可跑)。"""
 import os
 
+import pytest
+
 from system_bringup import consistency_check as cc
 
 
@@ -73,6 +75,44 @@ def test_geometry_consistent():
 def test_lidar_consistent():
     fails = cc.check_lidar(_root())
     assert fails == [], "雷达不一致:\n" + "\n".join(fails)
+
+
+def test_sim_lidar_consistent_without_reading_real_profile():
+    assert cc.check_lidar(_root(), "sim") == []
+
+
+def test_real_lidar_consistent_without_reading_gazebo_geometry():
+    assert cc.check_lidar(_root(), "real") == []
+
+
+def test_sim_geometry_consistent():
+    assert cc.check_geometry(_root(), "sim") == []
+
+
+def test_real_geometry_consistent():
+    assert cc.check_geometry(_root(), "real") == []
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_run_checks_only_selected_platform(monkeypatch, platform):
+    calls = []
+    monkeypatch.setattr(
+        cc,
+        "load_bringup_config",
+        lambda repo_root: {"platform": platform},
+    )
+    monkeypatch.setattr(
+        cc,
+        "check_geometry",
+        lambda repo_root, selected: calls.append(("geometry", selected)) or [],
+    )
+    monkeypatch.setattr(
+        cc,
+        "check_lidar",
+        lambda repo_root, selected: calls.append(("lidar", selected)) or [],
+    )
+    assert cc.run(_root()) == []
+    assert calls == [("geometry", platform), ("lidar", platform)]
 
 
 def test_run_all_consistent():
