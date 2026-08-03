@@ -14,18 +14,18 @@ double rpm_to_rad_s(double rpm)
 }
 }  // namespace
 
-TEST(DriveConversion, CommandsAreRoundedClampedAndOrderedRightThenLeft)
+TEST(DriveConversion, CommandsInvertPolarityAndRemainOrderedRightThenLeft)
 {
   const auto command = robot_hardware::to_motor_rpm(
     rpm_to_rad_s(-20.0), rpm_to_rad_s(20.0), 256);
   ASSERT_TRUE(command.has_value());
-  EXPECT_EQ(command->right_rpm, 20);
-  EXPECT_EQ(command->left_rpm, -20);
+  EXPECT_EQ(command->right_rpm, -20);
+  EXPECT_EQ(command->left_rpm, 20);
 
   const auto clamped = robot_hardware::to_motor_rpm(100.0, -100.0, 256);
   ASSERT_TRUE(clamped.has_value());
-  EXPECT_EQ(clamped->right_rpm, -256);
-  EXPECT_EQ(clamped->left_rpm, 256);
+  EXPECT_EQ(clamped->right_rpm, 256);
+  EXPECT_EQ(clamped->left_rpm, -256);
 }
 
 TEST(DriveConversion, CommandsRoundHalfAwayFromZero)
@@ -33,8 +33,8 @@ TEST(DriveConversion, CommandsRoundHalfAwayFromZero)
   const auto command = robot_hardware::to_motor_rpm(
     rpm_to_rad_s(-2.5), rpm_to_rad_s(2.5), 256);
   ASSERT_TRUE(command.has_value());
-  EXPECT_EQ(command->right_rpm, 3);
-  EXPECT_EQ(command->left_rpm, -3);
+  EXPECT_EQ(command->right_rpm, -3);
+  EXPECT_EQ(command->left_rpm, 3);
 }
 
 TEST(DriveConversion, HugeFiniteValuesClampBeforeIntegerConversion)
@@ -44,8 +44,8 @@ TEST(DriveConversion, HugeFiniteValuesClampBeforeIntegerConversion)
     -std::numeric_limits<double>::max(),
     256);
   ASSERT_TRUE(command.has_value());
-  EXPECT_EQ(command->right_rpm, -256);
-  EXPECT_EQ(command->left_rpm, 256);
+  EXPECT_EQ(command->right_rpm, 256);
+  EXPECT_EQ(command->left_rpm, -256);
 }
 
 TEST(DriveConversion, RejectsNonFiniteCommandsAndInvalidLimits)
@@ -60,11 +60,11 @@ TEST(DriveConversion, RejectsNonFiniteCommandsAndInvalidLimits)
 
 TEST(DriveConversion, FeedbackUsesMeasuredOrderSignAndTenthRpmScale)
 {
-  const auto forward = robot_hardware::from_motor_feedback(-200, 200);
+  const auto forward = robot_hardware::from_motor_feedback(200, -200);
   EXPECT_NEAR(forward.left_rad_s, rpm_to_rad_s(20.0), 1e-12);
   EXPECT_NEAR(forward.right_rad_s, rpm_to_rad_s(20.0), 1e-12);
 
-  const auto left_turn = robot_hardware::from_motor_feedback(1000, 1000);
+  const auto left_turn = robot_hardware::from_motor_feedback(-1000, -1000);
   EXPECT_NEAR(left_turn.left_rad_s, rpm_to_rad_s(-100.0), 1e-12);
   EXPECT_NEAR(left_turn.right_rad_s, rpm_to_rad_s(100.0), 1e-12);
 }

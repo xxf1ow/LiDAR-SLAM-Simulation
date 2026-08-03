@@ -96,7 +96,7 @@ class TestRealHardwareChain(unittest.TestCase):
             self.node, ["base_controller", "joint_state_broadcaster"]
         )
         deadline = time.monotonic() + 2.0
-        while time.monotonic() < deadline and self.motor != [10, 10]:
+        while time.monotonic() < deadline and self.motor != [-10, -10]:
             message = TwistStamped()
             message.header.stamp = self.node.get_clock().now().to_msg()
             message.header.frame_id = "base_link"
@@ -113,7 +113,7 @@ class TestRealHardwareChain(unittest.TestCase):
 
     def test_cmd_vel_reaches_vendor_and_measured_feedback_reaches_odom(self):
         self.publish_forward_until_motor_moves()
-        self.assertEqual(self.motor, [10, 10])
+        self.assertEqual(self.motor, [-10, -10])
         expected_odom_linear_x = 0.1256637061
         odom_tolerance = 0.002
 

@@ -342,12 +342,12 @@ TEST_F(DiffDriveSystemTest, BridgesCommandsAndMeasuredFeedback)
 
   const auto command_deadline = std::chrono::steady_clock::now() + 1s;
   while (
-    fake.command() != std::vector<int16_t>({10, 10}) &&
+    fake.command() != std::vector<int16_t>({-10, -10}) &&
     std::chrono::steady_clock::now() < command_deadline)
   {
     std::this_thread::sleep_for(10ms);
   }
-  EXPECT_EQ(fake.command(), std::vector<int16_t>({10, 10}));
+  EXPECT_EQ(fake.command(), std::vector<int16_t>({-10, -10}));
 
   const auto state_deadline = std::chrono::steady_clock::now() + 1s;
   while (states[1].get_value() == 0.0 && std::chrono::steady_clock::now() < state_deadline)
