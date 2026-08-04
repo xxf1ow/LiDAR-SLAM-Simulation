@@ -33,10 +33,10 @@ FAST-LIO 在 velodyne-only 配置下的编译期类型依赖——无驱动、�
 ### Vanjee 逐点时间单位与真机静态检查
 
 真实 `config/vanjee_722.yaml` 的 `timestamp_unit: 0` 指 **每个点的 `time` 字段以秒为单位**，
-不是雷达 10 Hz 发布周期。当前消息转换代码测试已覆盖 `0.099 s` 的逐点值；这只证明转换语义，
-并不替代真机帧的测量。真实 `/points_raw` 的 `time` 最小/最大值仍为 **待测**：应在驱动运行时
-解一帧，确认 min 接近 0、max 约 0.1 s 而非毫秒或微秒数量级；若不在秒范围，停止 FAST-LIO
-验收并检查驱动逐点时间，不能通过修改 `scan_rate` 掩盖问题。
+不是雷达 10 Hz 发布周期。真机一帧已实测 `total=38400`、`finite=38400`、
+`min=0.000000000 s`、`max=0.099954203 s`、`span=0.099954203 s`，确认单位为秒且覆盖一帧
+约 0.1 s。后续更换驱动或固件时应重复该检查；若不在此范围，停止 FAST-LIO 验收并检查驱动
+逐点时间，不能通过修改 `scan_rate` 掩盖问题。
 
 ```bash
 python3 - <<'PY'
@@ -79,8 +79,9 @@ timeout 5 ros2 run tf2_ros tf2_echo map base_footprint
 
 静态通过条件是 Vanjee gate → FAST-LIO gate → GICP/base-odom gate → Nav2 的启动顺序，
 四个话题存在，且 `map → camera_init → body → base_footprint → base_link → velodyne/imu_link`
-连通、每条 TF 边只有一个发布者且没有额外 `base_footprint → velodyne`。本仓库的
-FAST-LIO/GICP 集成运行验收目前仍为 **待完成**，不得把上述命令或静态源码检查记为真机 PASS。
+连通、每条 TF 边只有一个发布者且没有额外 `base_footprint → velodyne`。真机手动启动
+FAST-LIO/GICP 已通过运行验收：`/Odometry`、`/cloud_registered` 均为 10 Hz，配准点云与
+LIO-SAM 先验图贴合。集中真机几何改动后的 `system_bringup` 全链路验收仍待下一次实机测试。
 
 clone + apply(从仓库根):
 ```bash

@@ -25,6 +25,7 @@ from system_bringup import consistency_check
 from system_bringup.consistency_check import (
     derive_real_geometry,
     real_geometry_launch_arguments,
+    require_runtime_config_file,
     write_real_runtime_configs,
 )
 from system_bringup.ready_gate import ready_gate
@@ -82,6 +83,16 @@ def _bringup(context, *args, **kwargs):
         raise RuntimeError("一致性闸门未通过(已中止,未启动任何节点):\n" + "\n".join(failures))
 
     profile = stack_cfg[platform]
+    if mode == "mapping":
+        require_runtime_config_file(
+            _pkg_config("lio_sam", profile["lio_sam"]["config"]),
+            "LIO-SAM",
+        )
+    else:
+        require_runtime_config_file(
+            _pkg_config("fast_lio", profile["fast_lio"]["config"]),
+            "FAST-LIO",
+        )
     slam_stack = _inc(
         "system_bringup", "launch/slam_stack.launch.py",
         {"mode": mode, "use_sim_time": use_sim,

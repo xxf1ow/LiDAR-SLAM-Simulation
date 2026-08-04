@@ -393,6 +393,14 @@ def test_bringup_selects_the_slam_profile_from_platform():
     assert _subscript_path(profile_assignment.value) == ("stack_cfg", ("platform",))
 
 
+def test_bringup_preflights_active_external_slam_config_before_launching():
+    function = _function(_tree(BRINGUP), "_bringup")
+    calls = _calls(function, "require_runtime_config_file")
+
+    assert len(calls) == 2
+    assert {_string(call.args[1]) for call in calls} == {"FAST-LIO", "LIO-SAM"}
+
+
 def test_bringup_materializes_geometry_only_for_real_platform():
     function = _function(_tree(BRINGUP), "_bringup")
     real = _platform_branch(function, "real")

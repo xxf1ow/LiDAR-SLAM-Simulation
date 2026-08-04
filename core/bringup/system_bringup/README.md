@@ -4,7 +4,9 @@
 
 ## 设计要点
 - **唯一入口 + 集中配置**:`bringup.launch.py` 读 `config/bringup.yaml` 的 `platform`(sim/real) + `mode`(navigation/mapping) 选底层与模式;可变参数按节点分组(`robot_gz`/`robot_bringup`/`slam_stack.*`)。launch 用 `find_repo_root()` 读**源码** config(不经 install),**改 config 不用 rebuild**。无命令行参数。
-- **闸门**:`consistency_check.run()` 同步先跑,失败 `raise`(launch 直接报错、零节点)。无逃生口。
+- **闸门**:`consistency_check.run()` 同步先跑,失败 `raise`(launch 直接报错、零节点)。启动所选
+  SLAM 模式前还会检查 FAST-LIO/LIO-SAM 的安装态配置是否存在，缺少 patch 或未重建时直接给出
+  明确错误，不让外部节点带空配置启动。无逃生口。
 - **共享上层** `slam_stack.launch.py`:`mode=navigation` 错峰起 fast_lio→gicp→nav2;`mode=mapping` 起 lio_sam(互斥)。
 - **唯一控制出口**:完整 bringup 中 Nav2 发 `/cmd_vel_auto`、Web 发 `/cmd_vel_manual`，
   只有 `cmd_vel_gate` 发布 `/cmd_vel`；仿真和真机共用这条控制器入口。

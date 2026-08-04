@@ -69,6 +69,17 @@ def load_bringup_config(repo_root=None):
         return yaml.safe_load(f)
 
 
+def require_runtime_config_file(path, component):
+    """在启动外部 SLAM 节点前确认所选安装态配置实际存在。"""
+    resolved = os.fspath(path)
+    if not os.path.isfile(resolved):
+        raise RuntimeError(
+            "%s 运行时配置不存在: %s；请 apply 对应 patch 并 rebuild。"
+            % (component, resolved)
+        )
+    return resolved
+
+
 def derive_real_geometry(config):
     """从 bringup.yaml 的实测值派生各模块需要的真机几何。"""
     measured = config["real_geometry"]

@@ -1,6 +1,7 @@
 """跨模块一致性:对真实仓库源文件跑(纯解析,无 ROS,本机 pytest 可跑)。"""
 import copy
 import os
+from pathlib import Path
 
 import pytest
 
@@ -41,6 +42,16 @@ def _guarded_added_file(monkeypatch, forbidden):
 
 def test_repo_root_found():
     assert os.path.isdir(os.path.join(_root(), "core", "bringup", "system_bringup"))
+
+
+def test_runtime_config_file_must_exist():
+    existing = Path(__file__)
+
+    assert cc.require_runtime_config_file(existing, "FAST-LIO") == str(existing)
+
+    missing = existing.with_name("missing.yaml")
+    with pytest.raises(RuntimeError, match="FAST-LIO.*missing.yaml.*apply.*rebuild"):
+        cc.require_runtime_config_file(missing, "FAST-LIO")
 
 
 def test_xacro_args_keep_existing_sim_geometry_defaults():
