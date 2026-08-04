@@ -42,3 +42,29 @@ def test_real_profile_selects_only_real_parameter_files():
 
 def test_real_driver_selects_vanjee_722_config():
     assert _load()["vanjee_lidar"]["config"] == "vanjee_722.yaml"
+
+
+def test_real_geometry_keeps_all_measured_values_in_bringup():
+    geometry = _load()["real_geometry"]
+
+    assert geometry == {
+        "body": {
+            "length": 0.960,
+            "width": 0.610,
+            "height": 0.377,
+            "ground_clearance": 0.143,
+        },
+        "drive_wheel": {
+            "diameter": 0.205,
+            "width": 0.101,
+            "separation": 0.463,
+        },
+        "lidar": {
+            "x": 0.443,
+            "y": 0.0,
+            "z": 0.905,
+            "roll": 0.0,
+            "pitch": 0.0,
+            "yaw": 0.0,
+        },
+    }

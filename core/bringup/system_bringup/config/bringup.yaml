@@ -19,6 +19,28 @@ robot_gz:
 robot_bringup:
   use_mock_hardware: false
 
+# === 真机几何唯一参数源 ===
+# 单位:m / rad。以下均为 2026-08-03 人工测量的暂定值；取得厂家尺寸图后只改本段。
+# 暂按驱动轴中点=车体几何中心，并将其地面投影定义为 base_footprint；待厂家图确认。
+# lidar xyz 是 base_footprint -> 雷达/内置 IMU 坐标原点。
+real_geometry:
+  body:
+    length: 0.960
+    width: 0.610
+    height: 0.377
+    ground_clearance: 0.143
+  drive_wheel:
+    diameter: 0.205
+    width: 0.101
+    separation: 0.463
+  lidar:
+    x: 0.443
+    y: 0.0
+    z: 0.905
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+
 # === 真机雷达驱动 ===
 vanjee_lidar:
   config: vanjee_722.yaml

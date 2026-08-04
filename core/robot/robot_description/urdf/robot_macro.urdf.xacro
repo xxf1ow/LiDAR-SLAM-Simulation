@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- 差速移动底盘本体(真实尺寸 0.75x0.55x0.40 m，根=base_footprint(REP-105 地面投影帧，Phase 5a 加)，其下 base_link 为车体)：盒身 + 左右驱动轮
+<!-- 差速移动底盘本体(默认参数为仿真尺寸，真机由 system_bringup 覆盖；根=base_footprint(REP-105 地面投影帧)，其下 base_link 为车体)：盒身 + 左右驱动轮
      + 前后球形万向轮(半径=驱动轮、同高) + 车顶中央共位的 velodyne / imu_link 挂载帧。
      碰撞用基本几何(box/cylinder/sphere)。Gz 传感器插件在 Phase 3 的 gazebo.xacro 加。
      注：base_footprint 无 inertial 作根，base_link(带 inertial)为其固定子，
@@ -11,14 +11,16 @@
   <xacro:property name="PI" value="3.1415926535897931"/>
 
   <!-- 车体(X=长 Y=宽 Z=高) -->
-  <xacro:property name="base_length" value="0.75"/>
-  <xacro:property name="base_width"  value="0.55"/>
-  <xacro:property name="base_height" value="0.40"/>
+  <xacro:property name="base_length" value="$(arg base_length)"/>
+  <xacro:property name="base_width"  value="$(arg base_width)"/>
+  <xacro:property name="base_height" value="$(arg base_height)"/>
+  <xacro:property name="base_link_height" value="$(arg base_link_height)"/>
   <xacro:property name="base_mass"   value="30.0"/>
 
   <!-- 驱动轮 -->
-  <xacro:property name="wheel_radius" value="0.12"/>
-  <xacro:property name="wheel_width"  value="0.06"/>
+  <xacro:property name="wheel_radius" value="$(arg wheel_radius)"/>
+  <xacro:property name="wheel_width"  value="$(arg wheel_width)"/>
+  <xacro:property name="wheel_separation" value="$(arg wheel_separation)"/>
   <xacro:property name="wheel_mass"   value="2.0"/>
 
   <!-- 球形万向轮：照示例，半径=驱动轮半径、与驱动轮同高 -->
@@ -32,18 +34,22 @@
   <xacro:property name="imu_mass"     value="0.01"/>
 
   <!-- 派生量 -->
-  <xacro:property name="wheel_z"  value="${-base_height/2}"/>                  <!-- 轮中心在车体底缘 -->
+  <xacro:property name="wheel_z"  value="${wheel_radius - base_link_height}"/>
   <xacro:property name="caster_x" value="${base_length/2 - caster_radius}"/>
-  <xacro:property name="sensor_z" value="${base_height/2 + lidar_height/2}"/>  <!-- puck 底贴车顶、完全外露 -->
+  <xacro:property name="sensor_x" value="$(arg sensor_x)"/>
+  <xacro:property name="sensor_y" value="$(arg sensor_y)"/>
+  <xacro:property name="sensor_z" value="$(arg sensor_z)"/>
+  <xacro:property name="sensor_roll" value="$(arg sensor_roll)"/>
+  <xacro:property name="sensor_pitch" value="$(arg sensor_pitch)"/>
+  <xacro:property name="sensor_yaw" value="$(arg sensor_yaw)"/>
 
-  <!-- base_footprint：REP-105 地面投影根帧(无质量)。LIO-SAM baselinkFrame / Nav2 用。
-       base_link 在其上方 0.32m(驱动轮中心 -0.20 + 轮半径 0.12 = 触地 -0.32)。 -->
+  <!-- base_footprint：REP-105 地面投影根帧(无质量)。LIO-SAM baselinkFrame / Nav2 用。 -->
   <link name="${prefix}base_footprint"/>
 
   <joint name="${prefix}base_footprint_joint" type="fixed">
     <parent link="${prefix}base_footprint"/>
     <child  link="${prefix}base_link"/>
-    <origin xyz="0 0 ${base_height/2 + wheel_radius}" rpy="0 0 0"/>
+    <origin xyz="0 0 ${base_link_height}" rpy="0 0 0"/>
   </joint>
 
   <!-- 车体 base_link(base_footprint 的固定子) -->
@@ -71,7 +77,7 @@
   <joint name="${prefix}left_wheel_joint" type="continuous">
     <parent link="${prefix}base_link"/>
     <child  link="${prefix}left_wheel"/>
-    <origin xyz="0 ${base_width/2} ${wheel_z}" rpy="0 0 0"/>
+    <origin xyz="0 ${wheel_separation/2} ${wheel_z}" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <dynamics damping="0.2"/>
     <limit effort="100" velocity="20.0"/>
@@ -101,7 +107,7 @@
   <joint name="${prefix}right_wheel_joint" type="continuous">
     <parent link="${prefix}base_link"/>
     <child  link="${prefix}right_wheel"/>
-    <origin xyz="0 ${-base_width/2} ${wheel_z}" rpy="0 0 0"/>
+    <origin xyz="0 ${-wheel_separation/2} ${wheel_z}" rpy="0 0 0"/>
     <axis xyz="0 1 0"/>
     <dynamics damping="0.2"/>
     <limit effort="100" velocity="20.0"/>
@@ -185,7 +191,7 @@
   <joint name="${prefix}velodyne_joint" type="fixed">
     <parent link="${prefix}base_link"/>
     <child  link="${prefix}velodyne"/>
-    <origin xyz="0 0 ${sensor_z}" rpy="0 0 0"/>
+    <origin xyz="${sensor_x} ${sensor_y} ${sensor_z}" rpy="${sensor_roll} ${sensor_pitch} ${sensor_yaw}"/>
   </joint>
 
   <link name="${prefix}velodyne">
@@ -212,7 +218,7 @@
   <joint name="${prefix}imu_joint" type="fixed">
     <parent link="${prefix}base_link"/>
     <child  link="${prefix}imu_link"/>
-    <origin xyz="0 0 ${sensor_z}" rpy="0 0 0"/>
+    <origin xyz="${sensor_x} ${sensor_y} ${sensor_z}" rpy="${sensor_roll} ${sensor_pitch} ${sensor_yaw}"/>
   </joint>
 
   <link name="${prefix}imu_link">

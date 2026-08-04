@@ -7,6 +7,8 @@ ROOT = Path(__file__).resolve().parents[4]
 NAVIGATION = ROOT / "core/navigation/robot_navigation/launch/navigation.launch.py"
 SLAM_STACK = ROOT / "core/bringup/system_bringup/launch/slam_stack.launch.py"
 BRINGUP = ROOT / "core/bringup/system_bringup/launch/bringup.launch.py"
+ROBOT = ROOT / "core/robot/robot_bringup/launch/robot.launch.py"
+REAL_CHASSIS = ROOT / "core/robot/robot_bringup/launch/real_chassis.launch.py"
 MANIFEST = ROOT / "core/bringup/system_bringup/package.xml"
 
 
@@ -52,6 +54,14 @@ def _declaration_default(tree, argument):
         if call.args and _string(call.args[0]) == argument:
             return _string(_keyword(call, "default_value"))
     return None
+
+
+def _declaration(tree, argument):
+    return next(
+        call
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args and _string(call.args[0]) == argument
+    )
 
 
 def _launch_configuration_assignment(function, variable, argument, performed=False):
@@ -140,8 +150,137 @@ def _is_vanjee_config_call(node):
     )
 
 
+def _assigned_value(function, name):
+    return next(
+        node.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+    )
+
+
 def test_navigation_declares_cmd_vel_output_topic_with_legacy_default():
     assert _declaration_default(_tree(NAVIGATION), "cmd_vel_output_topic") == "/cmd_vel"
+
+
+def test_navigation_accepts_complete_body_weld_transform():
+    tree = _tree(NAVIGATION)
+    assert {
+        "weld_x", "weld_y", "weld_z", "weld_roll", "weld_pitch", "weld_yaw"
+    } <= {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+    }
+
+    function = _function(tree, "generate_launch_description")
+    publisher = _node_call(function, "tf2_ros", "static_transform_publisher")
+    arguments = _keyword(publisher, "arguments")
+    assert isinstance(arguments, ast.List)
+    values = {
+        _string(arguments.elts[index]): arguments.elts[index + 1]
+        for index in range(0, 12, 2)
+    }
+    for option, variable in (
+        ("--x", "weld_x"), ("--y", "weld_y"), ("--z", "weld_z"),
+        ("--roll", "weld_roll"), ("--pitch", "weld_pitch"),
+        ("--yaw", "weld_yaw"),
+    ):
+        assert isinstance(values[option], ast.Name)
+        assert values[option].id == variable
+
+
+def test_robot_launch_accepts_runtime_geometry_and_controller_file():
+    tree = _tree(ROBOT)
+    declared = {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+    }
+    assert {
+        "controllers_file",
+        "base_length", "base_width", "base_height", "base_link_height",
+        "wheel_radius", "wheel_width", "wheel_separation",
+        "sensor_x", "sensor_y", "sensor_z",
+        "sensor_roll", "sensor_pitch", "sensor_yaw",
+    } <= declared
+
+    function = _function(tree, "generate_launch_description")
+    control_node = _node_call(function, "controller_manager", "ros2_control_node")
+    parameters = _keyword(control_node, "parameters")
+    assert isinstance(parameters, ast.List)
+    assert isinstance(parameters.elts[0], ast.Name)
+    assert parameters.elts[0].id == "controllers_file"
+
+    command = _assigned_value(function, "robot_description_content")
+    assert isinstance(command, ast.Call)
+    command_parts = command.args[0]
+    assert isinstance(command_parts, ast.List)
+    configured = {
+        _string(command_parts.elts[index]).removesuffix(":="):
+        command_parts.elts[index + 1]
+        for index in range(len(command_parts.elts) - 1)
+        if _string(command_parts.elts[index])
+        and _string(command_parts.elts[index]).endswith(":=")
+    }
+    for name in declared - {"gui", "controllers_file"}:
+        value = configured[name]
+        if name in {"use_mock_hardware", "prefix"}:
+            assert isinstance(value, ast.Name)
+        else:
+            assert isinstance(value, ast.Call)
+            assert isinstance(value.func, ast.Name)
+            assert value.func.id == "LaunchConfiguration"
+            assert _string(value.args[0]) == name
+
+
+def test_real_chassis_passes_runtime_geometry_to_robot_launch():
+    tree = _tree(REAL_CHASSIS)
+    declared = {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+    }
+    assert {
+        "controllers_file",
+        "base_length", "base_width", "base_height", "base_link_height",
+        "wheel_radius", "wheel_width", "wheel_separation",
+        "sensor_x", "sensor_y", "sensor_z",
+        "sensor_roll", "sensor_pitch", "sensor_yaw",
+    } <= declared
+
+    function = _function(tree, "generate_launch_description")
+    geometry = _assigned_value(function, "geometry_arguments")
+    assert isinstance(geometry, ast.DictComp)
+    names = {
+        _string(item)
+        for item in geometry.generators[0].iter.elts
+    }
+    assert declared - {"gui"} == names
+
+    robot = _assigned_value(function, "robot")
+    launch_arguments = _keyword(robot, "launch_arguments")
+    assert isinstance(launch_arguments, ast.Call)
+    passed = launch_arguments.func.value
+    assert isinstance(passed, ast.Dict)
+    assert any(
+        key is None and isinstance(value, ast.Name)
+        and value.id == "geometry_arguments"
+        for key, value in zip(passed.keys, passed.values)
+    )
+
+
+def test_real_chassis_requires_authoritative_geometry_instead_of_sim_defaults():
+    tree = _tree(REAL_CHASSIS)
+    for name in (
+        "controllers_file",
+        "base_length", "base_width", "base_height", "base_link_height",
+        "wheel_radius", "wheel_width", "wheel_separation",
+        "sensor_x", "sensor_y", "sensor_z",
+        "sensor_roll", "sensor_pitch", "sensor_yaw",
+    ):
+        declaration = _declaration(tree, name)
+        assert not any(keyword.arg == "default_value" for keyword in declaration.keywords)
 
 
 def test_navigation_stamper_uses_configured_output_and_keeps_nav_input():
@@ -252,6 +391,52 @@ def test_bringup_selects_the_slam_profile_from_platform():
         )
     )
     assert _subscript_path(profile_assignment.value) == ("stack_cfg", ("platform",))
+
+
+def test_bringup_materializes_geometry_only_for_real_platform():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    sim = _platform_branch(function, "sim")
+
+    assert len(_calls(real, "write_real_runtime_configs")) == 1
+    assert len(_calls(real, "derive_real_geometry")) == 1
+    assert len(_calls(real, "real_geometry_launch_arguments")) == 1
+    assert _calls(sim, "write_real_runtime_configs") == []
+
+
+def test_bringup_routes_generated_real_geometry_to_chassis():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    chassis = _include_arguments(
+        real, "robot_bringup", "launch/real_chassis.launch.py"
+    )
+    keys = {_string(key) for key in chassis.keys if key is not None}
+    assert {
+        "controllers_file",
+        "base_length", "base_width", "base_height", "base_link_height",
+        "wheel_radius", "wheel_width", "wheel_separation",
+        "sensor_x", "sensor_y", "sensor_z",
+        "sensor_roll", "sensor_pitch", "sensor_yaw",
+    } <= keys
+
+
+def test_bringup_routes_generated_real_nav2_and_weld_to_shared_stack():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    arguments = _include_arguments(
+        real, "system_bringup", "launch/slam_stack.launch.py"
+    )
+    nav2 = _dict_value(arguments, "nav2_params_file")
+    assert isinstance(nav2, ast.Call)
+    assert isinstance(nav2.func, ast.Name) and nav2.func.id == "str"
+    for name in (
+        "weld_x", "weld_y", "weld_z",
+        "weld_roll", "weld_pitch", "weld_yaw",
+    ):
+        value = _dict_value(arguments, name)
+        assert _subscript_path(value) == (
+            "geometry_arguments", ("navigation", name)
+        )
 
 
 def test_bringup_passes_selected_profile_configs_to_shared_slam_stack():

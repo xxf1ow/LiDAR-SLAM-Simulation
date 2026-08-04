@@ -51,13 +51,14 @@ sudo ldconfig
 /cmd_vel → diff_drive_controller → robot_hardware → can_driver → 8030D → /current_speed → wheel state/odom
 ```
 
-启动命令：
+真机几何和轮参由 `system_bringup/config/bringup.yaml:real_geometry` 统一生成；
+`real_chassis.launch.py` 是内部 include，直接无参数启动会明确失败。正式启动命令：
 
 ```bash
 cd ~/LiDAR-SLAM-Simulation/core
 source /opt/ros/humble/setup.bash
 source install/setup.bash
-ros2 launch robot_bringup real_chassis.launch.py
+ros2 launch system_bringup bringup.launch.py
 ```
 
 该 launch 将厂商节点的 `auto_enable_on_start` 覆盖为 `false`，由

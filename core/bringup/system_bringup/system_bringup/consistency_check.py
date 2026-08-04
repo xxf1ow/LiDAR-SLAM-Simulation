@@ -1,6 +1,6 @@
 """跨模块魔法值一致性检查(纯 Python,无 ROS 依赖,本机/构建机皆可跑)。
 
-解析已跟踪源文件,断言被复述在多处的几何/雷达值彼此自洽。
+解析已跟踪源文件；仿真检查既有默认值，真机从 bringup.yaml 单一源生成后检查。
 - run(repo_root) -> list[str]   失败描述(空=全过)
 - main()        -> int          打印失败、返回退出码(供启动闸门/CLI)
 - find_repo_root()              从 __file__ 上溯定位仓库根(pytest 本机用)
@@ -9,9 +9,12 @@
 """
 import argparse
 import ast
+import math
 import os
+from pathlib import Path
 import re
 import sys
+import tempfile
 
 try:
     import yaml
@@ -20,6 +23,7 @@ except ImportError:  # pyyaml 是硬依赖
 
 # ---- 已跟踪源文件(仓库相对路径) ----
 F_MACRO = "core/robot/robot_description/urdf/robot_macro.urdf.xacro"
+F_ROBOT_XACRO = "core/robot/robot_description/urdf/robot.urdf.xacro"
 F_GAZEBO = "core/robot/robot_description/gazebo/robot.gazebo.xacro"
 F_CONTROLLERS = "core/robot/robot_bringup/config/robot_controllers.yaml"
 F_NAV_PARAMS = "core/navigation/robot_navigation/config/nav2_params.yaml"
@@ -41,11 +45,6 @@ LIOSAM_CONFIG = {
     "sim": "config/params.yaml",
     "real": "config/params_real.yaml",
 }
-NAV_CONFIG = {
-    "sim": F_NAV_PARAMS,
-    "real": F_NAV_PARAMS_REAL,
-}
-
 _MARKER = os.path.join("core", "bringup", "system_bringup")
 
 
@@ -70,6 +69,97 @@ def load_bringup_config(repo_root=None):
         return yaml.safe_load(f)
 
 
+def derive_real_geometry(config):
+    """从 bringup.yaml 的实测值派生各模块需要的真机几何。"""
+    measured = config["real_geometry"]
+    body = measured["body"]
+    wheel = measured["drive_wheel"]
+    lidar = measured["lidar"]
+
+    body_length = float(body["length"])
+    body_width = float(body["width"])
+    body_height = float(body["height"])
+    ground_clearance = float(body["ground_clearance"])
+    base_link_height = ground_clearance + body_height / 2.0
+    wheel_diameter = float(wheel["diameter"])
+    wheel_width = float(wheel["width"])
+    wheel_separation = float(wheel["separation"])
+    lidar_x = float(lidar["x"])
+    lidar_y = float(lidar["y"])
+    lidar_z = float(lidar["z"])
+    roll = float(lidar["roll"])
+    pitch = float(lidar["pitch"])
+    yaw = float(lidar["yaw"])
+
+    values = {
+        "body.length": body_length,
+        "body.width": body_width,
+        "body.height": body_height,
+        "body.ground_clearance": ground_clearance,
+        "drive_wheel.diameter": wheel_diameter,
+        "drive_wheel.width": wheel_width,
+        "drive_wheel.separation": wheel_separation,
+        "lidar.x": lidar_x,
+        "lidar.y": lidar_y,
+        "lidar.z": lidar_z,
+        "lidar.roll": roll,
+        "lidar.pitch": pitch,
+        "lidar.yaw": yaw,
+    }
+    for name, value in values.items():
+        if not math.isfinite(value):
+            raise ValueError("real_geometry.%s 必须是有限数。" % name)
+    for name in (
+        "body.length", "body.width", "body.height",
+        "drive_wheel.diameter", "drive_wheel.width",
+        "drive_wheel.separation", "lidar.z",
+    ):
+        if values[name] <= 0.0:
+            raise ValueError("real_geometry.%s 必须大于 0。" % name)
+    if ground_clearance < 0.0:
+        raise ValueError("real_geometry.body.ground_clearance 不能小于 0。")
+    if wheel_separation + wheel_width > body_width + 1e-12:
+        raise ValueError("real_geometry 轮子外缘宽度超过 body.width。")
+    if any(abs(angle) > 1e-12 for angle in (roll, pitch, yaw)):
+        raise ValueError("real_geometry.lidar 当前仅支持零安装角；非零角需同时实现刚体逆变换。")
+
+    return {
+        "body": {
+            "length": body_length,
+            "width": body_width,
+            "height": body_height,
+            "base_link_height": base_link_height,
+        },
+        "drive_wheel": {
+            "radius": wheel_diameter / 2.0,
+            "width": wheel_width,
+            "separation": wheel_separation,
+        },
+        "sensor": {
+            "x": lidar_x,
+            "y": lidar_y,
+            "z": lidar_z - base_link_height,
+            "roll": roll,
+            "pitch": pitch,
+            "yaw": yaw,
+        },
+        "body_to_base_footprint": {
+            "x": -lidar_x,
+            "y": -lidar_y,
+            "z": -lidar_z,
+            "roll": -roll,
+            "pitch": -pitch,
+            "yaw": -yaw,
+        },
+        "footprint": [
+            [body_length / 2.0, body_width / 2.0],
+            [body_length / 2.0, -body_width / 2.0],
+            [-body_length / 2.0, -body_width / 2.0],
+            [-body_length / 2.0, body_width / 2.0],
+        ],
+    }
+
+
 def _read(repo_root, relpath):
     with open(os.path.join(repo_root, *relpath.split("/")), encoding="utf-8") as f:
         return f.read()
@@ -89,6 +179,16 @@ def _xacro_props(text):
         except ValueError:
             pass
     return out
+
+
+def _xacro_args(text):
+    """字面量 xacro arg default -> float dict。"""
+    return {
+        name: float(value)
+        for name, value in re.findall(
+            r'<xacro:arg\s+name="([^"]+)"\s+default="([-\d.]+)"\s*/>', text
+        )
+    }
 
 
 def _xacro_joint_origin_xyz(text, joint_substr):
@@ -166,18 +266,113 @@ def _parse_footprint(s):
     return [(float(x), float(y)) for x, y in ast.literal_eval(s)]
 
 
+def _format_footprint(points):
+    return "[ " + ", ".join("[%.3f, %.3f]" % (x, y) for x, y in points) + " ]"
+
+
+def build_real_runtime_configs(repo_root, config):
+    """以既有 YAML 为模板，只注入 bringup 中的真机几何派生值。"""
+    geometry = derive_real_geometry(config)
+    controllers = _yaml(_read(repo_root, F_CONTROLLERS))
+    controller = controllers["base_controller"]["ros__parameters"]
+    controller["wheel_radius"] = geometry["drive_wheel"]["radius"]
+    controller["wheel_separation"] = geometry["drive_wheel"]["separation"]
+
+    nav2 = _yaml(_read(repo_root, F_NAV_PARAMS_REAL))
+    footprint = _format_footprint(geometry["footprint"])
+    for scope in ("global_costmap", "local_costmap"):
+        nav2[scope][scope]["ros__parameters"]["footprint"] = footprint
+
+    return {
+        "geometry": geometry,
+        "controllers": controllers,
+        "nav2": nav2,
+    }
+
+
+def real_geometry_launch_arguments(geometry):
+    """把派生几何转换为 robot/navigation launch 的字符串参数。"""
+    def as_text(value):
+        return str(0.0 if abs(value) < 1e-12 else value)
+
+    body = geometry["body"]
+    wheel = geometry["drive_wheel"]
+    sensor = geometry["sensor"]
+    weld = geometry["body_to_base_footprint"]
+    return {
+        "robot": {
+            "base_length": as_text(body["length"]),
+            "base_width": as_text(body["width"]),
+            "base_height": as_text(body["height"]),
+            "base_link_height": as_text(body["base_link_height"]),
+            "wheel_radius": as_text(wheel["radius"]),
+            "wheel_width": as_text(wheel["width"]),
+            "wheel_separation": as_text(wheel["separation"]),
+            "sensor_x": as_text(sensor["x"]),
+            "sensor_y": as_text(sensor["y"]),
+            "sensor_z": as_text(sensor["z"]),
+            "sensor_roll": as_text(sensor["roll"]),
+            "sensor_pitch": as_text(sensor["pitch"]),
+            "sensor_yaw": as_text(sensor["yaw"]),
+        },
+        "navigation": {
+            "weld_x": as_text(weld["x"]),
+            "weld_y": as_text(weld["y"]),
+            "weld_z": as_text(weld["z"]),
+            "weld_roll": as_text(weld["roll"]),
+            "weld_pitch": as_text(weld["pitch"]),
+            "weld_yaw": as_text(weld["yaw"]),
+        },
+    }
+
+
+def write_real_runtime_configs(repo_root, config, output_dir=None):
+    """把派生 YAML 写到临时目录；不改源码，也不改 install。"""
+    runtime = build_real_runtime_configs(repo_root, config)
+    if output_dir is None:
+        directory = Path(tempfile.mkdtemp(prefix="system_bringup-"))
+    else:
+        directory = Path(output_dir)
+        directory.mkdir(parents=True, exist_ok=True)
+    paths = {
+        "controllers": directory / "robot_controllers_real.generated.yaml",
+        "nav2": directory / "nav2_params_real.generated.yaml",
+    }
+    for name, path in paths.items():
+        path.write_text(
+            yaml.safe_dump(runtime[name], sort_keys=False, allow_unicode=True),
+            encoding="utf-8",
+        )
+    return paths
+
+
 def check_geometry(repo_root, platform="sim"):
     """G1–G5:几何派生值在 xacro / controllers / nav2 / launch 间自洽。"""
     if platform not in ("sim", "real"):
         return ["未知 platform=%r(应为 sim|real)。" % platform]
     fails = []
     macro = _read(repo_root, F_MACRO)
-    props = _xacro_props(macro)
-    base_l, base_w, base_h = props["base_length"], props["base_width"], props["base_height"]
-    wheel_r, lidar_h = props["wheel_radius"], props["lidar_height"]
-
-    nav = _yaml(_read(repo_root, NAV_CONFIG[platform]))
-    ctrl = _yaml(_read(repo_root, F_CONTROLLERS))
+    if platform == "real":
+        runtime = build_real_runtime_configs(
+            repo_root, load_bringup_config(repo_root)
+        )
+        geometry = runtime["geometry"]
+        base_l = geometry["body"]["length"]
+        base_w = geometry["body"]["width"]
+        base_h = geometry["body"]["height"]
+        wheel_r = geometry["drive_wheel"]["radius"]
+        wheel_separation = geometry["drive_wheel"]["separation"]
+        nav = runtime["nav2"]
+        ctrl = runtime["controllers"]
+    else:
+        defaults = _xacro_args(_read(repo_root, F_ROBOT_XACRO))
+        base_l = defaults["base_length"]
+        base_w = defaults["base_width"]
+        base_h = defaults["base_height"]
+        wheel_r = defaults["wheel_radius"]
+        wheel_separation = defaults["wheel_separation"]
+        nav = _yaml(_read(repo_root, F_NAV_PARAMS))
+        ctrl = _yaml(_read(repo_root, F_CONTROLLERS))
     cp = ctrl["base_controller"]["ros__parameters"]
 
     # G1 footprint(global + local 两处)半长/半宽 == 车体半长/半宽
@@ -192,21 +387,31 @@ def check_geometry(repo_root, platform="sim"):
         if abs(hy - base_w / 2) > 1e-6:
             fails.append("[G1] %s footprint 半宽 %.3f != base_width/2 %.3f。" % (scope, hy, base_w / 2))
 
-    # G2 controllers 轮参 == xacro
+    # G2 controllers 轮参 == 当前 platform 的几何源
     if abs(cp["wheel_radius"] - wheel_r) > 1e-9:
-        fails.append("[G2] wheel_radius 不一致: xacro=%.4f vs controllers=%.4f。改 robot_controllers.yaml 或核对 xacro。"
+        fails.append("[G2] wheel_radius 不一致: geometry=%.4f vs controllers=%.4f。"
                      % (wheel_r, cp["wheel_radius"]))
-    if abs(cp["wheel_separation"] - base_w) > 1e-9:
-        fails.append("[G2] wheel_separation controllers=%.4f != xacro base_width=%.4f。" % (cp["wheel_separation"], base_w))
+    if abs(cp["wheel_separation"] - wheel_separation) > 1e-9:
+        fails.append("[G2] wheel_separation controllers=%.4f != geometry %.4f。" %
+                     (cp["wheel_separation"], wheel_separation))
 
-    # G3 navigation.launch.py 几何常量 == xacro(weld_z 由它派生)
-    lc = _launch_floats(_read(repo_root, F_NAV_LAUNCH), ["_BASE_HEIGHT", "_WHEEL_RADIUS", "_LIDAR_HEIGHT"])
-    for cname, xval in [("_BASE_HEIGHT", base_h), ("_WHEEL_RADIUS", wheel_r), ("_LIDAR_HEIGHT", lidar_h)]:
-        if cname not in lc:
-            fails.append("[G3] navigation.launch.py 缺几何常量 %s(weld_z 应由它派生)。" % cname)
-        elif abs(lc[cname] - xval) > 1e-9:
-            fails.append("[G3] navigation.launch.py %s=%.4f != xacro %.4f。改 navigation.launch.py 或核对 xacro。"
-                         % (cname, lc[cname], xval))
+    # G3 仿真 launch 默认焊接继续与仿真 xacro 默认值一致；真机由同一份派生值下发。
+    if platform == "sim":
+        lidar_h = _xacro_props(macro)["lidar_height"]
+        lc = _launch_floats(
+            _read(repo_root, F_NAV_LAUNCH),
+            ["_BASE_HEIGHT", "_WHEEL_RADIUS", "_LIDAR_HEIGHT"],
+        )
+        for cname, xval in [
+            ("_BASE_HEIGHT", base_h),
+            ("_WHEEL_RADIUS", wheel_r),
+            ("_LIDAR_HEIGHT", lidar_h),
+        ]:
+            if cname not in lc:
+                fails.append("[G3] navigation.launch.py 缺仿真几何常量 %s。" % cname)
+            elif abs(lc[cname] - xval) > 1e-9:
+                fails.append("[G3] navigation.launch.py %s=%.4f != 仿真 xacro %.4f。"
+                             % (cname, lc[cname], xval))
 
     # G4 共位 -> 外参零
     vxyz = _xacro_joint_origin_xyz(macro, "velodyne_joint")

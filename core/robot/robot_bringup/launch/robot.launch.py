@@ -10,6 +10,8 @@ from launch_ros.substitutions import FindPackageShare
 
 
 def generate_launch_description():
+    default_controllers = PathJoinSubstitution(
+        [FindPackageShare("robot_bringup"), "config", "robot_controllers.yaml"])
     declared_arguments = [
         DeclareLaunchArgument("gui", default_value="true",
                               description="自动启动 RViz2。"),
@@ -17,10 +19,25 @@ def generate_launch_description():
                               description="true=mock 硬件镜像命令到状态；false=真机 robot_hardware 插件。"),
         DeclareLaunchArgument("prefix", default_value="",
                               description="link/joint 名前缀。"),
+        DeclareLaunchArgument("controllers_file", default_value=default_controllers),
+        DeclareLaunchArgument("base_length", default_value="0.75"),
+        DeclareLaunchArgument("base_width", default_value="0.55"),
+        DeclareLaunchArgument("base_height", default_value="0.40"),
+        DeclareLaunchArgument("base_link_height", default_value="0.32"),
+        DeclareLaunchArgument("wheel_radius", default_value="0.12"),
+        DeclareLaunchArgument("wheel_width", default_value="0.06"),
+        DeclareLaunchArgument("wheel_separation", default_value="0.55"),
+        DeclareLaunchArgument("sensor_x", default_value="0.0"),
+        DeclareLaunchArgument("sensor_y", default_value="0.0"),
+        DeclareLaunchArgument("sensor_z", default_value="0.236"),
+        DeclareLaunchArgument("sensor_roll", default_value="0.0"),
+        DeclareLaunchArgument("sensor_pitch", default_value="0.0"),
+        DeclareLaunchArgument("sensor_yaw", default_value="0.0"),
     ]
     gui = LaunchConfiguration("gui")
     use_mock_hardware = LaunchConfiguration("use_mock_hardware")
     prefix = LaunchConfiguration("prefix")
+    controllers_file = LaunchConfiguration("controllers_file")
 
     robot_description_content = Command([
         PathJoinSubstitution([FindExecutable(name="xacro")]), " ",
@@ -28,17 +45,28 @@ def generate_launch_description():
         " ", "use_gazebo:=false",
         " ", "use_mock_hardware:=", use_mock_hardware,
         " ", "prefix:=", prefix,
+        " ", "base_length:=", LaunchConfiguration("base_length"),
+        " ", "base_width:=", LaunchConfiguration("base_width"),
+        " ", "base_height:=", LaunchConfiguration("base_height"),
+        " ", "base_link_height:=", LaunchConfiguration("base_link_height"),
+        " ", "wheel_radius:=", LaunchConfiguration("wheel_radius"),
+        " ", "wheel_width:=", LaunchConfiguration("wheel_width"),
+        " ", "wheel_separation:=", LaunchConfiguration("wheel_separation"),
+        " ", "sensor_x:=", LaunchConfiguration("sensor_x"),
+        " ", "sensor_y:=", LaunchConfiguration("sensor_y"),
+        " ", "sensor_z:=", LaunchConfiguration("sensor_z"),
+        " ", "sensor_roll:=", LaunchConfiguration("sensor_roll"),
+        " ", "sensor_pitch:=", LaunchConfiguration("sensor_pitch"),
+        " ", "sensor_yaw:=", LaunchConfiguration("sensor_yaw"),
     ])
     robot_description = {"robot_description": robot_description_content}
 
-    robot_controllers = PathJoinSubstitution(
-        [FindPackageShare("robot_bringup"), "config", "robot_controllers.yaml"])
     rviz_config_file = PathJoinSubstitution(
         [FindPackageShare("robot_description"), "rviz", "robot.rviz"])
 
     control_node = Node(
         package="controller_manager", executable="ros2_control_node",
-        parameters=[robot_controllers], output="both",
+        parameters=[controllers_file], output="both",
         remappings=[
             ("~/robot_description", "/robot_description"),
             ("/base_controller/cmd_vel", "/cmd_vel"),

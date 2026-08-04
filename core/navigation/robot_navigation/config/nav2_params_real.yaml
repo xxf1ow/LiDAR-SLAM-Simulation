@@ -2,7 +2,8 @@
 # 障碍源 /cloud_registered(sensor_frame=body)。odom_topic=/base_controller/odom(diff_drive 真实 twist;
 # FAST-LIO /Odometry twist 恒零)。值多取自 nav2 Humble 官方默认 + 旧栈实测，构建机按 spec §9 再调。
 # 真实部署中 vertical_fov_angle: 0.523 及相关障碍高度参数为待测临时值。
-# footprint、限速、MPPI、Smac、STVL 暂沿用当前真实 8030D 模型，不做动态调参。
+# footprint 是模板占位值；完整 system_bringup 会按 bringup.yaml:real_geometry 生成后覆盖。
+# 限速、MPPI、Smac、STVL 暂沿用当前配置，不做动态调参。
 #
 # === CHASSIS-DEPENDENT（换底盘改这里）===
 #   planner_server.GridBased: minimum_turning_radius / motion_model_for_search
@@ -158,7 +159,7 @@ global_costmap:
       robot_base_frame: base_footprint
       rolling_window: false
       track_unknown_space: true
-      footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # CHASSIS: 本车 0.75x0.55
+      footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # TEMPLATE: real bringup 运行时覆盖
       resolution: 0.05
       plugins: ["static_layer", "stvl_layer", "inflation_layer"]
       static_layer:
@@ -186,7 +187,7 @@ global_costmap:
           marking: true
           clearing: false
           obstacle_range: 20.0
-          min_obstacle_height: -0.52  # 近地面阈值(地面-0.556+0.036 余量),只滤平地噪声;不用底盘间隙——后者会滤掉刚高于底盘的矮障碍(如托盘)下半部
+          min_obstacle_height: -0.52  # 待按正确真机 TF 实测；尚未由 real_geometry 自动派生
           max_obstacle_height: 2.0
           expected_update_rate: 0.0
           observation_persistence: 0.0
@@ -201,7 +202,7 @@ global_costmap:
           marking: false
           clearing: true
           max_z: 2.0
-          min_z: -0.52  # 与 min_obstacle_height 同步(近地面)
+          min_z: -0.52  # 与临时 min_obstacle_height 同步，待实测
           vertical_fov_angle: 0.523   # VLP-16 垂直 FOV ~±15°
           vertical_fov_padding: 0.05
           horizontal_fov_angle: 6.29  # 360°
@@ -225,7 +226,7 @@ local_costmap:
       width: 6
       height: 6
       resolution: 0.05
-      footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # CHASSIS
+      footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # TEMPLATE: real bringup 运行时覆盖
       plugins: ["stvl_layer", "inflation_layer"]
       stvl_layer:
         plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
@@ -248,7 +249,7 @@ local_costmap:
           marking: true
           clearing: false
           obstacle_range: 20.0
-          min_obstacle_height: -0.52  # 近地面阈值(地面-0.556+0.036 余量),只滤平地噪声;不用底盘间隙——后者会滤掉刚高于底盘的矮障碍(如托盘)下半部
+          min_obstacle_height: -0.52  # 待按正确真机 TF 实测；尚未由 real_geometry 自动派生
           max_obstacle_height: 2.0
           filter: "voxel"
           voxel_min_points: 0
@@ -260,7 +261,7 @@ local_costmap:
           marking: false
           clearing: true
           max_z: 2.0
-          min_z: -0.52  # 与 min_obstacle_height 同步(近地面)
+          min_z: -0.52  # 与临时 min_obstacle_height 同步，待实测
           vertical_fov_angle: 0.523
           vertical_fov_padding: 0.05
           horizontal_fov_angle: 6.29

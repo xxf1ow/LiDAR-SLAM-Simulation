@@ -1,4 +1,5 @@
 """跨模块一致性:对真实仓库源文件跑(纯解析,无 ROS,本机 pytest 可跑)。"""
+import copy
 import os
 
 import pytest
@@ -42,12 +43,13 @@ def test_repo_root_found():
     assert os.path.isdir(os.path.join(_root(), "core", "bringup", "system_bringup"))
 
 
-def test_xacro_props_reads_literals_skips_expressions():
-    props = cc._xacro_props(cc._read(_root(), cc.F_MACRO))
-    assert props["wheel_radius"] == 0.12
-    assert props["base_width"] == 0.55
-    assert props["base_height"] == 0.40
-    assert "sensor_z" not in props  # ${...} 表达式被跳过
+def test_xacro_args_keep_existing_sim_geometry_defaults():
+    defaults = cc._xacro_args(cc._read(_root(), cc.F_ROBOT_XACRO))
+    assert defaults["wheel_radius"] == 0.12
+    assert defaults["wheel_separation"] == 0.55
+    assert defaults["base_width"] == 0.55
+    assert defaults["base_height"] == 0.40
+    assert defaults["sensor_z"] == 0.236
 
 
 def test_xacro_joint_origin_colocated():
@@ -166,6 +168,7 @@ def test_sim_geometry_reads_only_sim_sources(monkeypatch):
     assert cc.check_geometry(_root(), "sim") == []
     assert set(reads) == {
         cc.F_MACRO,
+        cc.F_ROBOT_XACRO,
         cc.F_NAV_PARAMS,
         cc.F_CONTROLLERS,
         cc.F_NAV_LAUNCH,
@@ -178,6 +181,170 @@ def test_real_geometry_consistent():
     assert cc.check_geometry(_root(), "real") == []
 
 
+def test_real_geometry_derives_runtime_values_from_bringup_only():
+    values = cc.derive_real_geometry(cc.load_bringup_config(_root()))
+
+    assert values["body"] == {
+        "length": 0.960,
+        "width": 0.610,
+        "height": 0.377,
+        "base_link_height": 0.3315,
+    }
+    assert values["drive_wheel"] == {
+        "radius": 0.1025,
+        "width": 0.101,
+        "separation": 0.463,
+    }
+    assert values["sensor"] == {
+        "x": 0.443,
+        "y": 0.0,
+        "z": 0.5735,
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0,
+    }
+    assert values["body_to_base_footprint"] == {
+        "x": -0.443,
+        "y": 0.0,
+        "z": -0.905,
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0,
+    }
+    assert values["footprint"] == [
+        [0.480, 0.305],
+        [0.480, -0.305],
+        [-0.480, -0.305],
+        [-0.480, 0.305],
+    ]
+
+
+def test_real_geometry_rejects_nonphysical_wheel_dimensions():
+    config = copy.deepcopy(cc.load_bringup_config(_root()))
+    config["real_geometry"]["drive_wheel"]["diameter"] = -0.205
+
+    with pytest.raises(ValueError, match="drive_wheel.diameter"):
+        cc.derive_real_geometry(config)
+
+
+def test_real_geometry_rejects_wheels_outside_body_width():
+    config = copy.deepcopy(cc.load_bringup_config(_root()))
+    config["real_geometry"]["drive_wheel"]["separation"] = 0.60
+
+    with pytest.raises(ValueError, match="轮子外缘宽度"):
+        cc.derive_real_geometry(config)
+
+
+@pytest.mark.parametrize(
+    "path,value,expected",
+    [
+        (("body", "length"), 0.0, "body.length"),
+        (("body", "width"), -0.610, "body.width"),
+        (("body", "height"), 0.0, "body.height"),
+        (("body", "ground_clearance"), -0.001, "body.ground_clearance"),
+        (("drive_wheel", "width"), 0.0, "drive_wheel.width"),
+        (("drive_wheel", "separation"), 0.0, "drive_wheel.separation"),
+        (("lidar", "z"), 0.0, "lidar.z"),
+        (("body", "length"), float("nan"), "有限数"),
+        (("lidar", "x"), float("inf"), "有限数"),
+    ],
+)
+def test_real_geometry_rejects_invalid_measurements(path, value, expected):
+    config = copy.deepcopy(cc.load_bringup_config(_root()))
+    config["real_geometry"][path[0]][path[1]] = value
+
+    with pytest.raises(ValueError, match=expected):
+        cc.derive_real_geometry(config)
+
+
+def test_real_runtime_configs_are_generated_from_measured_geometry():
+    runtime = cc.build_real_runtime_configs(
+        _root(), cc.load_bringup_config(_root())
+    )
+
+    controller = runtime["controllers"]["base_controller"]["ros__parameters"]
+    assert controller["wheel_radius"] == 0.1025
+    assert controller["wheel_separation"] == 0.463
+
+    footprint = "[ [0.480, 0.305], [0.480, -0.305], [-0.480, -0.305], [-0.480, 0.305] ]"
+    nav = runtime["nav2"]
+    assert nav["global_costmap"]["global_costmap"]["ros__parameters"]["footprint"] == footprint
+    assert nav["local_costmap"]["local_costmap"]["ros__parameters"]["footprint"] == footprint
+
+    # 非几何真机调参仍来自原模板，不被生成过程重写。
+    assert nav["local_costmap"]["local_costmap"]["ros__parameters"]["width"] == 6
+    assert controller["publish_rate"] == 50.0
+
+
+def test_real_launch_arguments_are_derived_without_repeating_measurements():
+    geometry = cc.derive_real_geometry(cc.load_bringup_config(_root()))
+    arguments = cc.real_geometry_launch_arguments(geometry)
+
+    assert arguments["robot"] == {
+        "base_length": "0.96",
+        "base_width": "0.61",
+        "base_height": "0.377",
+        "base_link_height": "0.3315",
+        "wheel_radius": "0.1025",
+        "wheel_width": "0.101",
+        "wheel_separation": "0.463",
+        "sensor_x": "0.443",
+        "sensor_y": "0.0",
+        "sensor_z": "0.5735",
+        "sensor_roll": "0.0",
+        "sensor_pitch": "0.0",
+        "sensor_yaw": "0.0",
+    }
+    assert arguments["navigation"] == {
+        "weld_x": "-0.443",
+        "weld_y": "0.0",
+        "weld_z": "-0.905",
+        "weld_roll": "0.0",
+        "weld_pitch": "0.0",
+        "weld_yaw": "0.0",
+    }
+
+
+def test_real_runtime_configs_are_written_outside_the_repository(tmp_path):
+    paths = cc.write_real_runtime_configs(
+        _root(), cc.load_bringup_config(_root()), tmp_path
+    )
+
+    assert set(paths) == {"controllers", "nav2"}
+    assert all(path.parent == tmp_path for path in paths.values())
+    assert cc._yaml(paths["controllers"].read_text(encoding="utf-8"))[
+        "base_controller"
+    ]["ros__parameters"]["wheel_radius"] == 0.1025
+    assert cc._yaml(paths["nav2"].read_text(encoding="utf-8"))[
+        "global_costmap"
+    ]["global_costmap"]["ros__parameters"]["footprint"].startswith(
+        "[ [0.480, 0.305]"
+    )
+
+
+def test_default_runtime_output_uses_a_private_unique_directory(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def fake_mkdtemp(prefix):
+        calls.append(prefix)
+        private = tmp_path / "system_bringup-private"
+        private.mkdir()
+        return str(private)
+
+    monkeypatch.setattr(cc.tempfile, "mkdtemp", fake_mkdtemp)
+
+    paths = cc.write_real_runtime_configs(
+        _root(), cc.load_bringup_config(_root())
+    )
+
+    assert calls == ["system_bringup-"]
+    assert {path.parent for path in paths.values()} == {
+        tmp_path / "system_bringup-private"
+    }
+
+
 def test_real_geometry_reads_only_real_sources(monkeypatch):
     reads = _guarded_read(monkeypatch, {cc.F_GAZEBO, cc.F_GZ_LAUNCH, cc.F_NAV_PARAMS})
     added_files = _guarded_added_file(monkeypatch, {cc.FASTLIO_CONFIG["sim"]})
@@ -187,7 +354,6 @@ def test_real_geometry_reads_only_real_sources(monkeypatch):
         cc.F_MACRO,
         cc.F_NAV_PARAMS_REAL,
         cc.F_CONTROLLERS,
-        cc.F_NAV_LAUNCH,
         cc.F_FASTLIO_PATCH,
     }
     assert added_files == [cc.FASTLIO_CONFIG["real"]]

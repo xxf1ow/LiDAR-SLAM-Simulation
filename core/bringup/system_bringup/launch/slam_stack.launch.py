@@ -32,6 +32,13 @@ def _stack(context, *args, **kwargs):
     nav2_params = LaunchConfiguration("nav2_params_file").perform(context)
     nav_map = LaunchConfiguration("nav_map").perform(context)
     cmd_vel_output_topic = LaunchConfiguration("cmd_vel_output_topic").perform(context)
+    weld = {
+        name: LaunchConfiguration(name).perform(context)
+        for name in (
+            "weld_x", "weld_y", "weld_z",
+            "weld_roll", "weld_pitch", "weld_yaw",
+        )
+    }
     settling = float(LaunchConfiguration("settling").perform(context))
     flow = lambda m: LogInfo(msg="======== [slam_stack] %s" % m)
 
@@ -49,7 +56,8 @@ def _stack(context, *args, **kwargs):
                      "use_sim_time": use_sim})
         nav2 = _inc("robot_navigation", "launch/navigation.launch.py",
                     {"params_file": nav2_params, "map": nav_map, "use_rviz": "true",
-                     "use_sim_time": use_sim, "cmd_vel_output_topic": cmd_vel_output_topic})
+                     "use_sim_time": use_sim, "cmd_vel_output_topic": cmd_vel_output_topic,
+                     **weld})
         # 链式就绪闸门(非阻塞):等上游真发出关键话题 + settling 后才起下个,超时中止
         return [
             flow("MODE=navigation → ② fast_lio → gate(/Odometry+/cloud_registered) → gicp → gate(/localization+/base_controller/odom) → nav2"),
@@ -85,6 +93,12 @@ def generate_launch_description():
                 get_package_share_directory("robot_navigation"), "config", "nav2_params.yaml")),
         DeclareLaunchArgument("nav_map", default_value="~/result/factory_map.yaml"),
         DeclareLaunchArgument("cmd_vel_output_topic", default_value="/cmd_vel"),
+        DeclareLaunchArgument("weld_x", default_value="0.0"),
+        DeclareLaunchArgument("weld_y", default_value="0.0"),
+        DeclareLaunchArgument("weld_z", default_value="-0.5560"),
+        DeclareLaunchArgument("weld_roll", default_value="0.0"),
+        DeclareLaunchArgument("weld_pitch", default_value="0.0"),
+        DeclareLaunchArgument("weld_yaw", default_value="0.0"),
         DeclareLaunchArgument("settling", default_value="20.0"),
         OpaqueFunction(function=_stack),
     ])
