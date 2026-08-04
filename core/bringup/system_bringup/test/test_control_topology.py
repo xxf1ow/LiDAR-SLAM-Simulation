@@ -9,6 +9,7 @@ SLAM_STACK = ROOT / "core/bringup/system_bringup/launch/slam_stack.launch.py"
 BRINGUP = ROOT / "core/bringup/system_bringup/launch/bringup.launch.py"
 ROBOT = ROOT / "core/robot/robot_bringup/launch/robot.launch.py"
 REAL_CHASSIS = ROOT / "core/robot/robot_bringup/launch/real_chassis.launch.py"
+SENSOR_GATE = ROOT / "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
 MANIFEST = ROOT / "core/bringup/system_bringup/package.xml"
 
 
@@ -585,6 +586,42 @@ def test_real_branch_starts_chassis_and_lidar_before_sensor_gate():
     assert [item.id for item in gate.args[0].elts if isinstance(item, ast.Name)] == [
         "slam_stack"
     ]
+
+
+def test_real_sensor_gate_finishes_callback_without_shutting_down_executor():
+    finish = next(
+        node for node in ast.walk(_tree(SENSOR_GATE))
+        if isinstance(node, ast.FunctionDef) and node.name == "_finish"
+    )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "shutdown"
+        for node in ast.walk(finish)
+    )
+
+
+def test_real_sensor_gate_main_spins_only_until_result_is_finished():
+    main = _function(_tree(SENSOR_GATE), "main")
+    loops = [node for node in ast.walk(main) if isinstance(node, ast.While)]
+    assert len(loops) == 1
+    loop = loops[0]
+    expected_test = ast.parse(
+        "while rclpy.ok() and not node.finished:\n    pass"
+    ).body[0].test
+    assert ast.dump(loop.test) == ast.dump(expected_test)
+
+    spins = [
+        node for node in ast.walk(loop)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "spin_once"
+    ]
+    expected_spin = ast.parse(
+        "rclpy.spin_once(node, timeout_sec=0.1)"
+    ).body[0].value
+    assert len(spins) == 1
+    assert ast.dump(spins[0]) == ast.dump(expected_spin)
 
 
 def test_real_branch_resolves_vanjee_config_only_after_platform_selection():

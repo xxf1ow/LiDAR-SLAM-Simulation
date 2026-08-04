@@ -67,15 +67,14 @@ class SensorGateNode(Node):
         self.exit_code = exit_code
         self.timer.cancel()
         self.get_logger().info(message)
-        if rclpy.ok():
-            rclpy.shutdown()
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = SensorGateNode()
     try:
-        rclpy.spin(node)
+        while rclpy.ok() and not node.finished:
+            rclpy.spin_once(node, timeout_sec=0.1)
     finally:
         node.destroy_node()
         if rclpy.ok():
