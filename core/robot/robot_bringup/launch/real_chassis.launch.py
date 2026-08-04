@@ -28,6 +28,7 @@ def generate_launch_description():
         ),
         launch_arguments={
             "auto_enable_on_start": "false",
+            "log_level": "warn",
             "config_file": PathJoinSubstitution(
                 [FindPackageShare("can_driver"), "can_driver_params.yaml"]
             ),
