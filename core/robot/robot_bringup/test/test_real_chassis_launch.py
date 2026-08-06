@@ -61,6 +61,7 @@ def test_real_chassis_includes_vendor_and_real_robot_with_single_owner_settings(
     vendor_arguments = launch_arguments(vendor)
     robot_arguments = launch_arguments(robot)
     vendor_arguments_raw = dict(vendor.launch_arguments)
+    robot_arguments_raw = dict(robot.launch_arguments)
     vendor_share = Path(FindPackageShare("can_driver").perform(context))
     vendor.launch_description_source.get_launch_description(context)
     vendor_location = Path(vendor.launch_description_source.location)
@@ -73,6 +74,8 @@ def test_real_chassis_includes_vendor_and_real_robot_with_single_owner_settings(
     )
     assert "use_mock_hardware" not in vendor_arguments
     assert robot_arguments["use_mock_hardware"] == "false"
+    context.launch_configurations["use_sim_time"] = "clock-value"
+    assert robot_arguments_raw["use_sim_time"].perform(context) == "clock-value"
     assert "prefix" not in robot_arguments
     assert "auto_enable_on_start" not in robot_arguments
 
@@ -81,6 +84,19 @@ def test_real_chassis_includes_vendor_and_real_robot_with_single_owner_settings(
         if isinstance(entity, DeclareLaunchArgument)
     ]
     assert "prefix" not in {argument.name for argument in declarations}
+    runtime_declarations = {
+        argument.name: argument for argument in declarations
+        if argument.name in {
+            "controllers_file",
+            "base_length", "base_width", "base_height", "base_link_height",
+            "wheel_radius", "wheel_width", "wheel_separation",
+            "sensor_x", "sensor_y", "sensor_z",
+            "sensor_roll", "sensor_pitch", "sensor_yaw",
+            "use_sim_time",
+        }
+    }
+    assert len(runtime_declarations) == 15
+    assert all(not argument.default_value for argument in runtime_declarations.values())
     gui_arguments = [argument for argument in declarations if argument.name == "gui"]
     assert len(gui_arguments) == 1
     assert (

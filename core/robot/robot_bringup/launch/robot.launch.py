@@ -19,6 +19,7 @@ def generate_launch_description():
                               description="true=mock 硬件镜像命令到状态；false=真机 robot_hardware 插件。"),
         DeclareLaunchArgument("prefix", default_value="",
                               description="link/joint 名前缀。"),
+        DeclareLaunchArgument("use_sim_time", default_value="false"),
         DeclareLaunchArgument("controllers_file", default_value=default_controllers),
         DeclareLaunchArgument("base_length", default_value="0.75"),
         DeclareLaunchArgument("base_width", default_value="0.55"),
@@ -38,6 +39,7 @@ def generate_launch_description():
     use_mock_hardware = LaunchConfiguration("use_mock_hardware")
     prefix = LaunchConfiguration("prefix")
     controllers_file = LaunchConfiguration("controllers_file")
+    use_sim_time = LaunchConfiguration("use_sim_time")
 
     robot_description_content = Command([
         PathJoinSubstitution([FindExecutable(name="xacro")]), " ",
@@ -59,14 +61,17 @@ def generate_launch_description():
         " ", "sensor_pitch:=", LaunchConfiguration("sensor_pitch"),
         " ", "sensor_yaw:=", LaunchConfiguration("sensor_yaw"),
     ])
-    robot_description = {"robot_description": robot_description_content}
+    robot_description = {
+        "robot_description": robot_description_content,
+        "use_sim_time": use_sim_time,
+    }
 
     rviz_config_file = PathJoinSubstitution(
         [FindPackageShare("robot_description"), "rviz", "robot.rviz"])
 
     control_node = Node(
         package="controller_manager", executable="ros2_control_node",
-        parameters=[controllers_file], output="both",
+        parameters=[controllers_file, {"use_sim_time": use_sim_time}], output="both",
         remappings=[
             ("~/robot_description", "/robot_description"),
             ("/base_controller/cmd_vel", "/cmd_vel"),
@@ -78,7 +83,8 @@ def generate_launch_description():
     )
     rviz_node = Node(
         package="rviz2", executable="rviz2", name="rviz2", output="log",
-        arguments=["-d", rviz_config_file], condition=IfCondition(gui),
+        arguments=["-d", rviz_config_file],
+        parameters=[{"use_sim_time": use_sim_time}], condition=IfCondition(gui),
     )
     joint_state_broadcaster_spawner = Node(
         package="controller_manager", executable="spawner",

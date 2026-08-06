@@ -17,6 +17,7 @@ def generate_launch_description():
             "wheel_radius", "wheel_width", "wheel_separation",
             "sensor_x", "sensor_y", "sensor_z",
             "sensor_roll", "sensor_pitch", "sensor_yaw",
+            "use_sim_time",
         )
     }
 
@@ -64,6 +65,7 @@ def generate_launch_description():
             DeclareLaunchArgument("sensor_roll"),
             DeclareLaunchArgument("sensor_pitch"),
             DeclareLaunchArgument("sensor_yaw"),
+            DeclareLaunchArgument("use_sim_time"),
             vendor,
             robot,
         ]

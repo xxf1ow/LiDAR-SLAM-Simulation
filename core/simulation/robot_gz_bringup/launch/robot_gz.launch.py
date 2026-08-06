@@ -39,9 +39,26 @@ def generate_launch_description():
         DeclareLaunchArgument("spawn_y", default_value="0.0", description="机器人 spawn Y。"),
         DeclareLaunchArgument("spawn_z", default_value="0.05",
                               description="机器人 spawn Z(根=base_footprint 在地面，留 5cm 落地余量)。"),
+        DeclareLaunchArgument("controllers_file"),
+        DeclareLaunchArgument("base_length"),
+        DeclareLaunchArgument("base_width"),
+        DeclareLaunchArgument("base_height"),
+        DeclareLaunchArgument("base_link_height"),
+        DeclareLaunchArgument("wheel_radius"),
+        DeclareLaunchArgument("wheel_width"),
+        DeclareLaunchArgument("wheel_separation"),
+        DeclareLaunchArgument("sensor_x"),
+        DeclareLaunchArgument("sensor_y"),
+        DeclareLaunchArgument("sensor_z"),
+        DeclareLaunchArgument("sensor_roll"),
+        DeclareLaunchArgument("sensor_pitch"),
+        DeclareLaunchArgument("sensor_yaw"),
+        DeclareLaunchArgument("use_sim_time"),
     ]
     gui = LaunchConfiguration("gui")
     prefix = LaunchConfiguration("prefix")
+    controllers_file = LaunchConfiguration("controllers_file")
+    use_sim_time = LaunchConfiguration("use_sim_time")
 
     pkg_gz = FindPackageShare("robot_gz_bringup")
     world = PathJoinSubstitution([pkg_gz, "worlds", LaunchConfiguration("world")])
@@ -58,21 +75,31 @@ def generate_launch_description():
         return [AppendEnvironmentVariable("GZ_SIM_RESOURCE_PATH", os.pathsep.join(paths))]
 
     set_resource_path = OpaqueFunction(function=_set_resource_paths)
-    gz_controllers_file = PathJoinSubstitution(
-        [FindPackageShare("robot_bringup"), "config", "robot_controllers.yaml"])
-
     robot_description_content = Command([
         PathJoinSubstitution([FindExecutable(name="xacro")]), " ",
         PathJoinSubstitution([FindPackageShare("robot_description"), "urdf", "robot.urdf.xacro"]),
         " ", "use_gazebo:=true",
         " ", "prefix:=", prefix,
-        " ", "gz_controllers_file:=", gz_controllers_file,
+        " ", "gz_controllers_file:=", controllers_file,
+        " ", "base_length:=", LaunchConfiguration("base_length"),
+        " ", "base_width:=", LaunchConfiguration("base_width"),
+        " ", "base_height:=", LaunchConfiguration("base_height"),
+        " ", "base_link_height:=", LaunchConfiguration("base_link_height"),
+        " ", "wheel_radius:=", LaunchConfiguration("wheel_radius"),
+        " ", "wheel_width:=", LaunchConfiguration("wheel_width"),
+        " ", "wheel_separation:=", LaunchConfiguration("wheel_separation"),
+        " ", "sensor_x:=", LaunchConfiguration("sensor_x"),
+        " ", "sensor_y:=", LaunchConfiguration("sensor_y"),
+        " ", "sensor_z:=", LaunchConfiguration("sensor_z"),
+        " ", "sensor_roll:=", LaunchConfiguration("sensor_roll"),
+        " ", "sensor_pitch:=", LaunchConfiguration("sensor_pitch"),
+        " ", "sensor_yaw:=", LaunchConfiguration("sensor_yaw"),
     ])
     # robot_description 必须显式声明为 str：含 <gazebo> 传感器块的 URDF 不是合法 YAML，
     # launch_ros 默认会 yaml.safe_load 推断类型而报错(见 launch 报错提示)。
     robot_description = {
         "robot_description": ParameterValue(robot_description_content, value_type=str),
-        "use_sim_time": True,
+        "use_sim_time": use_sim_time,
     }
     rviz_config_file = PathJoinSubstitution(
         [FindPackageShare("robot_description"), "rviz", "robot.rviz"])
@@ -94,7 +121,7 @@ def generate_launch_description():
     bridge = Node(
         package="ros_gz_bridge", executable="parameter_bridge",
         name="ros_gz_bridge", output="screen",
-        parameters=[{"config_file": bridge_cfg, "use_sim_time": True}],
+        parameters=[{"config_file": bridge_cfg, "use_sim_time": use_sim_time}],
     )
 
     # ring/time 适配：Gz 组织化点云 → Velodyne 风格 /points_raw(补 time、透传 native ring)
@@ -106,7 +133,7 @@ def generate_launch_description():
             "output_topic": "/points_raw",
             "output_frame": "velodyne",
             "scan_period": 0.1,
-            "use_sim_time": True,
+            "use_sim_time": use_sim_time,
         }],
     )
 
@@ -132,7 +159,7 @@ def generate_launch_description():
     )
     rviz_node = Node(
         package="rviz2", executable="rviz2", name="rviz2", output="log",
-        arguments=["-d", rviz_config_file], parameters=[{"use_sim_time": True}],
+        arguments=["-d", rviz_config_file], parameters=[{"use_sim_time": use_sim_time}],
         condition=IfCondition(LaunchConfiguration("rviz")),
     )
 

@@ -204,6 +204,7 @@ def test_robot_launch_accepts_runtime_geometry_and_controller_file():
         "wheel_radius", "wheel_width", "wheel_separation",
         "sensor_x", "sensor_y", "sensor_z",
         "sensor_roll", "sensor_pitch", "sensor_yaw",
+        "use_sim_time",
     } <= declared
 
     function = _function(tree, "generate_launch_description")
@@ -212,6 +213,20 @@ def test_robot_launch_accepts_runtime_geometry_and_controller_file():
     assert isinstance(parameters, ast.List)
     assert isinstance(parameters.elts[0], ast.Name)
     assert parameters.elts[0].id == "controllers_file"
+    control_clock = _dict_value(parameters.elts[1], "use_sim_time")
+    assert isinstance(control_clock, ast.Name)
+    assert control_clock.id == "use_sim_time"
+
+    robot_description = _assigned_value(function, "robot_description")
+    description_clock = _dict_value(robot_description, "use_sim_time")
+    assert isinstance(description_clock, ast.Name)
+    assert description_clock.id == "use_sim_time"
+
+    rviz = _node_call(function, "rviz2", "rviz2")
+    rviz_parameters = _keyword(rviz, "parameters")
+    rviz_clock = _dict_value(rviz_parameters.elts[0], "use_sim_time")
+    assert isinstance(rviz_clock, ast.Name)
+    assert rviz_clock.id == "use_sim_time"
 
     command = _assigned_value(function, "robot_description_content")
     assert isinstance(command, ast.Call)
@@ -224,7 +239,7 @@ def test_robot_launch_accepts_runtime_geometry_and_controller_file():
         if _string(command_parts.elts[index])
         and _string(command_parts.elts[index]).endswith(":=")
     }
-    for name in declared - {"gui", "controllers_file"}:
+    for name in declared - {"gui", "controllers_file", "use_sim_time"}:
         value = configured[name]
         if name in {"use_mock_hardware", "prefix"}:
             assert isinstance(value, ast.Name)
@@ -248,6 +263,7 @@ def test_real_chassis_passes_runtime_geometry_to_robot_launch():
         "wheel_radius", "wheel_width", "wheel_separation",
         "sensor_x", "sensor_y", "sensor_z",
         "sensor_roll", "sensor_pitch", "sensor_yaw",
+        "use_sim_time",
     } <= declared
 
     function = _function(tree, "generate_launch_description")
@@ -279,6 +295,7 @@ def test_real_chassis_requires_authoritative_geometry_instead_of_sim_defaults():
         "wheel_radius", "wheel_width", "wheel_separation",
         "sensor_x", "sensor_y", "sensor_z",
         "sensor_roll", "sensor_pitch", "sensor_yaw",
+        "use_sim_time",
     ):
         declaration = _declaration(tree, name)
         assert not any(keyword.arg == "default_value" for keyword in declaration.keywords)
