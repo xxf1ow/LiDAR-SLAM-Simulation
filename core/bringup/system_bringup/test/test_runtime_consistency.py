@@ -12,15 +12,15 @@ from system_bringup import runtime_config_compiler as rcc
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PACKAGE_ROOT / "config"
 SOURCE_REPO_ROOT = PACKAGE_ROOT.parents[2]
-ACTIVE_TOPOLOGY_FILES = (
-    "core/bringup/system_bringup/launch/bringup.launch.py",
-    "core/bringup/system_bringup/launch/slam_stack.launch.py",
-    "core/simulation/robot_gz_bringup/launch/robot_gz.launch.py",
-    "core/robot/robot_bringup/launch/real_chassis.launch.py",
-    "core/robot/robot_bringup/launch/robot.launch.py",
-    "core/navigation/robot_navigation/launch/navigation.launch.py",
-    "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
-)
+ACTIVE_TOPOLOGY_FILES = {
+    "formal": "core/bringup/system_bringup/launch/bringup.launch.py",
+    "slam": "core/bringup/system_bringup/launch/slam_stack.launch.py",
+    "sim": "core/simulation/robot_gz_bringup/launch/robot_gz.launch.py",
+    "real_chassis": "core/robot/robot_bringup/launch/real_chassis.launch.py",
+    "real_robot": "core/robot/robot_bringup/launch/robot.launch.py",
+    "navigation": "core/navigation/robot_navigation/launch/navigation.launch.py",
+    "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
+}
 
 
 def _load_yaml(path):
@@ -60,9 +60,17 @@ def _replace_source(repo_root, relative_path, old, new):
 
 
 @pytest.fixture
-def runtime_factory(tmp_path):
+def runtime_factory(tmp_path, monkeypatch):
     runtime_dirs = []
+    active_paths = {}
     count = 0
+
+    monkeypatch.setattr(
+        cc,
+        "_resolve_installed_topology_paths",
+        lambda failures: dict(active_paths),
+        raising=False,
+    )
 
     def build(platform="sim", mode="navigation"):
         nonlocal count
@@ -70,11 +78,12 @@ def runtime_factory(tmp_path):
         repo_root = tmp_path / f"repo-{count}"
         config_dir = repo_root / "core" / "bringup" / "system_bringup" / "config"
         shutil.copytree(CONFIG_DIR, config_dir)
-        for relative_path in ACTIVE_TOPOLOGY_FILES:
+        for label, relative_path in ACTIVE_TOPOLOGY_FILES.items():
             source = SOURCE_REPO_ROOT / relative_path
             destination = repo_root / relative_path
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
+            active_paths[label] = destination
         config_path = config_dir / "bringup.yaml"
         config = _load_yaml(config_path)
         config["platform"] = platform
@@ -574,6 +583,253 @@ def test_active_topology_rejects_prohibited_legacy_import(
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
     assert any("prohibited active legacy" in failure for failure in failures)
+
+
+def test_active_topology_rejects_source_install_mismatch(
+    runtime_factory, tmp_path, monkeypatch
+):
+    repo_root, manifest = runtime_factory()
+    installed_root = tmp_path / "installed"
+    installed_paths = {}
+    for label, relative_path in ACTIVE_TOPOLOGY_FILES.items():
+        source = repo_root / relative_path
+        destination = installed_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        installed_paths[label] = destination
+    installed_paths["formal"].write_text(
+        installed_paths["formal"].read_text(encoding="utf-8")
+        + "\nSTALE_INSTALLED_COPY = True\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cc,
+        "_resolve_installed_topology_paths",
+        lambda failures: installed_paths,
+        raising=False,
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "installed" in failure
+        and "reviewed source" in failure
+        and "rebuild" in failure
+        for failure in failures
+    )
+
+
+@pytest.mark.parametrize(
+    "node_source",
+    [
+        'Node(package="cmd_vel_gate", executable="cmd_vel_gate"),',
+        'Node(package="robot_web_ui", executable="robot_web_ui", '
+        'parameters=[str(manifest["web_ui_path"])]),',
+    ],
+)
+def test_active_topology_rejects_duplicate_control_layer_nodes(
+    runtime_factory, node_source
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["formal"],
+        "    control_layer = [\n",
+        f"    control_layer = [\n        {node_source}\n",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("topology cardinality" in failure for failure in failures)
+
+
+def test_active_topology_rejects_duplicate_shared_slam_include(runtime_factory):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["formal"],
+        '    if platform == "sim":\n',
+        "    control_layer.append(\n"
+        "        _inc(\"system_bringup\", \"launch/slam_stack.launch.py\", {})\n"
+        "    )\n\n"
+        '    if platform == "sim":\n',
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("topology cardinality" in failure for failure in failures)
+
+
+def test_active_topology_rejects_direct_extra_include(runtime_factory):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["formal"],
+        '    if platform == "sim":\n',
+        "    control_layer.append(\n"
+        "        IncludeLaunchDescription(\n"
+        "            PythonLaunchDescriptionSource(\"duplicate.launch.py\")\n"
+        "        )\n"
+        "    )\n\n"
+        '    if platform == "sim":\n',
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("topology cardinality" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "branch_marker,duplicate_call",
+    [
+        (
+            '    if platform == "sim":\n',
+            '        control_layer.append(_inc("robot_gz_bringup", '
+            '"launch/robot_gz.launch.py", {}))\n',
+        ),
+        (
+            '    if platform == "real":\n',
+            '        control_layer.append(_inc("robot_bringup", '
+            '"launch/real_chassis.launch.py", {}))\n'
+            '        control_layer.append(_inc("vanjee_lidar_ros", '
+            '"launch/vanjee_lidar.launch.py", {}))\n',
+        ),
+    ],
+)
+def test_active_topology_rejects_duplicate_backend_includes(
+    runtime_factory, branch_marker, duplicate_call
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["formal"],
+        branch_marker,
+        branch_marker + duplicate_call,
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("topology cardinality" in failure for failure in failures)
+
+
+def test_active_topology_rejects_additive_direct_cmd_vel_bypass(runtime_factory):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["navigation"],
+        "remappings=[('cmd_vel', '/cmd_vel_nav')],",
+        "remappings=[('cmd_vel', '/cmd_vel_nav'), "
+        "('cmd_vel_unchecked', '/cmd_vel')],",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("command gate routing" in failure for failure in failures)
+
+
+def test_active_topology_ignores_dead_string_decoy(runtime_factory):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["formal"],
+        'parameters=[str(manifest["web_ui_path"])],',
+        'parameters=[str(manifest["bringup_config_path"])],',
+    )
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["formal"],
+        "    control_layer = [\n",
+        "    if False:\n"
+        "        \"parameters=[str(manifest['web_ui_path'])]\"\n"
+        "    control_layer = [\n",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("generated runtime artifacts" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "label,old,new",
+    [
+        (
+            "slam",
+            '"params_file": nav2_params',
+            '"params_file": fast_cfg',
+        ),
+        (
+            "navigation",
+            "parameters=[params_file],",
+            "parameters=[default_params],",
+        ),
+    ],
+)
+def test_active_topology_rejects_generated_nav2_dataflow_drift(
+    runtime_factory, label, old, new
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES[label],
+        old,
+        new,
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("generated runtime artifacts" in failure for failure in failures)
+
+
+def test_active_topology_accepts_equivalent_local_aliases_and_assigned_dict(
+    runtime_factory,
+):
+    repo_root, manifest = runtime_factory()
+    formal_path = ACTIVE_TOPOLOGY_FILES["formal"]
+    _replace_source(
+        repo_root,
+        formal_path,
+        "    control_layer = [\n",
+        "    web_ui_parameters = [str(manifest[\"web_ui_path\"])]\n"
+        "    controllers_path = str(manifest[\"controllers_path\"])\n"
+        "    control_layer = [\n",
+    )
+    _replace_source(
+        repo_root,
+        formal_path,
+        'parameters=[str(manifest["web_ui_path"])],',
+        "parameters=web_ui_parameters,",
+    )
+    _replace_source(
+        repo_root,
+        formal_path,
+        '"controllers_file": str(manifest["controllers_path"]),',
+        '"controllers_file": controllers_path,',
+    )
+    _replace_source(
+        repo_root,
+        formal_path,
+        "    slam_stack = _inc(\n"
+        '        "system_bringup",\n'
+        '        "launch/slam_stack.launch.py",\n'
+        "        {\n",
+        "    slam_arguments = {\n",
+    )
+    _replace_source(
+        repo_root,
+        formal_path,
+        '            "weld_qw": weld["qw"],\n'
+        "        },\n"
+        "    )\n\n"
+        '    if platform == "sim":\n',
+        '        "weld_qw": weld["qw"],\n'
+        "    }\n"
+        "    slam_stack = _inc(\n"
+        '        "system_bringup", "launch/slam_stack.launch.py", slam_arguments\n'
+        "    )\n\n"
+        '    if platform == "sim":\n',
+    )
+
+    assert cc.run_runtime_consistency(repo_root, manifest) == []
 
 
 def test_report_generated_path_reference_drift_is_reported(runtime_factory):
