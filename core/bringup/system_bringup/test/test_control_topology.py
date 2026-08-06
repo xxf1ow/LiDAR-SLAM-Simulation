@@ -167,11 +167,13 @@ def test_navigation_declares_cmd_vel_output_topic_with_legacy_default():
 def test_navigation_accepts_complete_body_weld_transform():
     tree = _tree(NAVIGATION)
     assert {
-        "weld_x", "weld_y", "weld_z", "weld_roll", "weld_pitch", "weld_yaw"
-    } <= {
         _string(call.args[0])
         for call in _calls(tree, "DeclareLaunchArgument")
         if call.args
+        and _string(call.args[0]).startswith("weld_")
+    } == {
+        "weld_x", "weld_y", "weld_z",
+        "weld_qx", "weld_qy", "weld_qz", "weld_qw",
     }
 
     function = _function(tree, "generate_launch_description")
@@ -180,15 +182,52 @@ def test_navigation_accepts_complete_body_weld_transform():
     assert isinstance(arguments, ast.List)
     values = {
         _string(arguments.elts[index]): arguments.elts[index + 1]
-        for index in range(0, 12, 2)
+        for index in range(0, 14, 2)
     }
     for option, variable in (
         ("--x", "weld_x"), ("--y", "weld_y"), ("--z", "weld_z"),
-        ("--roll", "weld_roll"), ("--pitch", "weld_pitch"),
-        ("--yaw", "weld_yaw"),
+        ("--qx", "weld_qx"), ("--qy", "weld_qy"),
+        ("--qz", "weld_qz"), ("--qw", "weld_qw"),
     ):
         assert isinstance(values[option], ast.Name)
         assert values[option].id == variable
+
+
+def test_slam_stack_forwards_only_quaternion_body_weld_arguments():
+    tree = _tree(SLAM_STACK)
+    declared_weld = {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+        and _string(call.args[0]).startswith("weld_")
+    }
+    assert declared_weld == {
+        "weld_x", "weld_y", "weld_z",
+        "weld_qx", "weld_qy", "weld_qz", "weld_qw",
+    }
+    assert {
+        name: _declaration_default(tree, name)
+        for name in declared_weld
+    } == {
+        "weld_x": "0.0", "weld_y": "0.0", "weld_z": "-0.5560",
+        "weld_qx": "0.0", "weld_qy": "0.0", "weld_qz": "0.0", "weld_qw": "1.0",
+    }
+
+    function = _function(tree, "_stack")
+    weld = _assigned_value(function, "weld")
+    assert isinstance(weld, ast.DictComp)
+    assert {
+        _string(item)
+        for item in weld.generators[0].iter.elts
+    } == declared_weld
+
+    navigation = _include_arguments(
+        function, "robot_navigation", "launch/navigation.launch.py"
+    )
+    assert any(
+        key is None and isinstance(value, ast.Name) and value.id == "weld"
+        for key, value in zip(navigation.keys, navigation.values)
+    )
 
 
 def test_robot_launch_accepts_runtime_geometry_and_controller_file():

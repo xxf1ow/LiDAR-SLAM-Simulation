@@ -36,9 +36,10 @@ def generate_launch_description():
     weld_x = LaunchConfiguration('weld_x')
     weld_y = LaunchConfiguration('weld_y')
     weld_z = LaunchConfiguration('weld_z')
-    weld_roll = LaunchConfiguration('weld_roll')
-    weld_pitch = LaunchConfiguration('weld_pitch')
-    weld_yaw = LaunchConfiguration('weld_yaw')
+    weld_qx = LaunchConfiguration('weld_qx')
+    weld_qy = LaunchConfiguration('weld_qy')
+    weld_qz = LaunchConfiguration('weld_qz')
+    weld_qw = LaunchConfiguration('weld_qw')
     cmd_vel_output_topic = LaunchConfiguration('cmd_vel_output_topic')
 
     lifecycle_nodes = [
@@ -53,7 +54,7 @@ def generate_launch_description():
         return [Node(
             package='nav2_map_server', executable='map_server', name='map_server',
             output='screen',
-            parameters=[params_file, {'use_sim_time': use_sim_time, 'yaml_filename': map_yaml}],
+            parameters=[params_file, {'yaml_filename': map_yaml}],
         )]
 
     return LaunchDescription([
@@ -65,13 +66,14 @@ def generate_launch_description():
         DeclareLaunchArgument('use_rviz', default_value='true'),
         DeclareLaunchArgument('cmd_vel_output_topic', default_value='/cmd_vel'),
         # 焊接：parent=body(雷达/IMU) -> child=base_footprint。
-        # 默认值保持既有仿真；真机六自由度值由 system_bringup 派生并覆盖。
+        # 默认值保持既有仿真；正式 system_bringup 显式传入 manifest 四元数。
         DeclareLaunchArgument('weld_x', default_value='0.0'),
         DeclareLaunchArgument('weld_y', default_value='0.0'),
         DeclareLaunchArgument('weld_z', default_value=f'{_WELD_Z:.4f}'),
-        DeclareLaunchArgument('weld_roll', default_value='0.0'),
-        DeclareLaunchArgument('weld_pitch', default_value='0.0'),
-        DeclareLaunchArgument('weld_yaw', default_value='0.0'),
+        DeclareLaunchArgument('weld_qx', default_value='0.0'),
+        DeclareLaunchArgument('weld_qy', default_value='0.0'),
+        DeclareLaunchArgument('weld_qz', default_value='0.0'),
+        DeclareLaunchArgument('weld_qw', default_value='1.0'),
 
         # 1) TF 焊接：body(FAST-LIO) -> base_footprint(URDF 根)
         Node(
@@ -79,7 +81,7 @@ def generate_launch_description():
             name='body_to_base_footprint', output='screen',
             arguments=[
                 '--x', weld_x, '--y', weld_y, '--z', weld_z,
-                '--roll', weld_roll, '--pitch', weld_pitch, '--yaw', weld_yaw,
+                '--qx', weld_qx, '--qy', weld_qy, '--qz', weld_qz, '--qw', weld_qw,
                 '--frame-id', 'body', '--child-frame-id', 'base_footprint',
             ],
             parameters=[{'use_sim_time': use_sim_time}],
@@ -91,27 +93,27 @@ def generate_launch_description():
         # 3) planner_server(托管 global_costmap + Smac Hybrid-A*)
         Node(
             package='nav2_planner', executable='planner_server', name='planner_server',
-            output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
+            output='screen', parameters=[params_file],
         ),
 
         # 4) controller_server(托管 local_costmap + MPPI)；cmd_vel -> /cmd_vel_nav(Twist)
         Node(
             package='nav2_controller', executable='controller_server', name='controller_server',
-            output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
+            output='screen', parameters=[params_file],
             remappings=[('cmd_vel', '/cmd_vel_nav')],
         ),
 
         # 5) behavior_server(恢复)；cmd_vel -> /cmd_vel_nav(Twist)
         Node(
             package='nav2_behaviors', executable='behavior_server', name='behavior_server',
-            output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
+            output='screen', parameters=[params_file],
             remappings=[('cmd_vel', '/cmd_vel_nav')],
         ),
 
         # 6) bt_navigator(大脑)
         Node(
             package='nav2_bt_navigator', executable='bt_navigator', name='bt_navigator',
-            output='screen', parameters=[params_file, {'use_sim_time': use_sim_time}],
+            output='screen', parameters=[params_file],
         ),
 
         # 7) twist_stamper：/cmd_vel_nav(Twist) -> 配置的 TwistStamped 输出话题
