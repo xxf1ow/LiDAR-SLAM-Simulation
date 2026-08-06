@@ -1,6 +1,6 @@
 from copy import deepcopy
 import json
-from math import isfinite
+from math import cos, isfinite, sin, sqrt
 
 from system_bringup import profile_compiler as pc
 
@@ -133,6 +133,118 @@ def _get_existing(mapping, path):
 
 def _format_footprint(footprint):
     return json.dumps(footprint, ensure_ascii=False, separators=(", ", ": "))
+
+
+def _derive_robot_launch_arguments(effective):
+    geometry = effective["derived"]["geometry"]
+    body = geometry["body"]
+    drive = geometry["drive"]
+    lidar = geometry["mounts_relative_to_base_link"]["lidar"]
+    return {
+        "base_length": str(body["length"]),
+        "base_width": str(body["width"]),
+        "base_height": str(body["height"]),
+        "base_link_height": str(body["base_link_height"]),
+        "wheel_radius": str(drive["wheel_radius"]),
+        "wheel_width": str(drive["wheel_width"]),
+        "wheel_separation": str(drive["wheel_separation"]),
+        "sensor_x": str(lidar["x"]),
+        "sensor_y": str(lidar["y"]),
+        "sensor_z": str(lidar["z"]),
+        "sensor_roll": str(lidar["roll"]),
+        "sensor_pitch": str(lidar["pitch"]),
+        "sensor_yaw": str(lidar["yaw"]),
+    }
+
+
+def _stable_float(value):
+    return 0.0 if abs(value) < 1e-15 else value
+
+
+def _derive_compatibility_body_weld_transform(profile):
+    """Invert the raw base_footprint-to-lidar mount for the temporary body weld."""
+    mount = profile["robot"]["mounts"]["lidar"]
+    cr, sr = cos(mount["roll"] / 2.0), sin(mount["roll"] / 2.0)
+    cp, sp = cos(mount["pitch"] / 2.0), sin(mount["pitch"] / 2.0)
+    cy, sy = cos(mount["yaw"] / 2.0), sin(mount["yaw"] / 2.0)
+    quaternion = (
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    )
+    norm = sqrt(sum(value * value for value in quaternion))
+    qx, qy, qz, qw = (value / norm for value in quaternion)
+
+    rotation = (
+        (
+            1.0 - 2.0 * (qy * qy + qz * qz),
+            2.0 * (qx * qy - qz * qw),
+            2.0 * (qx * qz + qy * qw),
+        ),
+        (
+            2.0 * (qx * qy + qz * qw),
+            1.0 - 2.0 * (qx * qx + qz * qz),
+            2.0 * (qy * qz - qx * qw),
+        ),
+        (
+            2.0 * (qx * qz - qy * qw),
+            2.0 * (qy * qz + qx * qw),
+            1.0 - 2.0 * (qx * qx + qy * qy),
+        ),
+    )
+    translation = (mount["x"], mount["y"], mount["z"])
+    inverse_translation = tuple(
+        -sum(rotation[row][column] * translation[row] for row in range(3))
+        for column in range(3)
+    )
+    values = inverse_translation + (-qx, -qy, -qz, qw)
+    return {
+        key: _stable_float(value)
+        for key, value in zip(("x", "y", "z", "qx", "qy", "qz", "qw"), values)
+    }
+
+
+def _derive_compatibility_body_weld_arguments(profile):
+    transform = _derive_compatibility_body_weld_transform(profile)
+    return {key: str(value) for key, value in transform.items()}
+
+
+def _build_runtime_report(effective, body_weld):
+    report = deepcopy(effective)
+    selected_motion = effective["profile"]["motion"]
+    report["compatibility"] = {
+        "body_to_base_footprint": {
+            "status": "temporary",
+            "assumption": "FAST-LIO body is colocated with the lidar/IMU origin",
+            "follow_up_section": 5,
+            "translation": {
+                key: body_weld[key] for key in ("x", "y", "z")
+            },
+            "rotation": {
+                key: body_weld[key] for key in ("qx", "qy", "qz", "qw")
+            },
+        }
+    }
+    report["deferred_compatibility"] = [
+        {
+            "component": "nav2.behavior_server",
+            "status": "deferred_to_section_9",
+            "template_values": {
+                "max_rotational_vel": 1.0,
+                "min_rotational_vel": 0.4,
+                "rotational_acc_lim": 3.2,
+            },
+            "profile_values": {
+                "max_angular_velocity": selected_motion["max_angular_velocity"],
+                "max_angular_acceleration": selected_motion[
+                    "max_angular_acceleration"
+                ],
+            },
+            "reason": "Humble Nav2 behavior capability and semantics require target-version review",
+        }
+    ]
+    return report
 
 
 def _render_controller(template, effective):

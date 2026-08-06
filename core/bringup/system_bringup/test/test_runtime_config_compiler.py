@@ -1,6 +1,7 @@
 import shutil
 from copy import deepcopy
 import json
+from math import cos, sin, sqrt
 from pathlib import Path
 
 import pytest
@@ -436,3 +437,224 @@ def test_renderer_rejects_template_target_drift(
 
     with pytest.raises(ValueError, match=rf"{label} template.*{'.'.join(path)}"):
         rcc._set_template_existing(label, template, path, None, expected_type)
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_robot_launch_arguments_map_effective_geometry_exactly(
+    runtime_tree, platform
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    geometry = inputs["effective"]["derived"]["geometry"]
+    lidar_from_base_link = geometry["mounts_relative_to_base_link"]["lidar"]
+
+    assert rcc._derive_robot_launch_arguments(inputs["effective"]) == {
+        "base_length": str(geometry["body"]["length"]),
+        "base_width": str(geometry["body"]["width"]),
+        "base_height": str(geometry["body"]["height"]),
+        "base_link_height": str(geometry["body"]["base_link_height"]),
+        "wheel_radius": str(geometry["drive"]["wheel_radius"]),
+        "wheel_width": str(geometry["drive"]["wheel_width"]),
+        "wheel_separation": str(geometry["drive"]["wheel_separation"]),
+        "sensor_x": str(lidar_from_base_link["x"]),
+        "sensor_y": str(lidar_from_base_link["y"]),
+        "sensor_z": str(lidar_from_base_link["z"]),
+        "sensor_roll": str(lidar_from_base_link["roll"]),
+        "sensor_pitch": str(lidar_from_base_link["pitch"]),
+        "sensor_yaw": str(lidar_from_base_link["yaw"]),
+    }
+    assert "wheel_width" not in _rendered(runtime_tree, platform)["controllers"][
+        "base_controller"
+    ]["ros__parameters"]
+
+
+@pytest.mark.parametrize(
+    ("platform", "expected"),
+    [
+        (
+            "sim",
+            {
+                "x": "0.0",
+                "y": "0.0",
+                "z": "-0.556",
+                "qx": "0.0",
+                "qy": "0.0",
+                "qz": "0.0",
+                "qw": "1.0",
+            },
+        ),
+        (
+            "real",
+            {
+                "x": "-0.443",
+                "y": "0.0",
+                "z": "-0.905",
+                "qx": "0.0",
+                "qy": "0.0",
+                "qz": "0.0",
+                "qw": "1.0",
+            },
+        ),
+    ],
+)
+def test_compatibility_body_weld_arguments_match_profile_baselines(
+    runtime_tree, platform, expected
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    profile = rcc._load_runtime_inputs(runtime_tree.config)["selected_profile"]
+
+    assert rcc._derive_compatibility_body_weld_arguments(profile) == expected
+
+
+def _quaternion_matrix(qx, qy, qz, qw):
+    return (
+        (
+            1.0 - 2.0 * (qy * qy + qz * qz),
+            2.0 * (qx * qy - qz * qw),
+            2.0 * (qx * qz + qy * qw),
+        ),
+        (
+            2.0 * (qx * qy + qz * qw),
+            1.0 - 2.0 * (qx * qx + qz * qz),
+            2.0 * (qy * qz - qx * qw),
+        ),
+        (
+            2.0 * (qx * qz - qy * qw),
+            2.0 * (qy * qz + qx * qw),
+            1.0 - 2.0 * (qx * qx + qy * qy),
+        ),
+    )
+
+
+def _compose_transform(left, right):
+    left_rotation, left_translation = left
+    right_rotation, right_translation = right
+    rotation = tuple(
+        tuple(
+            sum(left_rotation[row][k] * right_rotation[k][column] for k in range(3))
+            for column in range(3)
+        )
+        for row in range(3)
+    )
+    translation = tuple(
+        left_translation[row]
+        + sum(left_rotation[row][k] * right_translation[k] for k in range(3))
+        for row in range(3)
+    )
+    return rotation, translation
+
+
+def test_compatibility_body_weld_is_full_se3_inverse_for_nonzero_rpy():
+    mount = {
+        "x": 0.4,
+        "y": -0.2,
+        "z": 0.8,
+        "roll": 0.3,
+        "pitch": -0.4,
+        "yaw": 0.7,
+    }
+    cr, sr = cos(mount["roll"] / 2.0), sin(mount["roll"] / 2.0)
+    cp, sp = cos(mount["pitch"] / 2.0), sin(mount["pitch"] / 2.0)
+    cy, sy = cos(mount["yaw"] / 2.0), sin(mount["yaw"] / 2.0)
+    forward_quaternion = (
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    )
+    norm = sqrt(sum(value * value for value in forward_quaternion))
+    forward_rotation = _quaternion_matrix(
+        *(value / norm for value in forward_quaternion)
+    )
+
+    weld = rcc._derive_compatibility_body_weld_arguments(
+        {"robot": {"mounts": {"lidar": mount}}}
+    )
+    inverse_rotation = _quaternion_matrix(
+        float(weld["qx"]),
+        float(weld["qy"]),
+        float(weld["qz"]),
+        float(weld["qw"]),
+    )
+    composed = _compose_transform(
+        (forward_rotation, (mount["x"], mount["y"], mount["z"])),
+        (
+            inverse_rotation,
+            (float(weld["x"]), float(weld["y"]), float(weld["z"])),
+        ),
+    )
+
+    for row in range(3):
+        for column in range(3):
+            assert composed[0][row][column] == pytest.approx(
+                1.0 if row == column else 0.0, abs=1e-12
+            )
+    assert composed[1] == pytest.approx((0.0, 0.0, 0.0), abs=1e-12)
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_runtime_report_records_temporary_and_deferred_compatibility(
+    runtime_tree, platform
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    effective_before = deepcopy(inputs["effective"])
+    weld = rcc._derive_compatibility_body_weld_transform(
+        inputs["selected_profile"]
+    )
+
+    report = rcc._build_runtime_report(inputs["effective"], weld)
+
+    assert inputs["effective"] == effective_before
+    assert all(report[key] == value for key, value in effective_before.items())
+    assert report["compatibility"] == {
+        "body_to_base_footprint": {
+            "status": "temporary",
+            "assumption": "FAST-LIO body is colocated with the lidar/IMU origin",
+            "follow_up_section": 5,
+            "translation": {key: weld[key] for key in ("x", "y", "z")},
+            "rotation": {key: weld[key] for key in ("qx", "qy", "qz", "qw")},
+        }
+    }
+    assert report["deferred_compatibility"] == [
+        {
+            "component": "nav2.behavior_server",
+            "status": "deferred_to_section_9",
+            "template_values": {
+                "max_rotational_vel": 1.0,
+                "min_rotational_vel": 0.4,
+                "rotational_acc_lim": 3.2,
+            },
+            "profile_values": {
+                "max_angular_velocity": effective_before["profile"]["motion"][
+                    "max_angular_velocity"
+                ],
+                "max_angular_acceleration": effective_before["profile"]["motion"][
+                    "max_angular_acceleration"
+                ],
+            },
+            "reason": "Humble Nav2 behavior capability and semantics require target-version review",
+        }
+    ]
+
+
+def test_real_runtime_report_preserves_deferred_compatibility_difference(runtime_tree):
+    runtime_tree.set_bringup_value("platform", "real")
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    weld = rcc._derive_compatibility_body_weld_transform(
+        inputs["selected_profile"]
+    )
+
+    debt = rcc._build_runtime_report(inputs["effective"], weld)[
+        "deferred_compatibility"
+    ][0]
+
+    assert debt["template_values"] == {
+        "max_rotational_vel": 1.0,
+        "min_rotational_vel": 0.4,
+        "rotational_acc_lim": 3.2,
+    }
+    assert debt["profile_values"] == {
+        "max_angular_velocity": 0.4,
+        "max_angular_acceleration": 0.3,
+    }
