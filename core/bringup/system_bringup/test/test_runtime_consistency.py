@@ -11,6 +11,16 @@ from system_bringup import runtime_config_compiler as rcc
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PACKAGE_ROOT / "config"
+SOURCE_REPO_ROOT = PACKAGE_ROOT.parents[2]
+ACTIVE_TOPOLOGY_FILES = (
+    "core/bringup/system_bringup/launch/bringup.launch.py",
+    "core/bringup/system_bringup/launch/slam_stack.launch.py",
+    "core/simulation/robot_gz_bringup/launch/robot_gz.launch.py",
+    "core/robot/robot_bringup/launch/real_chassis.launch.py",
+    "core/robot/robot_bringup/launch/robot.launch.py",
+    "core/navigation/robot_navigation/launch/navigation.launch.py",
+    "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
+)
 
 
 def _load_yaml(path):
@@ -42,6 +52,13 @@ def _delete_yaml(path, dotted_path):
     _write_yaml(path, data)
 
 
+def _replace_source(repo_root, relative_path, old, new):
+    path = repo_root / relative_path
+    source = path.read_text(encoding="utf-8")
+    assert old in source
+    path.write_text(source.replace(old, new), encoding="utf-8")
+
+
 @pytest.fixture
 def runtime_factory(tmp_path):
     runtime_dirs = []
@@ -53,6 +70,11 @@ def runtime_factory(tmp_path):
         repo_root = tmp_path / f"repo-{count}"
         config_dir = repo_root / "core" / "bringup" / "system_bringup" / "config"
         shutil.copytree(CONFIG_DIR, config_dir)
+        for relative_path in ACTIVE_TOPOLOGY_FILES:
+            source = SOURCE_REPO_ROOT / relative_path
+            destination = repo_root / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
         config_path = config_dir / "bringup.yaml"
         config = _load_yaml(config_path)
         config["platform"] = platform
@@ -302,6 +324,256 @@ def test_effective_report_compatibility_weld_missing_value_is_reported(
         f"compatibility.body_to_base_footprint.{section}.{key}" in failure
         for failure in failures
     )
+
+
+@pytest.mark.parametrize(
+    "dotted_path,value,expected",
+    [
+        (
+            ("compatibility", "body_to_base_footprint", "status"),
+            "permanent",
+            "compatibility.body_to_base_footprint.status",
+        ),
+        (
+            ("compatibility", "body_to_base_footprint", "assumption"),
+            "different assumption",
+            "compatibility.body_to_base_footprint.assumption",
+        ),
+        (
+            ("compatibility", "body_to_base_footprint", "follow_up_section"),
+            99,
+            "compatibility.body_to_base_footprint.follow_up_section",
+        ),
+        (
+            ("deferred_compatibility", 0, "component"),
+            "different.component",
+            "deferred_compatibility.nav2.behavior_server",
+        ),
+        (
+            ("deferred_compatibility", 0, "status"),
+            "done",
+            "deferred_compatibility.nav2.behavior_server.status",
+        ),
+        (
+            (
+                "deferred_compatibility",
+                0,
+                "template_values",
+                "max_rotational_vel",
+            ),
+            99.0,
+            "deferred_compatibility.nav2.behavior_server.template_values.max_rotational_vel",
+        ),
+        (
+            (
+                "deferred_compatibility",
+                0,
+                "profile_values",
+                "max_angular_velocity",
+            ),
+            99.0,
+            "deferred_compatibility.nav2.behavior_server.profile_values.max_angular_velocity",
+        ),
+        (
+            ("deferred_compatibility", 0, "reason"),
+            "none",
+            "deferred_compatibility.nav2.behavior_server.reason",
+        ),
+    ],
+)
+def test_effective_report_required_metadata_drift_is_reported(
+    runtime_factory, dotted_path, value, expected
+):
+    repo_root, manifest = runtime_factory()
+    _mutate_yaml(manifest["effective_profile_path"], dotted_path, value)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(expected in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "dotted_path,expected",
+    [
+        (
+            ("compatibility", "body_to_base_footprint", "assumption"),
+            "compatibility.body_to_base_footprint.assumption",
+        ),
+        (
+            ("deferred_compatibility", 0, "reason"),
+            "deferred_compatibility.nav2.behavior_server.reason",
+        ),
+    ],
+)
+def test_effective_report_required_metadata_deletion_is_reported(
+    runtime_factory, dotted_path, expected
+):
+    repo_root, manifest = runtime_factory()
+    _delete_yaml(manifest["effective_profile_path"], dotted_path)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(expected in failure for failure in failures)
+
+
+def test_malformed_artifact_path_is_aggregated(runtime_factory):
+    class BadPath:
+        def __fspath__(self):
+            raise RuntimeError("forced bad path")
+
+    repo_root, manifest = runtime_factory()
+    manifest["controllers_path"] = BadPath()
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "controllers_path" in failure and "forced bad path" in failure
+        for failure in failures
+    )
+
+
+def test_forced_artifact_resolution_error_is_aggregated(
+    runtime_factory, monkeypatch
+):
+    repo_root, manifest = runtime_factory()
+    target = Path(manifest["nav2_path"])
+    resolve = Path.resolve
+
+    def forced_resolve(path, *args, **kwargs):
+        if str(path) == str(target):
+            raise RuntimeError("forced resolve failure")
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", forced_resolve)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "nav2_path" in failure and "forced resolve failure" in failure
+        for failure in failures
+    )
+
+
+def test_forced_same_path_resolution_error_is_aggregated(
+    runtime_factory, monkeypatch
+):
+    repo_root, manifest = runtime_factory()
+    bad_reference = "forced-relative-controller.yaml"
+    _mutate_yaml(
+        manifest["effective_profile_path"],
+        ("generated_configs", "controllers"),
+        bad_reference,
+    )
+    resolve = Path.resolve
+
+    def forced_resolve(path, *args, **kwargs):
+        if str(path) == bad_reference:
+            raise RuntimeError("forced same-path failure")
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", forced_resolve)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "generated_configs.controllers" in failure
+        and "forced same-path failure" in failure
+        for failure in failures
+    )
+
+
+@pytest.mark.parametrize(
+    "relative_path,old,new,expected",
+    [
+        (
+            "core/bringup/system_bringup/launch/bringup.launch.py",
+            'manifest["web_ui_path"]',
+            'manifest["bringup_config_path"]',
+            "generated runtime artifacts",
+        ),
+        (
+            "core/bringup/system_bringup/launch/bringup.launch.py",
+            'manifest["nav2_path"]',
+            'manifest["bringup_config_path"]',
+            "generated runtime artifacts",
+        ),
+        (
+            "core/bringup/system_bringup/launch/bringup.launch.py",
+            'manifest["controllers_path"]',
+            'manifest["bringup_config_path"]',
+            "generated runtime artifacts",
+        ),
+        (
+            "core/simulation/robot_gz_bringup/launch/robot_gz.launch.py",
+            '"sensor_y"',
+            '"sensor_side"',
+            "simulation backend interface",
+        ),
+        (
+            "core/robot/robot_bringup/launch/real_chassis.launch.py",
+            '"wheel_width"',
+            '"wheel_span"',
+            "real backend interface",
+        ),
+        (
+            "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
+            '"/cmd_vel_manual"',
+            '"/cmd_vel_bypass"',
+            "command gate routing",
+        ),
+        (
+            "core/navigation/robot_navigation/launch/navigation.launch.py",
+            "'--qw'",
+            "'--yaw'",
+            "quaternion weld",
+        ),
+        (
+            "core/bringup/system_bringup/launch/slam_stack.launch.py",
+            '"/cloud_registered"',
+            '"/cloud_changed"',
+            "readiness sequence",
+        ),
+        (
+            "core/navigation/robot_navigation/launch/navigation.launch.py",
+            "'base_footprint'",
+            "'base_changed'",
+            "critical frames",
+        ),
+        (
+            "core/bringup/system_bringup/launch/bringup.launch.py",
+            "+ [chassis, lidar]",
+            "+ [lidar, chassis]",
+            "backend sequencing",
+        ),
+    ],
+)
+def test_active_topology_contract_drift_is_reported(
+    runtime_factory, relative_path, old, new, expected
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(repo_root, relative_path, old, new)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(expected in failure for failure in failures)
+
+
+@pytest.mark.parametrize("legacy_name", ["derive_real_geometry", "run"])
+def test_active_topology_rejects_prohibited_legacy_import(
+    runtime_factory, legacy_name
+):
+    repo_root, manifest = runtime_factory()
+    path = repo_root / "core/bringup/system_bringup/launch/bringup.launch.py"
+    source = path.read_text(encoding="utf-8")
+    path.write_text(
+        f"from system_bringup.consistency_check import {legacy_name}\n"
+        + source,
+        encoding="utf-8",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("prohibited active legacy" in failure for failure in failures)
 
 
 def test_report_generated_path_reference_drift_is_reported(runtime_factory):

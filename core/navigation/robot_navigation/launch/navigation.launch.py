@@ -17,7 +17,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# 仿真默认焊接；真机由 system_bringup/bringup.yaml 的 real_geometry 覆盖。
+# 独立启动保留仿真默认焊接；正式 system_bringup 从编译后的 profile manifest 显式传入。
 _BASE_HEIGHT = 0.40
 _WHEEL_RADIUS = 0.12
 _LIDAR_HEIGHT = 0.072

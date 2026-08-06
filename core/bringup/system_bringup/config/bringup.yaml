@@ -24,8 +24,9 @@ robot_gz:
 robot_bringup:
   use_mock_hardware: false
 
-# === 真机几何唯一参数源 ===
-# 单位:m / rad。以下均为 2026-08-03 人工测量的暂定值；取得厂家尺寸图后只改本段。
+# === 历史兼容：旧真机几何（非活动运行时源）===
+# 活动运行时源是 profiles/real.yaml；本段仅为旧检查/历史代码保留，后续统一清理。
+# 单位:m / rad。以下均为 2026-08-03 人工测量的暂定历史值。
 # 暂按驱动轴中点=车体几何中心，并将其地面投影定义为 base_footprint；待厂家图确认。
 # lidar xyz 是 base_footprint -> 雷达/内置 IMU 坐标原点。
 real_geometry:

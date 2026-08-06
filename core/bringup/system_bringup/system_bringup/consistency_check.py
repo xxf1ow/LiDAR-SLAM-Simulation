@@ -9,6 +9,7 @@
 """
 import argparse
 import ast
+from collections import Counter
 import math
 import os
 from pathlib import Path
@@ -187,6 +188,7 @@ _RUNTIME_ARTIFACTS = {
     "effective_profile_path": "effective_profile",
 }
 _MISSING = object()
+_PATH_ERRORS = (OSError, TypeError, ValueError, RuntimeError)
 
 
 def _nested_value(mapping, path):
@@ -209,32 +211,46 @@ def _require_runtime_value(mapping, path, predicate, failures, expectation):
         )
 
 
-def _same_path(left, right):
+def _normalize_path(value, label, failures, require_absolute=False):
     try:
-        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
-    except (OSError, TypeError, ValueError):
+        path = Path(value).expanduser()
+        if require_absolute and not path.is_absolute():
+            failures.append(f"{label} must be absolute: {value!r}")
+            return None
+        return path.resolve()
+    except _PATH_ERRORS as exc:
+        failures.append(f"{label} has invalid path value {value!r}: {exc}")
+        return None
+
+
+def _same_path(left, right, left_label, right_label, failures):
+    left_path = _normalize_path(left, left_label, failures)
+    right_path = _normalize_path(right, right_label, failures)
+    if left_path is None or right_path is None:
         return False
+    return left_path == right_path
 
 
 def _load_runtime_artifacts(manifest, failures, runtime_compiler):
     paths = {}
     loaded = {}
-    temp_root = Path(tempfile.gettempdir()).resolve()
+    temp_root = _normalize_path(
+        tempfile.gettempdir(), "OS temporary directory", failures
+    )
 
     for manifest_key, artifact_name in _RUNTIME_ARTIFACTS.items():
         raw_path = manifest.get(manifest_key, _MISSING)
         if raw_path is _MISSING:
             failures.append(f"manifest missing {manifest_key}")
             continue
-        try:
-            path = Path(raw_path).expanduser()
-        except TypeError:
-            failures.append(f"manifest {manifest_key} must be a filesystem path; got {raw_path!r}")
+        path = _normalize_path(
+            raw_path,
+            f"manifest {manifest_key}",
+            failures,
+            require_absolute=True,
+        )
+        if path is None:
             continue
-        if not path.is_absolute():
-            failures.append(f"manifest {manifest_key} must be absolute: {path}")
-            continue
-        path = path.resolve()
         paths[manifest_key] = path
         if path.name != runtime_compiler.OUTPUT_FILENAMES[artifact_name]:
             failures.append(
@@ -243,12 +259,13 @@ def _load_runtime_artifacts(manifest, failures, runtime_compiler):
         if not path.is_file():
             failures.append(f"manifest {manifest_key} file does not exist: {path}")
             continue
-        try:
-            path.relative_to(temp_root)
-        except ValueError:
-            failures.append(
-                f"manifest {manifest_key} must be inside the OS temporary directory: {path}"
-            )
+        if temp_root is not None:
+            try:
+                path.relative_to(temp_root)
+            except ValueError:
+                failures.append(
+                    f"manifest {manifest_key} must be inside the OS temporary directory: {path}"
+                )
 
     if paths:
         reference_dir = paths.get("effective_profile_path", next(iter(paths.values()))).parent
@@ -270,7 +287,7 @@ def _load_runtime_artifacts(manifest, failures, runtime_compiler):
         try:
             with path.open("r", encoding="utf-8") as stream:
                 data = yaml.safe_load(stream)
-        except (OSError, yaml.YAMLError) as exc:
+        except (OSError, RuntimeError, yaml.YAMLError) as exc:
             failures.append(f"cannot load manifest {manifest_key} {path}: {exc}")
             continue
         if not isinstance(data, dict):
@@ -334,6 +351,302 @@ def _validate_unmigrated_runtime_config(config, platform, failures):
         )
 
 
+_ACTIVE_TOPOLOGY_FILES = {
+    "formal": "core/bringup/system_bringup/launch/bringup.launch.py",
+    "slam": "core/bringup/system_bringup/launch/slam_stack.launch.py",
+    "sim": "core/simulation/robot_gz_bringup/launch/robot_gz.launch.py",
+    "real_chassis": "core/robot/robot_bringup/launch/real_chassis.launch.py",
+    "real_robot": "core/robot/robot_bringup/launch/robot.launch.py",
+    "navigation": "core/navigation/robot_navigation/launch/navigation.launch.py",
+    "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
+}
+_ROBOT_ARGUMENTS = (
+    "controllers_file",
+    "base_length",
+    "base_width",
+    "base_height",
+    "base_link_height",
+    "wheel_radius",
+    "wheel_width",
+    "wheel_separation",
+    "sensor_x",
+    "sensor_y",
+    "sensor_z",
+    "sensor_roll",
+    "sensor_pitch",
+    "sensor_yaw",
+    "use_sim_time",
+)
+_PROHIBITED_ACTIVE_LEGACY = {
+    "derive_real_geometry",
+    "build_real_runtime_configs",
+    "write_real_runtime_configs",
+    "real_geometry_launch_arguments",
+    "load_bringup_config",
+    "run",
+}
+
+
+def _active_source_trees(repo_root, failures):
+    trees = {}
+    rendered = {}
+    strings = {}
+    for label, relative_path in _ACTIVE_TOPOLOGY_FILES.items():
+        path = _normalize_path(
+            repo_root / relative_path,
+            f"active topology source {relative_path}",
+            failures,
+        )
+        if path is None:
+            continue
+        if not path.is_file():
+            failures.append(f"active topology source file does not exist: {path}")
+            continue
+        try:
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
+        except (OSError, RuntimeError, SyntaxError, UnicodeError) as exc:
+            failures.append(f"active topology source {relative_path} is invalid: {exc}")
+            continue
+        trees[label] = tree
+        rendered[label] = ast.unparse(tree)
+        strings[label] = Counter(
+            node.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Constant) and isinstance(node.value, str)
+        )
+    return trees, rendered, strings
+
+
+def _contract_failure(failures, category, details):
+    failures.append(f"active topology {category} drift: {details}")
+
+
+def _validate_active_topology(repo_root, failures):
+    trees, rendered, strings = _active_source_trees(repo_root, failures)
+    if set(trees) != set(_ACTIVE_TOPOLOGY_FILES):
+        return
+
+    formal = rendered["formal"]
+    slam = rendered["slam"]
+    sim = rendered["sim"]
+    real_chassis = rendered["real_chassis"]
+    real_robot = rendered["real_robot"]
+    navigation = rendered["navigation"]
+    cmd_gate = rendered["cmd_gate"]
+
+    generated_contract = (
+        "parameters=[str(manifest['web_ui_path'])]" in formal
+        and "'nav2_params_file': str(manifest['nav2_path'])" in formal
+        and formal.count("'controllers_file': str(manifest['controllers_path'])") == 2
+        and formal.count("compile_runtime_configs(source_config)") == 1
+        and formal.count("run_runtime_consistency(repo_root, manifest)") == 1
+    )
+    if not generated_contract:
+        _contract_failure(
+            failures,
+            "generated runtime artifacts",
+            "formal bringup must consume generated Web UI/Nav2 and one controller path "
+            "for each backend after exactly one compile/check",
+        )
+
+    sim_missing = [
+        name for name in _ROBOT_ARGUMENTS if strings["sim"][name] < 2
+    ]
+    sim_contract = (
+        not sim_missing
+        and "'gz_controllers_file:=', controllers_file" in sim
+        and "base = _inc('robot_gz_bringup', 'launch/robot_gz.launch.py'" in formal
+        and formal.count("'use_sim_time': use_sim, **geometry") >= 2
+    )
+    if not sim_contract:
+        _contract_failure(
+            failures,
+            "simulation backend interface",
+            f"controller/full geometry/use_sim_time forwarding is incomplete; missing={sim_missing}",
+        )
+
+    real_chassis_missing = [
+        name for name in _ROBOT_ARGUMENTS if strings["real_chassis"][name] < 2
+    ]
+    real_robot_missing = [
+        name for name in _ROBOT_ARGUMENTS if strings["real_robot"][name] < 2
+    ]
+    real_contract = (
+        not real_chassis_missing
+        and not real_robot_missing
+        and "chassis = _inc('robot_bringup', 'launch/real_chassis.launch.py'" in formal
+        and "parameters=[controllers_file, {'use_sim_time': use_sim_time}]"
+        in real_robot
+    )
+    if not real_contract:
+        _contract_failure(
+            failures,
+            "real backend interface",
+            "controller/full geometry/use_sim_time forwarding is incomplete; "
+            f"real_chassis missing={real_chassis_missing}, robot missing={real_robot_missing}",
+        )
+
+    routing_contract = (
+        all(
+            strings["cmd_gate"][topic] >= 1
+            for topic in ("/cmd_vel_auto", "/cmd_vel_manual", "/cmd_vel")
+        )
+        and "'cmd_vel_output_topic': '/cmd_vel_auto'" in formal
+        and "'input_topic': '/cmd_vel_nav'" in navigation
+        and "'output_topic': cmd_vel_output_topic" in navigation
+        and "('/base_controller/cmd_vel', '/cmd_vel')" in real_robot
+    )
+    if not routing_contract:
+        _contract_failure(
+            failures,
+            "command gate routing",
+            "/cmd_vel_auto and /cmd_vel_manual must be the only gate inputs and /cmd_vel its output",
+        )
+
+    weld_sources = "\n".join((formal, slam, navigation))
+    weld_contract = (
+        all(name not in weld_sources for name in ("weld_roll", "weld_pitch", "weld_yaw"))
+        and all(
+            strings[label][name] >= 1
+            for label in ("formal", "slam", "navigation")
+            for name in ("weld_qx", "weld_qy", "weld_qz", "weld_qw")
+        )
+        and "'--qx', weld_qx, '--qy', weld_qy, '--qz', weld_qz, '--qw', weld_qw"
+        in navigation
+    )
+    if not weld_contract:
+        _contract_failure(
+            failures,
+            "quaternion weld",
+            "formal/shared/navigation weld must use qx/qy/qz/qw only",
+        )
+
+    readiness_contract = (
+        "ready_gate(['/points_raw', '/joint_states'], 300.0" in formal
+        and "ready_gate(['/Odometry', '/cloud_registered'], 60.0" in slam
+        and "ready_gate(['/localization', '/base_controller/odom'], 60.0" in slam
+        and "[gicp] + ready_gate(" in slam
+        and "[nav2], use_sim_time=use_sim, settling=settling" in slam
+    )
+    if not readiness_contract:
+        _contract_failure(
+            failures,
+            "readiness sequence",
+            "sim, FAST-LIO, GICP and Nav2 readiness topics/timeouts/order changed",
+        )
+
+    frame_contract = (
+        "'--frame-id', 'body', '--child-frame-id', 'base_footprint'" in navigation
+        and "'frame_id': 'base_link'" in navigation
+        and "'output_topic': '/points_raw', 'output_frame': 'velodyne'" in sim
+        and "output.header.frame_id = 'base_link'" in cmd_gate
+    )
+    if not frame_contract:
+        _contract_failure(
+            failures,
+            "critical frames",
+            "body/base_footprint, base_link or velodyne contract changed",
+        )
+
+    sequencing_contract = (
+        "return control_layer + flow_log + [base] + ready_gate(" in formal
+        and "return control_layer + flow_log + [chassis, lidar] + "
+        "_real_sensor_gate([slam_stack], use_sim_time)" in formal
+    )
+    if not sequencing_contract:
+        _contract_failure(
+            failures,
+            "backend sequencing",
+            "backend must start before its readiness gate and shared slam_stack",
+        )
+
+    prohibited = set()
+    for node in ast.walk(trees["formal"]):
+        if isinstance(node, ast.ImportFrom):
+            prohibited.update(
+                alias.name
+                for alias in node.names
+                if alias.name in _PROHIBITED_ACTIVE_LEGACY
+            )
+        elif isinstance(node, ast.Call):
+            name = (
+                node.func.id
+                if isinstance(node.func, ast.Name)
+                else node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else None
+            )
+            if name in _PROHIBITED_ACTIVE_LEGACY:
+                prohibited.add(name)
+    if prohibited:
+        _contract_failure(
+            failures,
+            "prohibited active legacy",
+            f"formal bringup imports/calls {sorted(prohibited)}",
+        )
+
+
+def _validate_report_metadata(report, expected_weld, runtime_compiler, failures):
+    body_weld = {key: float(value) for key, value in expected_weld.items()}
+    try:
+        expected_report = runtime_compiler._build_runtime_report(report, body_weld)
+    except (KeyError, TypeError, ValueError) as exc:
+        failures.append(f"effective report metadata cannot be derived: {exc}")
+        return
+
+    expected_body = expected_report["compatibility"]["body_to_base_footprint"]
+    for key in ("status", "assumption", "follow_up_section"):
+        path = ("compatibility", "body_to_base_footprint", key)
+        actual = _nested_value(report, path)
+        expected = expected_body[key]
+        if actual != expected:
+            failures.append(
+                f"effective report {'.'.join(path)} {actual!r} != {expected!r}"
+            )
+
+    expected_deferred = next(
+        entry
+        for entry in expected_report["deferred_compatibility"]
+        if entry.get("component") == "nav2.behavior_server"
+    )
+    actual_entries = report.get("deferred_compatibility")
+    actual_deferred = (
+        next(
+            (
+                entry
+                for entry in actual_entries
+                if isinstance(entry, dict)
+                and entry.get("component") == "nav2.behavior_server"
+            ),
+            None,
+        )
+        if isinstance(actual_entries, list)
+        else None
+    )
+    prefix = "deferred_compatibility.nav2.behavior_server"
+    if actual_deferred is None:
+        failures.append(f"effective report missing {prefix}")
+        return
+
+    for path in (
+        ("status",),
+        ("template_values", "max_rotational_vel"),
+        ("template_values", "min_rotational_vel"),
+        ("template_values", "rotational_acc_lim"),
+        ("profile_values", "max_angular_velocity"),
+        ("profile_values", "max_angular_acceleration"),
+        ("reason",),
+    ):
+        actual = _nested_value(actual_deferred, path)
+        expected = _nested_value(expected_deferred, path)
+        if actual != expected:
+            failures.append(
+                f"effective report {prefix}.{'.'.join(path)} "
+                f"{actual!r} != {expected!r}"
+            )
+
+
 def run_runtime_consistency(repo_root, manifest):
     """Validate one compiled runtime manifest without rereading or regenerating it."""
     failures = []
@@ -344,11 +657,8 @@ def run_runtime_consistency(repo_root, manifest):
     if not isinstance(manifest, dict):
         return [f"runtime manifest must be a mapping; got {type(manifest).__name__}"]
 
-    try:
-        root = Path(repo_root).expanduser().resolve()
-    except (OSError, TypeError, ValueError) as exc:
-        return [f"repo_root is invalid: {repo_root!r}: {exc}"]
-    if not root.is_dir():
+    root = _normalize_path(repo_root, "repo_root", failures)
+    if root is not None and not root.is_dir():
         failures.append(f"repo_root is not a directory: {root}")
 
     config = manifest.get("bringup_config")
@@ -386,29 +696,24 @@ def run_runtime_consistency(repo_root, manifest):
         failures.append("manifest missing bringup_config_path")
         source_path = None
     else:
-        try:
-            source_path = Path(source_path).expanduser()
-        except TypeError:
-            failures.append(
-                f"manifest bringup_config_path must be a filesystem path; got {source_path!r}"
-            )
-            source_path = None
+        source_path = _normalize_path(
+            source_path,
+            "manifest bringup_config_path",
+            failures,
+            require_absolute=True,
+        )
         if source_path is not None:
-            if not source_path.is_absolute():
-                failures.append(
-                    f"manifest bringup_config_path must be absolute: {source_path}"
-                )
-            source_path = source_path.resolve()
             if not source_path.is_file():
                 failures.append(
                     f"manifest bringup_config_path file does not exist: {source_path}"
                 )
-            try:
-                source_path.relative_to(root)
-            except ValueError:
-                failures.append(
-                    f"manifest bringup_config_path is outside repo_root: {source_path}"
-                )
+            if root is not None:
+                try:
+                    source_path.relative_to(root)
+                except ValueError:
+                    failures.append(
+                        f"manifest bringup_config_path is outside repo_root: {source_path}"
+                    )
 
     paths, loaded = _load_runtime_artifacts(manifest, failures, rcc)
     report = loaded.get("effective_profile")
@@ -433,9 +738,22 @@ def run_runtime_consistency(repo_root, manifest):
                     f"manifest bringup_config profiles.{platform} must be a non-empty string"
                 )
             else:
-                expected_profile = (source_path.parent / profile_ref).resolve()
+                expected_profile = _normalize_path(
+                    source_path.parent / profile_ref,
+                    f"manifest bringup_config profiles.{platform}",
+                    failures,
+                )
                 report_profile = report.get("source_profile", _MISSING)
-                if report_profile is _MISSING or not _same_path(report_profile, expected_profile):
+                if expected_profile is not None and (
+                    report_profile is _MISSING
+                    or not _same_path(
+                        report_profile,
+                        expected_profile,
+                        "effective report source_profile",
+                        f"manifest bringup_config profiles.{platform}",
+                        failures,
+                    )
+                ):
                     failures.append(
                         f"effective report source_profile {report_profile!r} "
                         f"!= selected profile {expected_profile}"
@@ -466,7 +784,13 @@ def run_runtime_consistency(repo_root, manifest):
                 if isinstance(generated_refs, dict)
                 else _MISSING
             )
-            if expected_path is not None and not _same_path(actual_path, expected_path):
+            if expected_path is not None and not _same_path(
+                actual_path,
+                expected_path,
+                f"effective report generated_configs.{artifact_name}",
+                f"manifest {manifest_key}",
+                failures,
+            ):
                 failures.append(
                     f"effective report generated_configs.{artifact_name} "
                     f"{actual_path!r} != manifest {manifest_key} {expected_path}"
@@ -525,6 +849,7 @@ def run_runtime_consistency(repo_root, manifest):
                         f"{report_value!r} != derived/manifest weld "
                         f"{expected_report_value!r}/{actual!r}"
                     )
+            _validate_report_metadata(report, expected_weld, rcc, failures)
 
     if all(name in loaded for name in _RUNTIME_ARTIFACTS.values()):
         try:
@@ -539,6 +864,8 @@ def run_runtime_consistency(repo_root, manifest):
 
     if platform in ("sim", "real"):
         _validate_unmigrated_runtime_config(config, platform, failures)
+    if root is not None and root.is_dir():
+        _validate_active_topology(root, failures)
     return failures
 
 
