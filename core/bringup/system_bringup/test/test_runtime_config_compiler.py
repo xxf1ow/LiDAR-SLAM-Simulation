@@ -106,6 +106,19 @@ def test_runtime_rejects_invalid_mode(runtime_tree, mode):
         rcc._load_runtime_inputs(runtime_tree.config)
 
 
+@pytest.mark.parametrize("mode", [[], {}], ids=["list", "mapping"])
+def test_public_runtime_compile_rejects_non_string_mode_as_value_error(
+    runtime_tree, tmp_path, mode
+):
+    runtime_tree.set_bringup_value("mode", mode)
+
+    with pytest.raises(
+        ValueError,
+        match="bringup config mode must be 'mapping' or 'navigation'",
+    ):
+        rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "output")
+
+
 @pytest.mark.parametrize("profile_name", ["sim", "real"])
 @pytest.mark.parametrize("key", rcc.MOTION_KEYS)
 @pytest.mark.parametrize(
@@ -218,16 +231,18 @@ def test_shared_templates_are_complete_mappings():
 
 
 def test_controller_template_contains_all_owned_target_leaves():
-    data = _load_yaml(TEMPLATE_DIR / "robot_controllers.yaml")
-    manager = data["controller_manager"]["ros__parameters"]
-    base = data["base_controller"]["ros__parameters"]
-    assert isinstance(manager["use_sim_time"], bool)
-    assert isinstance(base["use_sim_time"], bool)
-    assert base["linear.x.min_acceleration"] == -1.0
-    assert base["linear.x.has_acceleration_limits"] is True
-    assert base["angular.z.has_acceleration_limits"] is True
-    assert base["linear.x.has_jerk_limits"] is False
-    assert base["angular.z.has_jerk_limits"] is False
+    source = _load_yaml(
+        PACKAGE_ROOT.parents[1]
+        / "robot/robot_bringup/config/robot_controllers.yaml"
+    )
+    expected = deepcopy(source)
+    expected["controller_manager"]["ros__parameters"]["use_sim_time"] = True
+    expected["base_controller"]["ros__parameters"]["use_sim_time"] = True
+    expected["base_controller"]["ros__parameters"][
+        "linear.x.min_acceleration"
+    ] = -1.0
+
+    assert _load_yaml(TEMPLATE_DIR / "robot_controllers.yaml") == expected
 
 
 def test_web_ui_template_is_a_complete_native_parameter_file():
@@ -694,9 +709,8 @@ def _yaml_schema(value):
 def _profile_owned_runtime_values(manifest):
     controllers = _load_yaml(manifest["controllers_path"])
     base = controllers["base_controller"]["ros__parameters"]
-    web_ui = _load_yaml(manifest["web_ui_path"])["robot_web_ui"][
-        "ros__parameters"
-    ]
+    web_ui_config = _load_yaml(manifest["web_ui_path"])
+    web_ui = web_ui_config["robot_web_ui"]["ros__parameters"]
     nav2 = _load_yaml(manifest["nav2_path"])
     follow_path = nav2["controller_server"]["ros__parameters"]["FollowPath"]
     footprints = [
@@ -711,61 +725,124 @@ def _profile_owned_runtime_values(manifest):
         "controllers": {
             "wheel_radius": base["wheel_radius"],
             "wheel_separation": base["wheel_separation"],
+            "max_linear_velocity": base["linear.x.max_velocity"],
+            "min_linear_velocity": base["linear.x.min_velocity"],
+            "max_linear_acceleration": base["linear.x.max_acceleration"],
+            "min_linear_acceleration": base["linear.x.min_acceleration"],
             "max_angular_velocity": base["angular.z.max_velocity"],
+            "min_angular_velocity": base["angular.z.min_velocity"],
             "max_angular_acceleration": base["angular.z.max_acceleration"],
+            "min_angular_acceleration": base["angular.z.min_acceleration"],
         },
-        "web_ui": {"max_angular_speed": web_ui["max_angular_speed"]},
+        "web_ui": {
+            "max_linear_speed": web_ui["max_linear_speed"],
+            "max_angular_speed": web_ui["max_angular_speed"],
+        },
         "nav2": {
+            "vx_max": follow_path["vx_max"],
             "wz_max": follow_path["wz_max"],
             "footprints": [json.loads(value) for value in footprints],
         },
+        "use_sim_time": {
+            "controllers": [
+                _path_value(controllers, path)
+                for path in rcc.CONTROLLER_TIME_PATHS
+            ],
+            "web_ui": [
+                _path_value(web_ui_config, path)
+                for path in rcc.WEB_UI_TIME_PATHS
+            ],
+            "nav2": [_path_value(nav2, path) for path in rcc.NAV2_TIME_PATHS],
+        },
     }
+
+
+def _path_value(mapping, path):
+    for key in path:
+        mapping = mapping[key]
+    return mapping
 
 
 def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
     runtime_tree, tmp_path
 ):
-    manifests = {}
-    generated = {}
+    manifests = {platform: {} for platform in ("sim", "real")}
+    generated = {platform: {} for platform in ("sim", "real")}
     for platform in ("sim", "real"):
-        runtime_tree.set_bringup_value("platform", platform)
-        manifests[platform] = rcc.compile_runtime_configs(
-            runtime_tree.config, tmp_path / platform
-        )
-        generated[platform] = {
-            name: _load_yaml(manifests[platform][f"{name}_path"])
-            for name in ("controllers", "web_ui", "nav2", "effective_profile")
-        }
+        for mode in ("mapping", "navigation"):
+            runtime_tree.set_bringup_value("platform", platform)
+            runtime_tree.set_bringup_value("mode", mode)
+            manifests[platform][mode] = rcc.compile_runtime_configs(
+                runtime_tree.config, tmp_path / platform / mode
+            )
+            generated[platform][mode] = {
+                name: _load_yaml(manifests[platform][mode][f"{name}_path"])
+                for name in (
+                    "controllers",
+                    "web_ui",
+                    "nav2",
+                    "effective_profile",
+                )
+            }
+
+        for name in ("controllers", "web_ui", "nav2"):
+            assert generated[platform]["mapping"][name] == generated[platform][
+                "navigation"
+            ][name]
 
     for name in ("controllers", "web_ui", "nav2"):
-        assert _yaml_schema(generated["sim"][name]) == _yaml_schema(
-            generated["real"][name]
+        assert _yaml_schema(generated["sim"]["navigation"][name]) == _yaml_schema(
+            generated["real"]["navigation"][name]
         )
 
-    assert _profile_owned_runtime_values(manifests["sim"]) == {
+    assert _profile_owned_runtime_values(manifests["sim"]["navigation"]) == {
         "controllers": {
             "wheel_radius": 0.12,
             "wheel_separation": 0.55,
+            "max_linear_velocity": 1.0,
+            "min_linear_velocity": -1.0,
+            "max_linear_acceleration": 1.0,
+            "min_linear_acceleration": -1.0,
             "max_angular_velocity": 1.8,
+            "min_angular_velocity": -1.8,
             "max_angular_acceleration": 1.0,
+            "min_angular_acceleration": -1.0,
         },
-        "web_ui": {"max_angular_speed": 1.8},
+        "web_ui": {"max_linear_speed": 1.0, "max_angular_speed": 1.8},
         "nav2": {
+            "vx_max": 1.0,
             "wz_max": 1.8,
             "footprints": [SIM_FOOTPRINT, SIM_FOOTPRINT],
         },
+        "use_sim_time": {
+            "controllers": [True, True],
+            "web_ui": [True],
+            "nav2": [True] * len(rcc.NAV2_TIME_PATHS),
+        },
     }
-    assert _profile_owned_runtime_values(manifests["real"]) == {
+    assert _profile_owned_runtime_values(manifests["real"]["navigation"]) == {
         "controllers": {
             "wheel_radius": 0.1025,
             "wheel_separation": 0.463,
+            "max_linear_velocity": 1.0,
+            "min_linear_velocity": -1.0,
+            "max_linear_acceleration": 1.0,
+            "min_linear_acceleration": -1.0,
             "max_angular_velocity": 0.4,
+            "min_angular_velocity": -0.4,
             "max_angular_acceleration": 0.3,
+            "min_angular_acceleration": -0.3,
         },
-        "web_ui": {"max_angular_speed": 0.4},
+        "web_ui": {"max_linear_speed": 1.0, "max_angular_speed": 0.4},
         "nav2": {
+            "vx_max": 1.0,
             "wz_max": 0.4,
             "footprints": [REAL_FOOTPRINT, REAL_FOOTPRINT],
+        },
+        "use_sim_time": {
+            "controllers": [False, False],
+            "web_ui": [False],
+            "nav2": [False] * len(rcc.NAV2_TIME_PATHS),
         },
     }
 
@@ -775,10 +852,11 @@ def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
         "compatibility",
         "deferred_compatibility",
     }
-    for values in generated.values():
-        assert set(values["effective_profile"]) == (
-            legacy_report_keys | runtime_only_keys
-        )
+    for platform_values in generated.values():
+        for values in platform_values.values():
+            assert set(values["effective_profile"]) == (
+                legacy_report_keys | runtime_only_keys
+            )
 
     profile_path = pc.compile_profile(runtime_tree.config, tmp_path / "profile")
     profile_report = _load_yaml(profile_path)
@@ -857,6 +935,32 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
         "nav2": str(paths["nav2"]),
     }
     assert _temporary_files(output) == []
+
+
+def test_compile_runtime_configs_uses_integrated_renderer(
+    runtime_tree, tmp_path, monkeypatch
+):
+    original = rcc._render_runtime_configs
+    calls = []
+
+    def render_with_marker(inputs):
+        calls.append(inputs)
+        generated = original(inputs)
+        generated["web_ui"]["robot_web_ui"]["ros__parameters"][
+            "host"
+        ] = "renderer-used"
+        return generated
+
+    monkeypatch.setattr(rcc, "_render_runtime_configs", render_with_marker)
+
+    manifest = rcc.compile_runtime_configs(
+        runtime_tree.config, tmp_path / "output"
+    )
+
+    assert len(calls) == 1
+    assert _load_yaml(manifest["web_ui_path"])["robot_web_ui"][
+        "ros__parameters"
+    ]["host"] == "renderer-used"
 
 
 def test_compile_runtime_configs_uses_unique_private_temp_directories(runtime_tree):
@@ -1081,6 +1185,18 @@ def test_runtime_cli_prints_one_absolute_report_path(runtime_tree, tmp_path, cap
     )
 
 
+def test_runtime_cli_help_remains_standard(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        rcc.main(["--help"])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 0
+    assert captured.err == ""
+    assert captured.out.startswith("usage:")
+    assert "--bringup-config" in captured.out
+    assert "--output-dir" in captured.out
+
+
 def test_runtime_cli_reports_one_actionable_error_without_traceback(
     runtime_tree, capsys
 ):
@@ -1095,6 +1211,58 @@ def test_runtime_cli_reports_one_actionable_error_without_traceback(
     assert captured.err == (
         "compile_runtime_configs: "
         f"{runtime_tree.config.resolve()}: platform must be 'sim' or 'real'\n"
+    )
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize("mode", [[], {}], ids=["list", "mapping"])
+def test_runtime_cli_reports_non_string_mode_as_one_actionable_line(
+    runtime_tree, mode, capsys
+):
+    runtime_tree.set_bringup_value("mode", mode)
+
+    with pytest.raises(SystemExit) as exc_info:
+        rcc.main(["--bringup-config", str(runtime_tree.config)])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert captured.out == ""
+    assert captured.err == (
+        "compile_runtime_configs: "
+        "bringup config mode must be 'mapping' or 'navigation'\n"
+    )
+    assert "Traceback" not in captured.err
+
+
+def test_runtime_cli_missing_required_argument_is_one_line(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        rcc.main([])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert captured.out == ""
+    assert captured.err == (
+        "compile_runtime_configs: the following arguments are required: "
+        "--bringup-config\n"
+    )
+    assert "Traceback" not in captured.err
+
+
+def test_runtime_cli_unknown_argument_is_one_line(runtime_tree, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        rcc.main(
+            [
+                "--bringup-config",
+                str(runtime_tree.config),
+                "--unexpected",
+            ]
+        )
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert captured.out == ""
+    assert captured.err == (
+        "compile_runtime_configs: unrecognized arguments: --unexpected\n"
     )
     assert "Traceback" not in captured.err
 

@@ -44,9 +44,15 @@ NAV2_TIME_PATHS = (
     ("bt_navigator", "ros__parameters", "use_sim_time"),
 )
 
+
+class _OneLineArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        self.exit(2, f"compile_runtime_configs: {message}\n")
+
+
 def _validate_mode(config):
     mode = config.get("mode")
-    if mode not in SUPPORTED_MODES or isinstance(mode, bool):
+    if not isinstance(mode, str) or mode not in SUPPORTED_MODES:
         raise ValueError("bringup config mode must be 'mapping' or 'navigation'")
     return mode
 
@@ -466,12 +472,7 @@ def _load_staged_yaml(path, label):
 def compile_runtime_configs(bringup_config_path, output_dir=None):
     inputs = _load_runtime_inputs(bringup_config_path)
     effective = inputs["effective"]
-    templates = inputs["templates"]
-    generated = {
-        "controllers": _render_controller(templates["controllers"], effective),
-        "web_ui": _render_web_ui(templates["web_ui"], effective),
-        "nav2": _render_nav2(templates["nav2"], effective),
-    }
+    generated = _render_runtime_configs(inputs)
     robot_launch_arguments = _derive_robot_launch_arguments(inputs["effective"])
     body_weld = _derive_compatibility_body_weld_transform(
         inputs["selected_profile"]
@@ -479,12 +480,6 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
     body_weld_arguments = {
         key: str(value) for key, value in body_weld.items()
     }
-    _validate_generated_configs(
-        effective,
-        generated["controllers"],
-        generated["web_ui"],
-        generated["nav2"],
-    )
 
     output = _prepare_output_dir(output_dir)
     paths = {
@@ -540,7 +535,7 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser()
+    parser = _OneLineArgumentParser()
     parser.add_argument("--bringup-config", required=True, type=Path)
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args(argv)
