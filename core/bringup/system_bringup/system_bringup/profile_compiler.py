@@ -124,7 +124,7 @@ def load_bringup_selection(path):
         if not isinstance(raw, str) or not raw.strip():
             raise ValueError(f"{source}: profiles.{name} must be a non-empty string")
         relative = Path(raw)
-        if relative.is_absolute():
+        if relative.is_absolute() or relative.anchor or relative.drive:
             raise ValueError(f"{source}: profiles.{name} must be relative")
         resolved = (source.parent / relative).resolve()
         if not resolved.is_file():
@@ -146,7 +146,10 @@ def _validate_node(value, schema, source, path=()):
         if not isinstance(value, dict):
             raise ValueError(f"{source}: {_field_name(path)} must be a mapping")
         missing = sorted(set(schema) - set(value))
-        extra = sorted(set(value) - set(schema))
+        extra = sorted(
+            set(value) - set(schema),
+            key=lambda item: (type(item).__name__, repr(item)),
+        )
         if missing:
             raise ValueError(f"{source}: {_field_name(path)} missing keys: {missing}")
         if extra:
@@ -169,7 +172,7 @@ def _validate_node(value, schema, source, path=()):
         raise ValueError(f"{source}: {_field_name(path)} must have type {expected}")
     if isinstance(value, str) and not value.strip():
         raise ValueError(f"{source}: {_field_name(path)} must be non-empty")
-    if isinstance(value, (int, float)) and not math.isfinite(value):
+    if isinstance(value, float) and not math.isfinite(value):
         raise ValueError(f"{source}: {_field_name(path)} must be finite")
 
 

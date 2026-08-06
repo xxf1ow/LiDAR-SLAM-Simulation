@@ -1,6 +1,3 @@
-import copy
-import math
-import os
 from pathlib import Path
 
 import pytest
@@ -10,7 +7,6 @@ from system_bringup import profile_compiler as pc
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
-BRINGUP = PACKAGE_ROOT / "config" / "bringup.yaml"
 
 
 def _selection(tmp_path, platform="real"):
@@ -92,7 +88,18 @@ def test_absolute_profile_path_fails(tmp_path):
     )
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
-    with pytest.raises(ValueError, match="relative"):
+    with pytest.raises(ValueError, match=r"profiles\.real must be relative$"):
+        pc.load_bringup_selection(config_path)
+
+
+@pytest.mark.parametrize("profile_path", ["/tmp/profile.yaml", "C:profile.yaml"])
+def test_rooted_or_drive_relative_profile_path_fails(tmp_path, profile_path):
+    config_path = _selection(tmp_path)
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["profiles"]["real"] = profile_path
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"profiles\.real must be relative$"):
         pc.load_bringup_selection(config_path)
 
 
@@ -194,6 +201,32 @@ def test_nonzero_mount_rotation_is_valid(tmp_path):
     pair = _pair(_selection(tmp_path))
     pair["real"][1]["robot"]["mounts"]["lidar"]["yaw"] = 1.5707963267948966
     pc.validate_profile_pair(pair)
+
+
+def test_compile_profile_preserves_all_mount_rotations(tmp_path):
+    config = _selection(tmp_path, "real")
+    real_path = tmp_path / "profiles" / "real.yaml"
+    real = yaml.safe_load(real_path.read_text(encoding="utf-8"))
+    expected = {
+        "lidar": {"roll": 0.1, "pitch": -0.2, "yaw": 0.3},
+        "imu": {"roll": -0.4, "pitch": 0.5, "yaw": -0.6},
+    }
+    for mount_name, rotations in expected.items():
+        real["robot"]["mounts"][mount_name].update(rotations)
+    real_path.write_text(yaml.safe_dump(real, sort_keys=False), encoding="utf-8")
+
+    output = pc.compile_profile(config, tmp_path / "output")
+    mounts = yaml.safe_load(output.read_text(encoding="utf-8"))["derived"][
+        "geometry"
+    ]["mounts_relative_to_base_link"]
+
+    assert {
+        mount_name: {
+            axis: mounts[mount_name][axis]
+            for axis in ("roll", "pitch", "yaw")
+        }
+        for mount_name in expected
+    } == expected
 
 
 @pytest.mark.parametrize(
@@ -330,6 +363,44 @@ def test_cli_reports_validation_error_without_traceback(tmp_path, capsys):
     captured = capsys.readouterr()
     assert result == 1
     assert "platform" in captured.err
+    assert "Traceback" not in captured.err
+
+
+@pytest.mark.parametrize(
+    "mutation,expected",
+    [
+        (
+            lambda profile: profile["robot"]["body"].update(
+                {1: 0.0, "extra": 0.0}
+            ),
+            "unexpected keys",
+        ),
+        (
+            lambda profile: profile["robot"]["body"].update(
+                front_extent=-(10**1000)
+            ),
+            "front_extent",
+        ),
+    ],
+    ids=["mixed-type-key", "extremely-large-integer"],
+)
+def test_cli_reports_legal_yaml_validation_errors_without_traceback(
+    tmp_path, capsys, mutation, expected
+):
+    config = _selection(tmp_path)
+    real_path = tmp_path / "profiles" / "real.yaml"
+    real = yaml.safe_load(real_path.read_text(encoding="utf-8"))
+    mutation(real)
+    real_path.write_text(yaml.safe_dump(real, sort_keys=False), encoding="utf-8")
+
+    result = pc.main(["--bringup-config", str(config)])
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err.startswith("profile compilation failed: ")
+    assert expected in captured.err
+    assert captured.err.count("\n") == 1
     assert "Traceback" not in captured.err
 
 
