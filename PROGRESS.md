@@ -286,7 +286,8 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
   validation error，不泄漏 `OverflowError` traceback。
 
 两项修复不改变第 2 节架构和正常 sim/real 结果；对应回归和完整 `system_bringup` 测试
-已通过。Ubuntu/Humble 的 colcon 验证仍按后续实施 gate 在目标构建机执行。
+已通过。后续 3A 验收已在 Ubuntu/Humble 完成全工作区 colcon 回归：`556 tests, 0 errors,
+0 failures, 0 skipped`。
 
 本地设计产物：`docs/superpowers/specs/2026-08-06-profile-compiler-skeleton-design.md`
 （按用户要求不加入 Git 提交）。
@@ -299,7 +300,7 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 本节拆成两个顺序验收单元。3A 严格依赖第 2 节审查修正完成；3B 严格依赖 3A。中间提交
 可以不可运行，但不得把旧路径保留为失败 fallback。
 
-#### [ ] 3A. Profile runtime 配置生成
+#### [x] 3A. Profile runtime 配置生成
 
 目的：只完成生成层，不接入正式 `bringup.launch.py`。
 
@@ -336,6 +337,10 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 详细设计：
 `docs/superpowers/specs/2026-08-06-profile-runtime-config-generation-design.md`。
 
+验收记录：3A 源码实现和最终修复截至 `3c41858`；本地 `system_bringup` 纯 Python 回归
+`375 passed`，runtime smoke 生成且加载恰好四份 YAML；Ubuntu/Humble 全工作区最终回归为
+`556 tests, 0 errors, 0 failures, 0 skipped`。正式 bringup 和 3B launch 路径未在 3A 接入。
+
 #### [ ] 3B. 正式 bringup 切换
 
 目的：只消费 3A 已验收的 runtime manifest，重写主动 bringup 编排并完成动态验收。
@@ -347,6 +352,15 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 - Web UI/Nav2 直接加载 generated YAML；sim/real robot launch 都接收同一 manifest 的
   controller 绝对路径和对应 Profile 几何。Gazebo ros2_control plugin 允许直接读取
   `/tmp` controller 文件。
+- `manifest["use_sim_time"]` 是整次启动唯一的时钟选择事实：生成 YAML 已包含的节点不再
+  接收重复 overlay，未模板化节点只接收同源值；任何模块不得从 platform、backend、mode
+  或文件名重新推断时钟。
+- `cmd_vel_gate` 只接收标准 `use_sim_time` 参数，命令接收时间、timer 和 source timeout
+  全部使用同一个 `node.get_clock()`；gate 业务逻辑不读取 platform，也不识别、选择或分支
+  判断当前是仿真时钟还是系统时钟。
+- 功能新鲜度、频率、稳定窗口和功能 timeout 使用各节点自己的同一 node clock；墙钟只属于
+  launch/process supervision watchdog，不传入功能状态机，也不以双时钟 fallback 掩盖
+  `/clock` 缺失或冻结。
 - `navigation.launch.py` 的临时 weld 改用 `qx/qy/qz/qw`；正式 bringup 总是显式传值，
   launch 独立调用时保留当前 sim 默认。
 - 新主动路径不得导入或调用 `derive_real_geometry()`、`build_real_runtime_configs()`、
