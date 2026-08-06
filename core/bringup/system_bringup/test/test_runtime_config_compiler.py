@@ -26,7 +26,7 @@ def test_controller_template_contains_all_owned_target_leaves():
     base = data["base_controller"]["ros__parameters"]
     assert isinstance(manager["use_sim_time"], bool)
     assert isinstance(base["use_sim_time"], bool)
-    assert "linear.x.min_acceleration" in base
+    assert base["linear.x.min_acceleration"] == -1.0
     assert base["linear.x.has_acceleration_limits"] is True
     assert base["angular.z.has_acceleration_limits"] is True
     assert base["linear.x.has_jerk_limits"] is False
