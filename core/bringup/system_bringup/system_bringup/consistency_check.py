@@ -180,6 +180,351 @@ def _yaml(text):
     return yaml.safe_load(text)
 
 
+_RUNTIME_ARTIFACTS = {
+    "controllers_path": "controllers",
+    "web_ui_path": "web_ui",
+    "nav2_path": "nav2",
+    "effective_profile_path": "effective_profile",
+}
+_MISSING = object()
+
+
+def _nested_value(mapping, path):
+    value = mapping
+    for key in path:
+        if not isinstance(value, dict) or key not in value:
+            return _MISSING
+        value = value[key]
+    return value
+
+
+def _require_runtime_value(mapping, path, predicate, failures, expectation):
+    value = _nested_value(mapping, path)
+    dotted = ".".join(path)
+    if value is _MISSING:
+        failures.append(f"manifest bringup_config missing {dotted}")
+    elif not predicate(value):
+        failures.append(
+            f"manifest bringup_config {dotted} must be {expectation}; got {value!r}"
+        )
+
+
+def _same_path(left, right):
+    try:
+        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    except (OSError, TypeError, ValueError):
+        return False
+
+
+def _load_runtime_artifacts(manifest, failures, runtime_compiler):
+    paths = {}
+    loaded = {}
+    temp_root = Path(tempfile.gettempdir()).resolve()
+
+    for manifest_key, artifact_name in _RUNTIME_ARTIFACTS.items():
+        raw_path = manifest.get(manifest_key, _MISSING)
+        if raw_path is _MISSING:
+            failures.append(f"manifest missing {manifest_key}")
+            continue
+        try:
+            path = Path(raw_path).expanduser()
+        except TypeError:
+            failures.append(f"manifest {manifest_key} must be a filesystem path; got {raw_path!r}")
+            continue
+        if not path.is_absolute():
+            failures.append(f"manifest {manifest_key} must be absolute: {path}")
+            continue
+        path = path.resolve()
+        paths[manifest_key] = path
+        if path.name != runtime_compiler.OUTPUT_FILENAMES[artifact_name]:
+            failures.append(
+                f"manifest {manifest_key} has unexpected artifact filename: {path}"
+            )
+        if not path.is_file():
+            failures.append(f"manifest {manifest_key} file does not exist: {path}")
+            continue
+        try:
+            path.relative_to(temp_root)
+        except ValueError:
+            failures.append(
+                f"manifest {manifest_key} must be inside the OS temporary directory: {path}"
+            )
+
+    if paths:
+        reference_dir = paths.get("effective_profile_path", next(iter(paths.values()))).parent
+        if not reference_dir.name.startswith("system_bringup-runtime-"):
+            failures.append(
+                f"manifest runtime directory must start with system_bringup-runtime-: {reference_dir}"
+            )
+        for manifest_key, path in paths.items():
+            if path.parent != reference_dir:
+                failures.append(
+                    f"manifest {manifest_key} must use the same runtime directory "
+                    f"as effective_profile_path: {path.parent} != {reference_dir}"
+                )
+
+    for manifest_key, artifact_name in _RUNTIME_ARTIFACTS.items():
+        path = paths.get(manifest_key)
+        if path is None or not path.is_file():
+            continue
+        try:
+            with path.open("r", encoding="utf-8") as stream:
+                data = yaml.safe_load(stream)
+        except (OSError, yaml.YAMLError) as exc:
+            failures.append(f"cannot load manifest {manifest_key} {path}: {exc}")
+            continue
+        if not isinstance(data, dict):
+            failures.append(f"manifest {manifest_key} root must be a mapping: {path}")
+            continue
+        loaded[artifact_name] = data
+
+    return paths, loaded
+
+
+def _validate_unmigrated_runtime_config(config, platform, failures):
+    nonempty_string = lambda value: isinstance(value, str) and bool(value.strip())
+    nonnegative_number = lambda value: (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0.0
+    )
+    _require_runtime_value(
+        config,
+        ("slam_stack", "settling"),
+        nonnegative_number,
+        failures,
+        "a finite number >= 0",
+    )
+    for path in (
+        ("slam_stack", platform, "lio_sam", "config"),
+        ("slam_stack", platform, "fast_lio", "config"),
+        ("slam_stack", platform, "gicp_localization", "config"),
+        ("slam_stack", platform, "gicp_localization", "prior_map_path"),
+        ("slam_stack", platform, "robot_navigation", "config"),
+        ("slam_stack", platform, "robot_navigation", "map"),
+    ):
+        _require_runtime_value(
+            config, path, nonempty_string, failures, "a non-empty string"
+        )
+
+    if platform == "sim":
+        for key in ("gui", "rviz", "world", "spawn_x", "spawn_y", "spawn_z"):
+            _require_runtime_value(
+                config,
+                ("robot_gz", key),
+                nonempty_string,
+                failures,
+                "a non-empty string",
+            )
+    elif platform == "real":
+        _require_runtime_value(
+            config,
+            ("robot_bringup", "use_mock_hardware"),
+            lambda value: isinstance(value, bool),
+            failures,
+            "a boolean",
+        )
+        _require_runtime_value(
+            config,
+            ("vanjee_lidar", "config"),
+            nonempty_string,
+            failures,
+            "a non-empty string",
+        )
+
+
+def run_runtime_consistency(repo_root, manifest):
+    """Validate one compiled runtime manifest without rereading or regenerating it."""
+    failures = []
+    if yaml is None:
+        return ["runtime consistency requires PyYAML"]
+    from system_bringup import runtime_config_compiler as rcc
+
+    if not isinstance(manifest, dict):
+        return [f"runtime manifest must be a mapping; got {type(manifest).__name__}"]
+
+    try:
+        root = Path(repo_root).expanduser().resolve()
+    except (OSError, TypeError, ValueError) as exc:
+        return [f"repo_root is invalid: {repo_root!r}: {exc}"]
+    if not root.is_dir():
+        failures.append(f"repo_root is not a directory: {root}")
+
+    config = manifest.get("bringup_config")
+    if not isinstance(config, dict):
+        failures.append("manifest bringup_config must be a mapping")
+        config = {}
+
+    platform = manifest.get("platform")
+    if platform not in ("sim", "real"):
+        failures.append(f"manifest platform must be 'sim' or 'real'; got {platform!r}")
+    mode = manifest.get("mode")
+    if not isinstance(mode, str) or mode not in rcc.SUPPORTED_MODES:
+        failures.append(
+            f"manifest mode must be 'mapping' or 'navigation'; got {mode!r}"
+        )
+    use_sim_time = manifest.get("use_sim_time")
+    if not isinstance(use_sim_time, bool):
+        failures.append(
+            f"manifest use_sim_time must be a boolean; got {use_sim_time!r}"
+        )
+
+    if config.get("platform", _MISSING) != platform:
+        failures.append(
+            f"manifest platform {platform!r} != bringup_config.platform "
+            f"{config.get('platform', _MISSING)!r}"
+        )
+    if config.get("mode", _MISSING) != mode:
+        failures.append(
+            f"manifest mode {mode!r} != bringup_config.mode "
+            f"{config.get('mode', _MISSING)!r}"
+        )
+
+    source_path = manifest.get("bringup_config_path", _MISSING)
+    if source_path is _MISSING:
+        failures.append("manifest missing bringup_config_path")
+        source_path = None
+    else:
+        try:
+            source_path = Path(source_path).expanduser()
+        except TypeError:
+            failures.append(
+                f"manifest bringup_config_path must be a filesystem path; got {source_path!r}"
+            )
+            source_path = None
+        if source_path is not None:
+            if not source_path.is_absolute():
+                failures.append(
+                    f"manifest bringup_config_path must be absolute: {source_path}"
+                )
+            source_path = source_path.resolve()
+            if not source_path.is_file():
+                failures.append(
+                    f"manifest bringup_config_path file does not exist: {source_path}"
+                )
+            try:
+                source_path.relative_to(root)
+            except ValueError:
+                failures.append(
+                    f"manifest bringup_config_path is outside repo_root: {source_path}"
+                )
+
+    paths, loaded = _load_runtime_artifacts(manifest, failures, rcc)
+    report = loaded.get("effective_profile")
+    if report is not None:
+        if report.get("platform", _MISSING) != platform:
+            failures.append(
+                f"effective report platform {report.get('platform', _MISSING)!r} "
+                f"!= manifest platform {platform!r}"
+            )
+        report_clock = _nested_value(report, ("derived", "use_sim_time"))
+        if report_clock is _MISSING or report_clock is not use_sim_time:
+            failures.append(
+                f"effective report derived.use_sim_time {report_clock!r} "
+                f"!= manifest use_sim_time {use_sim_time!r}"
+            )
+
+        if source_path is not None and platform in ("sim", "real"):
+            profiles = config.get("profiles")
+            profile_ref = profiles.get(platform, _MISSING) if isinstance(profiles, dict) else _MISSING
+            if not isinstance(profile_ref, str) or not profile_ref:
+                failures.append(
+                    f"manifest bringup_config profiles.{platform} must be a non-empty string"
+                )
+            else:
+                expected_profile = (source_path.parent / profile_ref).resolve()
+                report_profile = report.get("source_profile", _MISSING)
+                if report_profile is _MISSING or not _same_path(report_profile, expected_profile):
+                    failures.append(
+                        f"effective report source_profile {report_profile!r} "
+                        f"!= selected profile {expected_profile}"
+                    )
+
+        expected_backends = {
+            "sim": {"chassis": "gazebo", "lidar": "gazebo"},
+            "real": {"chassis": "can_8030d", "lidar": "vanjee"},
+        }
+        if platform in expected_backends:
+            for component, expected in expected_backends[platform].items():
+                actual = _nested_value(
+                    report, ("profile", "hardware", component, "backend")
+                )
+                if actual != expected:
+                    failures.append(
+                        f"effective report {component} backend {actual!r} "
+                        f"!= expected {expected!r} for platform {platform}"
+                    )
+
+        generated_refs = report.get("generated_configs")
+        for manifest_key, artifact_name in _RUNTIME_ARTIFACTS.items():
+            if artifact_name == "effective_profile":
+                continue
+            expected_path = paths.get(manifest_key)
+            actual_path = (
+                generated_refs.get(artifact_name, _MISSING)
+                if isinstance(generated_refs, dict)
+                else _MISSING
+            )
+            if expected_path is not None and not _same_path(actual_path, expected_path):
+                failures.append(
+                    f"effective report generated_configs.{artifact_name} "
+                    f"{actual_path!r} != manifest {manifest_key} {expected_path}"
+                )
+
+        try:
+            expected_geometry = rcc._derive_robot_launch_arguments(report)
+        except (KeyError, TypeError, ValueError) as exc:
+            failures.append(f"effective report geometry is invalid: {exc}")
+        else:
+            actual_geometry = manifest.get("robot_launch_arguments")
+            for key, expected in expected_geometry.items():
+                actual = (
+                    actual_geometry.get(key, _MISSING)
+                    if isinstance(actual_geometry, dict)
+                    else _MISSING
+                )
+                if actual != expected:
+                    failures.append(
+                        f"manifest robot_launch_arguments.{key} {actual!r} "
+                        f"!= effective geometry {expected!r}"
+                    )
+
+        profile = report.get("profile")
+        try:
+            expected_weld = rcc._derive_compatibility_body_weld_arguments(profile)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
+            failures.append(f"effective report compatibility weld is invalid: {exc}")
+        else:
+            actual_weld = manifest.get("compatibility_body_weld_arguments")
+            for key, expected in expected_weld.items():
+                actual = (
+                    actual_weld.get(key, _MISSING)
+                    if isinstance(actual_weld, dict)
+                    else _MISSING
+                )
+                if actual != expected:
+                    failures.append(
+                        f"manifest compatibility_body_weld_arguments.{key} "
+                        f"{actual!r} != effective weld {expected!r}"
+                    )
+
+    if all(name in loaded for name in _RUNTIME_ARTIFACTS.values()):
+        try:
+            rcc._validate_generated_configs(
+                loaded["effective_profile"],
+                loaded["controllers"],
+                loaded["web_ui"],
+                loaded["nav2"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            failures.append(f"generated runtime config mismatch: {exc}")
+
+    if platform in ("sim", "real"):
+        _validate_unmigrated_runtime_config(config, platform, failures)
+    return failures
+
+
 # ---- 解析器 ----
 def _xacro_props(text):
     """字面量 xacro property -> float dict(跳过 ${...} 表达式 value)。"""
