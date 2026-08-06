@@ -58,7 +58,7 @@ def _load_runtime_inputs(bringup_config_path):
         platform, selected_profile_path, selected_profile
     )
     templates = {
-        name: source.parent / "templates" / filename
+        name: _load_template(source.parent / "templates" / filename, name)[1]
         for name, filename in TEMPLATE_FILENAMES.items()
     }
     return {

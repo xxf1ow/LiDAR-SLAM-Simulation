@@ -144,6 +144,44 @@ def test_runtime_rejects_non_mapping_template(runtime_tree, name, text):
         rcc._load_template(path, name)
 
 
+@pytest.mark.parametrize("name", rcc.TEMPLATE_FILENAMES)
+def test_runtime_inputs_reject_missing_source_template(runtime_tree, name):
+    path = runtime_tree.config.parent / "templates" / rcc.TEMPLATE_FILENAMES[name]
+    path.unlink()
+
+    with pytest.raises(ValueError, match="template file does not exist"):
+        rcc._load_runtime_inputs(runtime_tree.config)
+
+
+@pytest.mark.parametrize(
+    "name,text",
+    [
+        ("controllers", ""),
+        ("web_ui", "- item\n"),
+        ("nav2", "not-a-mapping\n"),
+    ],
+)
+def test_runtime_inputs_reject_non_mapping_source_template(
+    runtime_tree, name, text
+):
+    path = runtime_tree.config.parent / "templates" / rcc.TEMPLATE_FILENAMES[name]
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ValueError, match="template root must be a mapping"):
+        rcc._load_runtime_inputs(runtime_tree.config)
+
+
+def test_runtime_inputs_return_validated_template_mappings(runtime_tree):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+
+    assert inputs["templates"] == {
+        name: _load_yaml(
+            runtime_tree.config.parent / "templates" / filename
+        )
+        for name, filename in rcc.TEMPLATE_FILENAMES.items()
+    }
+
+
 def test_shared_templates_are_complete_mappings():
     for name in ("robot_controllers.yaml", "robot_web_ui.yaml", "nav2.yaml"):
         data = _load_yaml(TEMPLATE_DIR / name)
