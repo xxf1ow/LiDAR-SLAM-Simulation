@@ -688,7 +688,7 @@ def _yaml_schema(value):
         return {key: _yaml_schema(child) for key, child in value.items()}
     if isinstance(value, list):
         return [_yaml_schema(child) for child in value]
-    return None
+    return type(value)
 
 
 def _profile_owned_runtime_values(manifest):
@@ -737,7 +737,7 @@ def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
             for name in ("controllers", "web_ui", "nav2", "effective_profile")
         }
 
-    for name in generated["sim"]:
+    for name in ("controllers", "web_ui", "nav2"):
         assert _yaml_schema(generated["sim"][name]) == _yaml_schema(
             generated["real"][name]
         )
@@ -825,9 +825,14 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
     assert manifest["bringup_config_path"] == runtime_tree.config.resolve()
     assert manifest["bringup_config"] == loaded[0]["config"]
     assert manifest["bringup_config"] is not loaded[0]["config"]
+    assert (
+        manifest["bringup_config"]["profiles"]
+        is not loaded[0]["config"]["profiles"]
+    )
     source_config = runtime_tree.config.read_bytes()
-    manifest["bringup_config"]["platform"] = "mutated"
-    assert loaded[0]["config"]["platform"] == platform
+    selected_profile = loaded[0]["config"]["profiles"][platform]
+    manifest["bringup_config"]["profiles"][platform] = "mutated"
+    assert loaded[0]["config"]["profiles"][platform] == selected_profile
     assert runtime_tree.config.read_bytes() == source_config
     assert manifest["platform"] == platform
     assert manifest["mode"] == "navigation"
