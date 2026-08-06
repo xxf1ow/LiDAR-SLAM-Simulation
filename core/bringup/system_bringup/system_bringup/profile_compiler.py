@@ -112,7 +112,10 @@ def load_bringup_selection(path):
     if not isinstance(selected, dict):
         raise ValueError(f"{source}: profiles must be a mapping")
     missing = sorted({"sim", "real"} - set(selected))
-    extra = sorted(set(selected) - {"sim", "real"})
+    extra = sorted(
+        set(selected) - {"sim", "real"},
+        key=lambda item: (type(item).__name__, repr(item)),
+    )
     if missing or extra:
         raise ValueError(
             f"{source}: profiles keys invalid; missing={missing}, unexpected={extra}"

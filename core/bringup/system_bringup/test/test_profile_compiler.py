@@ -366,6 +366,31 @@ def test_cli_reports_validation_error_without_traceback(tmp_path, capsys):
     assert "Traceback" not in captured.err
 
 
+def test_cli_reports_mixed_type_bringup_profile_keys_without_traceback(
+    tmp_path, capsys
+):
+    config = _selection(tmp_path)
+    value = yaml.safe_load(config.read_text(encoding="utf-8"))
+    value["profiles"].update(
+        {1: "profiles/sim.yaml", "extra": "profiles/real.yaml"}
+    )
+    config.write_text(
+        yaml.safe_dump(value, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    result = pc.main(["--bringup-config", str(config)])
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err == (
+        f"profile compilation failed: {config.resolve()}: profiles keys invalid; "
+        "missing=[], unexpected=[1, 'extra']\n"
+    )
+    assert "Traceback" not in captured.err
+
+
 @pytest.mark.parametrize(
     "mutation,expected",
     [
