@@ -304,8 +304,13 @@ def compile_profile(bringup_config_path, output_dir=None):
     return output
 
 
+class _ProfileCompilerArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        self.exit(1, f"profile compilation failed: {message}\n")
+
+
 def main(argv=None):
-    parser = argparse.ArgumentParser(
+    parser = _ProfileCompilerArgumentParser(
         description="Validate and compile a selected platform Profile"
     )
     parser.add_argument(
@@ -318,7 +323,10 @@ def main(argv=None):
         default=None,
         help="Generated file directory; default is a private temporary directory",
     )
-    args = parser.parse_args(argv)
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return 0 if exc.code == 0 else 1
     try:
         output = compile_profile(args.bringup_config, args.output_dir)
     except (OSError, ValueError) as exc:

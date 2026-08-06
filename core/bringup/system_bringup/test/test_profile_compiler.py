@@ -333,6 +333,17 @@ def test_cli_reports_validation_error_without_traceback(tmp_path, capsys):
     assert "Traceback" not in captured.err
 
 
+def test_cli_missing_required_argument_returns_one_without_traceback(capsys):
+    result = pc.main([])
+    captured = capsys.readouterr()
+    assert result == 1
+    assert captured.out == ""
+    assert captured.err == (
+        "profile compilation failed: the following arguments are required: "
+        "--bringup-config\n"
+    )
+
+
 def test_formal_bringup_does_not_import_profile_compiler():
     launch = (
         PACKAGE_ROOT / "launch" / "bringup.launch.py"
@@ -348,3 +359,5 @@ def test_setup_registers_compiler_and_installs_profiles():
         in setup_source
     )
     assert "config/profiles/*.yaml" in setup_source
+    assert "bringup.yaml" not in setup_source
+    assert "glob('config/*.yaml')" not in setup_source
