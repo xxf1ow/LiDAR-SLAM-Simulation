@@ -1,3 +1,4 @@
+import ast
 import importlib.util
 from pathlib import Path
 from xml.etree import ElementTree
@@ -15,6 +16,14 @@ LAUNCH_PATH = (
     Path(__file__).resolve().parents[1] / "launch" / "real_chassis.launch.py"
 )
 PACKAGE_XML_PATH = Path(__file__).resolve().parents[1] / "package.xml"
+VENDOR_LAUNCH_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "drivers"
+    / "chassis_8030d"
+    / "can_driver_8030D_sdk"
+    / "launch"
+    / "can_driver_8030.launch.py"
+)
 
 
 def load_launch_module():
@@ -57,6 +66,7 @@ def test_real_chassis_includes_vendor_and_real_robot_with_single_owner_settings(
     vendor_location = Path(vendor.launch_description_source.location)
     assert vendor_location == vendor_share / "can_driver_8030.launch.py"
     assert vendor_arguments["auto_enable_on_start"] == "false"
+    assert vendor_arguments["log_level"] == "warn"
     assert (
         Path(vendor_arguments_raw["config_file"].perform(context))
         == vendor_share / "can_driver_params.yaml"
@@ -90,3 +100,44 @@ def test_package_declares_direct_launch_and_test_dependencies():
     )
     assert len(exec_dependencies) == len(set(exec_dependencies))
     assert len(test_dependencies) == len(set(test_dependencies))
+
+
+def test_vendor_launch_keeps_stdout_in_log_and_applies_process_log_level():
+    tree = ast.parse(VENDOR_LAUNCH_PATH.read_text(encoding="utf-8"))
+    declarations = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "DeclareLaunchArgument"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+        and node.args[0].value == "log_level"
+    ]
+    assert len(declarations) == 1
+    defaults = {
+        keyword.arg: keyword.value for keyword in declarations[0].keywords
+    }
+    assert isinstance(defaults["default_value"], ast.Constant)
+    assert defaults["default_value"].value == "info"
+
+    nodes = [
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "Node"
+    ]
+    assert len(nodes) == 1
+    keywords = {keyword.arg: keyword.value for keyword in nodes[0].keywords}
+    output = keywords["output"]
+    assert isinstance(output, ast.Constant)
+    assert output.value == "log"
+    ros_arguments = keywords["ros_arguments"]
+    assert isinstance(ros_arguments, ast.List)
+    assert isinstance(ros_arguments.elts[0], ast.Constant)
+    assert ros_arguments.elts[0].value == "--log-level"
+    level = ros_arguments.elts[1]
+    assert isinstance(level, ast.Call)
+    assert isinstance(level.func, ast.Name)
+    assert level.func.id == "LaunchConfiguration"
+    assert isinstance(level.args[0], ast.Constant)
+    assert level.args[0].value == "log_level"

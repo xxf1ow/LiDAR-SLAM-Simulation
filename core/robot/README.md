@@ -32,14 +32,15 @@ Web  → /cmd_vel_manual┘                    → robot_hardware → can_driver
 `robot_hardware` 独占 `/motor_speed` 和 `/driver`，并从 `/current_speed`
 取得实测轮速。
 
-单独启动真实 ros2_control 底盘做底层诊断：
+`real_chassis.launch.py` 现在是 `system_bringup` 的内部真机入口；它要求父级传入
+由 `bringup.yaml:real_geometry` 派生的全部参数，缺参数会在启动前明确失败，避免
+真实底盘静默使用仿真轮参。正式真机启动：
 
 ```bash
-ros2 launch robot_bringup real_chassis.launch.py
+ros2 launch system_bringup bringup.launch.py
 ```
 
-此 standalone 场景仍可用 `ros2 topic pub /cmd_vel ...` 测试控制器；完整
-bringup 运行时不要直接发布 `/cmd_vel`。
+完整 bringup 运行时不要直接发布 `/cmd_vel`。
 
 手机访问 `http://<机器人或仿真主机IP>:8080`
 

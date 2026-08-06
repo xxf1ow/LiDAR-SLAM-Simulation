@@ -24,6 +24,7 @@ setup(
     entry_points={
         'console_scripts': [
             'consistency_check = system_bringup.consistency_check:main',
+            'real_sensor_ready_gate = system_bringup.sensor_gate_node:main',
         ],
     },
 )

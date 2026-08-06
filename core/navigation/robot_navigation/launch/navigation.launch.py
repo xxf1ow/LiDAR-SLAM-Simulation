@@ -17,10 +17,7 @@ from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
-# 几何常量(权威源 = robot_description/urdf/robot_macro.urdf.xacro;
-# 由 system_bringup 的一致性检查 G3 守住与 xacro 一致)。
-# weld_z 由此派生,不再硬编码魔法数。ROS 无法让 launch 直接读 xacro property,
-# 故此处保留几何常量副本 + 一致性测试兜底。
+# 仿真默认焊接；真机由 system_bringup/bringup.yaml 的 real_geometry 覆盖。
 _BASE_HEIGHT = 0.40
 _WHEEL_RADIUS = 0.12
 _LIDAR_HEIGHT = 0.072
@@ -36,7 +33,12 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration('use_sim_time')
     params_file = LaunchConfiguration('params_file')
     use_rviz = LaunchConfiguration('use_rviz')
+    weld_x = LaunchConfiguration('weld_x')
+    weld_y = LaunchConfiguration('weld_y')
     weld_z = LaunchConfiguration('weld_z')
+    weld_roll = LaunchConfiguration('weld_roll')
+    weld_pitch = LaunchConfiguration('weld_pitch')
+    weld_yaw = LaunchConfiguration('weld_yaw')
     cmd_vel_output_topic = LaunchConfiguration('cmd_vel_output_topic')
 
     lifecycle_nodes = [
@@ -62,19 +64,22 @@ def generate_launch_description():
         DeclareLaunchArgument('params_file', default_value=default_params),
         DeclareLaunchArgument('use_rviz', default_value='true'),
         DeclareLaunchArgument('cmd_vel_output_topic', default_value='/cmd_vel'),
-        # 焊接：parent=body -> child=base_footprint，单位旋转。
-        # z 由顶部几何常量派生(_WELD_Z = -(base_height/2 + wheel_radius + sensor_z) = -0.556)，
-        # 不再硬编码;system_bringup 一致性检查 G3 守住 _BASE_HEIGHT/_WHEEL_RADIUS/_LIDAR_HEIGHT 与 xacro 一致。
-        # 2D 导航对 z 符号不敏感(只影响 RViz 竖直位置)；验收 tf2_echo map base_footprint 应 z≈0。
+        # 焊接：parent=body(雷达/IMU) -> child=base_footprint。
+        # 默认值保持既有仿真；真机六自由度值由 system_bringup 派生并覆盖。
+        DeclareLaunchArgument('weld_x', default_value='0.0'),
+        DeclareLaunchArgument('weld_y', default_value='0.0'),
         DeclareLaunchArgument('weld_z', default_value=f'{_WELD_Z:.4f}'),
+        DeclareLaunchArgument('weld_roll', default_value='0.0'),
+        DeclareLaunchArgument('weld_pitch', default_value='0.0'),
+        DeclareLaunchArgument('weld_yaw', default_value='0.0'),
 
         # 1) TF 焊接：body(FAST-LIO) -> base_footprint(URDF 根)
         Node(
             package='tf2_ros', executable='static_transform_publisher',
             name='body_to_base_footprint', output='screen',
             arguments=[
-                '--x', '0', '--y', '0', '--z', weld_z,
-                '--roll', '0', '--pitch', '0', '--yaw', '0',
+                '--x', weld_x, '--y', weld_y, '--z', weld_z,
+                '--roll', weld_roll, '--pitch', weld_pitch, '--yaw', weld_yaw,
                 '--frame-id', 'body', '--child-frame-id', 'base_footprint',
             ],
             parameters=[{'use_sim_time': use_sim_time}],

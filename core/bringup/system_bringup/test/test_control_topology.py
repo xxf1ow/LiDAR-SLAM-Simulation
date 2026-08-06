@@ -7,6 +7,9 @@ ROOT = Path(__file__).resolve().parents[4]
 NAVIGATION = ROOT / "core/navigation/robot_navigation/launch/navigation.launch.py"
 SLAM_STACK = ROOT / "core/bringup/system_bringup/launch/slam_stack.launch.py"
 BRINGUP = ROOT / "core/bringup/system_bringup/launch/bringup.launch.py"
+ROBOT = ROOT / "core/robot/robot_bringup/launch/robot.launch.py"
+REAL_CHASSIS = ROOT / "core/robot/robot_bringup/launch/real_chassis.launch.py"
+SENSOR_GATE = ROOT / "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
 MANIFEST = ROOT / "core/bringup/system_bringup/package.xml"
 
 
@@ -52,6 +55,14 @@ def _declaration_default(tree, argument):
         if call.args and _string(call.args[0]) == argument:
             return _string(_keyword(call, "default_value"))
     return None
+
+
+def _declaration(tree, argument):
+    return next(
+        call
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args and _string(call.args[0]) == argument
+    )
 
 
 def _launch_configuration_assignment(function, variable, argument, performed=False):
@@ -115,8 +126,162 @@ def _leftmost_add_name(node):
     return node.id if isinstance(node, ast.Name) else None
 
 
+def _add_terms(node):
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        return _add_terms(node.left) + _add_terms(node.right)
+    return [node]
+
+
+def _subscript_path(node):
+    path = []
+    while isinstance(node, ast.Subscript):
+        path.append(
+            node.slice.id if isinstance(node.slice, ast.Name) else _string(node.slice)
+        )
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None, tuple(reversed(path))
+
+
+def _is_vanjee_config_call(node):
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_pkg_config"
+        and _string(node.args[0]) == "vanjee_lidar_ros"
+    )
+
+
+def _assigned_value(function, name):
+    return next(
+        node.value
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == name for target in node.targets)
+    )
+
+
 def test_navigation_declares_cmd_vel_output_topic_with_legacy_default():
     assert _declaration_default(_tree(NAVIGATION), "cmd_vel_output_topic") == "/cmd_vel"
+
+
+def test_navigation_accepts_complete_body_weld_transform():
+    tree = _tree(NAVIGATION)
+    assert {
+        "weld_x", "weld_y", "weld_z", "weld_roll", "weld_pitch", "weld_yaw"
+    } <= {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+    }
+
+    function = _function(tree, "generate_launch_description")
+    publisher = _node_call(function, "tf2_ros", "static_transform_publisher")
+    arguments = _keyword(publisher, "arguments")
+    assert isinstance(arguments, ast.List)
+    values = {
+        _string(arguments.elts[index]): arguments.elts[index + 1]
+        for index in range(0, 12, 2)
+    }
+    for option, variable in (
+        ("--x", "weld_x"), ("--y", "weld_y"), ("--z", "weld_z"),
+        ("--roll", "weld_roll"), ("--pitch", "weld_pitch"),
+        ("--yaw", "weld_yaw"),
+    ):
+        assert isinstance(values[option], ast.Name)
+        assert values[option].id == variable
+
+
+def test_robot_launch_accepts_runtime_geometry_and_controller_file():
+    tree = _tree(ROBOT)
+    declared = {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+    }
+    assert {
+        "controllers_file",
+        "base_length", "base_width", "base_height", "base_link_height",
+        "wheel_radius", "wheel_width", "wheel_separation",
+        "sensor_x", "sensor_y", "sensor_z",
+        "sensor_roll", "sensor_pitch", "sensor_yaw",
+    } <= declared
+
+    function = _function(tree, "generate_launch_description")
+    control_node = _node_call(function, "controller_manager", "ros2_control_node")
+    parameters = _keyword(control_node, "parameters")
+    assert isinstance(parameters, ast.List)
+    assert isinstance(parameters.elts[0], ast.Name)
+    assert parameters.elts[0].id == "controllers_file"
+
+    command = _assigned_value(function, "robot_description_content")
+    assert isinstance(command, ast.Call)
+    command_parts = command.args[0]
+    assert isinstance(command_parts, ast.List)
+    configured = {
+        _string(command_parts.elts[index]).removesuffix(":="):
+        command_parts.elts[index + 1]
+        for index in range(len(command_parts.elts) - 1)
+        if _string(command_parts.elts[index])
+        and _string(command_parts.elts[index]).endswith(":=")
+    }
+    for name in declared - {"gui", "controllers_file"}:
+        value = configured[name]
+        if name in {"use_mock_hardware", "prefix"}:
+            assert isinstance(value, ast.Name)
+        else:
+            assert isinstance(value, ast.Call)
+            assert isinstance(value.func, ast.Name)
+            assert value.func.id == "LaunchConfiguration"
+            assert _string(value.args[0]) == name
+
+
+def test_real_chassis_passes_runtime_geometry_to_robot_launch():
+    tree = _tree(REAL_CHASSIS)
+    declared = {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+    }
+    assert {
+        "controllers_file",
+        "base_length", "base_width", "base_height", "base_link_height",
+        "wheel_radius", "wheel_width", "wheel_separation",
+        "sensor_x", "sensor_y", "sensor_z",
+        "sensor_roll", "sensor_pitch", "sensor_yaw",
+    } <= declared
+
+    function = _function(tree, "generate_launch_description")
+    geometry = _assigned_value(function, "geometry_arguments")
+    assert isinstance(geometry, ast.DictComp)
+    names = {
+        _string(item)
+        for item in geometry.generators[0].iter.elts
+    }
+    assert declared - {"gui"} == names
+
+    robot = _assigned_value(function, "robot")
+    launch_arguments = _keyword(robot, "launch_arguments")
+    assert isinstance(launch_arguments, ast.Call)
+    passed = launch_arguments.func.value
+    assert isinstance(passed, ast.Dict)
+    assert any(
+        key is None and isinstance(value, ast.Name)
+        and value.id == "geometry_arguments"
+        for key, value in zip(passed.keys, passed.values)
+    )
+
+
+def test_real_chassis_requires_authoritative_geometry_instead_of_sim_defaults():
+    tree = _tree(REAL_CHASSIS)
+    for name in (
+        "controllers_file",
+        "base_length", "base_width", "base_height", "base_link_height",
+        "wheel_radius", "wheel_width", "wheel_separation",
+        "sensor_x", "sensor_y", "sensor_z",
+        "sensor_roll", "sensor_pitch", "sensor_yaw",
+    ):
+        declaration = _declaration(tree, name)
+        assert not any(keyword.arg == "default_value" for keyword in declaration.keywords)
 
 
 def test_navigation_stamper_uses_configured_output_and_keeps_nav_input():
@@ -152,12 +317,159 @@ def test_slam_stack_passes_cmd_vel_output_topic_to_navigation():
     assert output_topic.id == "cmd_vel_output_topic"
 
 
+def test_slam_stack_declares_profile_parameter_files():
+    tree = _tree(SLAM_STACK)
+    declared = {
+        _string(call.args[0])
+        for call in _calls(tree, "DeclareLaunchArgument")
+        if call.args
+    }
+    assert {
+        "lio_sam_params_file",
+        "gicp_config_file",
+        "nav2_params_file",
+    } <= declared
+
+
+def test_slam_stack_passes_profile_parameter_files_to_includes():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    for variable, argument in (
+        ("lio_sam_params", "lio_sam_params_file"),
+        ("gicp_config", "gicp_config_file"),
+        ("nav2_params", "nav2_params_file"),
+    ):
+        assert _launch_configuration_assignment(
+            function, variable, argument, performed=True
+        )
+
+    mapping = _include_arguments(function, "lio_sam", "launch/run.launch.py")
+    mapping_params = _dict_value(mapping, "params_file")
+    assert isinstance(mapping_params, ast.Name)
+    assert mapping_params.id == "lio_sam_params"
+
+    gicp = _include_arguments(
+        function, "gicp_localization", "launch/localization.launch.py"
+    )
+    gicp_params = _dict_value(gicp, "config_file")
+    assert isinstance(gicp_params, ast.Name)
+    assert gicp_params.id == "gicp_config"
+
+    nav2 = _include_arguments(
+        function, "robot_navigation", "launch/navigation.launch.py"
+    )
+    nav2_params = _dict_value(nav2, "params_file")
+    assert isinstance(nav2_params, ast.Name)
+    assert nav2_params.id == "nav2_params"
+
+
+def test_slam_stack_waits_for_localization_and_base_controller_odom_before_nav2():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    assert any(
+        isinstance(call.args[0], ast.List)
+        and {_string(item) for item in call.args[0].elts}
+        == {"/localization", "/base_controller/odom"}
+        for call in _calls(function, "ready_gate")
+    )
+
+
 def test_bringup_routes_navigation_output_to_cmd_vel_auto():
     function = _function(_tree(BRINGUP), "_bringup")
     arguments = _include_arguments(
         function, "system_bringup", "launch/slam_stack.launch.py"
     )
     assert _string(_dict_value(arguments, "cmd_vel_output_topic")) == "/cmd_vel_auto"
+
+
+def test_bringup_selects_the_slam_profile_from_platform():
+    function = _function(_tree(BRINGUP), "_bringup")
+    profile_assignment = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "profile"
+            for target in node.targets
+        )
+    )
+    assert _subscript_path(profile_assignment.value) == ("stack_cfg", ("platform",))
+
+
+def test_bringup_preflights_active_external_slam_config_before_launching():
+    function = _function(_tree(BRINGUP), "_bringup")
+    calls = _calls(function, "require_runtime_config_file")
+
+    assert len(calls) == 2
+    assert {_string(call.args[1]) for call in calls} == {"FAST-LIO", "LIO-SAM"}
+
+
+def test_bringup_materializes_geometry_only_for_real_platform():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    sim = _platform_branch(function, "sim")
+
+    assert len(_calls(real, "write_real_runtime_configs")) == 1
+    assert len(_calls(real, "derive_real_geometry")) == 1
+    assert len(_calls(real, "real_geometry_launch_arguments")) == 1
+    assert _calls(sim, "write_real_runtime_configs") == []
+
+
+def test_bringup_routes_generated_real_geometry_to_chassis():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    chassis = _include_arguments(
+        real, "robot_bringup", "launch/real_chassis.launch.py"
+    )
+    keys = {_string(key) for key in chassis.keys if key is not None}
+    assert {
+        "controllers_file",
+        "base_length", "base_width", "base_height", "base_link_height",
+        "wheel_radius", "wheel_width", "wheel_separation",
+        "sensor_x", "sensor_y", "sensor_z",
+        "sensor_roll", "sensor_pitch", "sensor_yaw",
+    } <= keys
+
+
+def test_bringup_routes_generated_real_nav2_and_weld_to_shared_stack():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    arguments = _include_arguments(
+        real, "system_bringup", "launch/slam_stack.launch.py"
+    )
+    nav2 = _dict_value(arguments, "nav2_params_file")
+    assert isinstance(nav2, ast.Call)
+    assert isinstance(nav2.func, ast.Name) and nav2.func.id == "str"
+    for name in (
+        "weld_x", "weld_y", "weld_z",
+        "weld_roll", "weld_pitch", "weld_yaw",
+    ):
+        value = _dict_value(arguments, name)
+        assert _subscript_path(value) == (
+            "geometry_arguments", ("navigation", name)
+        )
+
+
+def test_bringup_passes_selected_profile_configs_to_shared_slam_stack():
+    function = _function(_tree(BRINGUP), "_bringup")
+    arguments = _include_arguments(
+        function, "system_bringup", "launch/slam_stack.launch.py"
+    )
+    for argument, package, component in (
+        ("lio_sam_params_file", "lio_sam", "lio_sam"),
+        ("gicp_config_file", "gicp_localization", "gicp_localization"),
+        ("nav2_params_file", "robot_navigation", "robot_navigation"),
+    ):
+        value = _dict_value(arguments, argument)
+        assert isinstance(value, ast.Call)
+        assert isinstance(value.func, ast.Name)
+        assert value.func.id == "_pkg_config"
+        assert _string(value.args[0]) == package
+        assert _subscript_path(value.args[1]) == (
+            "profile", (component, "config")
+        )
+
+    assert _subscript_path(_dict_value(arguments, "fast_lio_config")) == (
+        "profile", ("fast_lio", "config")
+    )
 
 
 def test_bringup_creates_gate_and_web_nodes_before_platform_branching():
@@ -180,9 +492,207 @@ def test_bringup_prepends_control_layer_to_both_platform_returns():
         assert _leftmost_add_name(result) == "control_layer"
 
 
+def test_real_branch_includes_chassis_and_vanjee_driver():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+
+    chassis = _include_arguments(
+        real, "robot_bringup", "launch/real_chassis.launch.py"
+    )
+    assert _string(_dict_value(chassis, "gui")) == "false"
+
+    lidar = _include_arguments(
+        real, "vanjee_lidar_ros", "launch/vanjee_lidar.launch.py"
+    )
+    config_file = _dict_value(lidar, "config_file")
+    assert isinstance(config_file, ast.Name)
+    assert config_file.id == "vanjee_config"
+
+
+def test_real_branch_uses_sensor_gate_before_shared_stack():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    gate = next(call for call in _calls(real, "_real_sensor_gate"))
+    assert isinstance(gate.args[0], ast.List)
+    assert [item.id for item in gate.args[0].elts if isinstance(item, ast.Name)] == [
+        "slam_stack"
+    ]
+
+    gate_function = _function(_tree(BRINGUP), "_real_sensor_gate")
+    waiter = _node_call(gate_function, "system_bringup", "real_sensor_ready_gate")
+    assert _string(_keyword(waiter, "name")) == "real_sensor_ready_gate"
+    assert _string(_keyword(waiter, "output")) == "screen"
+    parameters = _keyword(waiter, "parameters")
+    assert isinstance(parameters, ast.List)
+    assert isinstance(parameters.elts[0], ast.Dict)
+    timeout = _dict_value(parameters.elts[0], "timeout")
+    assert isinstance(timeout, ast.Constant)
+    assert timeout.value == 300.0
+
+    handler = next(call for call in _calls(gate_function, "OnProcessExit"))
+    target_action = _keyword(handler, "target_action")
+    assert isinstance(target_action, ast.Name)
+    assert target_action.id == "waiter"
+
+    on_exit = _keyword(handler, "on_exit")
+    assert isinstance(on_exit, ast.Lambda)
+    assert isinstance(on_exit.body, ast.IfExp)
+    assert isinstance(on_exit.body.test, ast.Compare)
+    assert isinstance(on_exit.body.test.left, ast.Attribute)
+    assert isinstance(on_exit.body.test.left.value, ast.Name)
+    assert on_exit.body.test.left.value.id == "event"
+    assert on_exit.body.test.left.attr == "returncode"
+    assert len(on_exit.body.test.ops) == 1
+    assert isinstance(on_exit.body.test.ops[0], ast.Eq)
+    assert isinstance(on_exit.body.test.comparators[0], ast.Constant)
+    assert on_exit.body.test.comparators[0].value == 0
+
+    assert isinstance(on_exit.body.body, ast.Name)
+    assert on_exit.body.body.id == "then_actions"
+    assert isinstance(on_exit.body.orelse, ast.List)
+    assert len(on_exit.body.orelse.elts) == 1
+    abort = on_exit.body.orelse.elts[0]
+    assert isinstance(abort, ast.Call)
+    assert isinstance(abort.func, ast.Name)
+    assert abort.func.id == "OpaqueFunction"
+    abort_function = _keyword(abort, "function")
+    assert isinstance(abort_function, ast.Name)
+    assert abort_function.id == "_abort_real_sensor_gate"
+
+
+def test_real_branch_starts_chassis_and_lidar_before_sensor_gate():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    result = next(node.value for node in real.body if isinstance(node, ast.Return))
+    terms = _add_terms(result)
+
+    gate_index = next(
+        index
+        for index, term in enumerate(terms)
+        if isinstance(term, ast.Call)
+        and isinstance(term.func, ast.Name)
+        and term.func.id == "_real_sensor_gate"
+    )
+    preceding_names = {
+        name.id
+        for term in terms[:gate_index]
+        for name in ast.walk(term)
+        if isinstance(name, ast.Name)
+    }
+    assert {"chassis", "lidar"} <= preceding_names
+
+    gate = terms[gate_index]
+    assert isinstance(gate.args[0], ast.List)
+    assert [item.id for item in gate.args[0].elts if isinstance(item, ast.Name)] == [
+        "slam_stack"
+    ]
+
+
+def test_real_sensor_gate_finishes_callback_without_shutting_down_executor():
+    finish = next(
+        node for node in ast.walk(_tree(SENSOR_GATE))
+        if isinstance(node, ast.FunctionDef) and node.name == "_finish"
+    )
+    assert not any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "shutdown"
+        for node in ast.walk(finish)
+    )
+
+
+def test_real_sensor_gate_main_spins_only_until_result_is_finished():
+    main = _function(_tree(SENSOR_GATE), "main")
+    loops = [node for node in ast.walk(main) if isinstance(node, ast.While)]
+    assert len(loops) == 1
+    loop = loops[0]
+    expected_test = ast.parse(
+        "while rclpy.ok() and not node.finished:\n    pass"
+    ).body[0].test
+    assert ast.dump(loop.test) == ast.dump(expected_test)
+
+    spins = [
+        node for node in ast.walk(loop)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "spin_once"
+    ]
+    expected_spin = ast.parse(
+        "rclpy.spin_once(node, timeout_sec=0.1)"
+    ).body[0].value
+    assert len(spins) == 1
+    assert ast.dump(spins[0]) == ast.dump(expected_spin)
+
+
+def test_real_branch_resolves_vanjee_config_only_after_platform_selection():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    assignment = next(
+        node
+        for node in real.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "vanjee_config"
+            for target in node.targets
+        )
+    )
+
+    assert _is_vanjee_config_call(assignment.value)
+    assert _subscript_path(assignment.value.args[1]) == (
+        "cfg", ("vanjee_lidar", "config")
+    )
+    vanjee_config_calls = [
+        call for call in _calls(function, "_pkg_config") if _is_vanjee_config_call(call)
+    ]
+    assert vanjee_config_calls == [assignment.value]
+
+
+def test_real_branch_does_not_publish_duplicate_lidar_static_tf():
+    function = _function(_tree(BRINGUP), "_bringup")
+    real = _platform_branch(function, "real")
+    assert not any(
+        _string(_keyword(call, "package")) == "tf2_ros"
+        and _string(_keyword(call, "executable")) == "static_transform_publisher"
+        for call in _calls(real, "Node")
+    )
+
+
+def test_bringup_runs_consistency_gate_before_platform_profile_lookup():
+    function = _function(_tree(BRINGUP), "_bringup")
+    failures_index = next(
+        index
+        for index, node in enumerate(function.body)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "failures"
+            for target in node.targets
+        )
+    )
+    gate_index = next(
+        index
+        for index, node in enumerate(function.body)
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Name)
+        and node.test.id == "failures"
+    )
+    profile_index = next(
+        index
+        for index, node in enumerate(function.body)
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "profile"
+            for target in node.targets
+        )
+        and _subscript_path(node.value) == ("stack_cfg", ("platform",))
+    )
+
+    assert failures_index < gate_index < profile_index
+
+
 def test_manifest_exec_depends_on_control_packages():
     manifest = ET.parse(MANIFEST)
     dependencies = {
         element.text for element in manifest.getroot().findall("exec_depend")
     }
     assert {"cmd_vel_gate", "robot_web_ui"} <= dependencies
+    assert {"robot_bringup", "vanjee_lidar_ros", "rclpy", "sensor_msgs"} <= dependencies

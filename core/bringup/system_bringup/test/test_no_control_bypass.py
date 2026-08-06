@@ -1,5 +1,6 @@
-from pathlib import Path
+import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -30,25 +31,55 @@ ACTIVE_BRINGUP_DOCS_AND_LAUNCH = (
 
 def _tracked_text(*paths: Path) -> str:
     relative_paths = [path.relative_to(ROOT).as_posix() for path in paths]
-    result = subprocess.run(
-        ["git", "ls-files", "-z", "--", *relative_paths],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-    )
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "-z", "--", *relative_paths],
+            cwd=ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        files = [ROOT / path for path in result.stdout.split("\0") if path]
+    except (FileNotFoundError, subprocess.CalledProcessError):
+        files = []
+        for path in paths:
+            if path.is_file():
+                files.append(path)
+                continue
+            for root, directories, filenames in os.walk(path):
+                directories[:] = [
+                    name for name in directories
+                    if name not in {
+                        ".git", ".pytest_cache", "__pycache__", ".superpowers"
+                    }
+                ]
+                files.extend(Path(root) / filename for filename in filenames)
+
     sources = []
-    for relative_path in result.stdout.split("\0"):
-        if not relative_path:
-            continue
-        normalized = relative_path.replace("\\", "/")
+    for source in dict.fromkeys(files):
+        normalized = source.relative_to(ROOT).as_posix()
         if "docs/superpowers/" in normalized or "/.superpowers/" in normalized:
             continue
-        source = ROOT / relative_path
         if source.is_file():
-            sources.append(source.read_text(encoding="utf-8"))
+            try:
+                sources.append(source.read_text(encoding="utf-8"))
+            except UnicodeDecodeError:
+                continue
     return "\n".join(sources)
+
+
+def test_tracked_text_falls_back_to_explicit_paths_when_git_is_unavailable(
+    monkeypatch,
+):
+    def unavailable(*args, **kwargs):
+        raise subprocess.CalledProcessError(128, args[0])
+
+    monkeypatch.setattr(subprocess, "run", unavailable)
+
+    source = _tracked_text(ROBOT_WEB_UI)
+
+    assert "/cmd_vel_manual" in source
 
 
 @pytest.mark.parametrize(

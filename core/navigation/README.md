@@ -8,7 +8,8 @@ Gz Harmonic 重建栈第 5e 阶段（最小打通）。在 5c FAST-LIO 里程计
 ```
 map →[GICP]→ camera_init →[FAST-LIO]→ body →[本包静态焊接]→ base_footprint →[URDF]→ base_link/...
 ```
-焊接：parent=body→child=base_footprint，单位旋转，z=-0.556（=-(base_height/2+wheel_radius+sensor_z)）。
+焊接：仿真默认 `body→base_footprint=[0,0,-0.556]`；真机由
+`system_bringup/config/bringup.yaml:real_geometry` 派生，当前为 `[-0.443,0,-0.905]`、单位旋转。
 
 ## 节点职责（详见 spec）
 - map_server：发先验 2D 图 `/map`(latched) 给全局 costmap。
@@ -25,7 +26,7 @@ map →[GICP]→ camera_init →[FAST-LIO]→ body →[本包静态焊接]→ ba
 - **障碍源** `/cloud_registered`(sensor_frame=body)，**不是** `/points_raw`（后者经 velodyne URDF 链转歪刷假障碍）。
 - **全局+局部障碍层统一 STVL**(`spatio_temporal_voxel_layer`)：视锥+时间衰减清除(非 VoxelLayer raytrace)；`combination_method:1`(max)不覆盖 static_layer；为未来运动障碍预留(届时调 `voxel_decay`/`decay_acceleration`)。STVL 的 3D voxel 层结构性规避了旧 VoxelLayer 的 `Sensor origin out of map bounds`(`origin_z:0.0` 即可,无需旧的 `-1.0` hack)。
 - **odom_topic `/base_controller/odom`**：diff_drive 真实 twist；FAST-LIO `/Odometry` twist 恒零，MPPI 不能用。
-- **换底盘只改 CHASSIS-DEPENDENT 参数**（`nav2_params.yaml` 顶部注释块列清单：转弯半径/运动模型/footprint/限速）。
+- **真机几何只改一处**：`bringup.yaml:real_geometry` 运行时生成 footprint 并下发 URDF/TF/控制器；规划器运动学和限速等调参仍在 Nav2 profile。
 - **人工接管**：Web 只切换 gate 接受的速度源，不取消当前 Nav2 goal；点击
   “恢复自动导航”后 Nav2 继续输出。manual 模式浏览器断连时，0.5 秒源超时停车。
 
@@ -45,6 +46,37 @@ ros2 launch system_bringup bringup.launch.py
 # 2) 锁定 GICP：RViz「2D Pose Estimate」(/initialpose) 设到机器人真实 map 位姿，等 /localization 稳定
 ```
 
+## 真机配置与验收边界
+
+真机车体、车轮和雷达安装位置已按人工测量写入 `bringup.yaml:real_geometry`；完整 bringup
+会生成实际 footprint、轮参和 TF。雷达坐标原点目前按外壳中线估计，垂直 FOV、STVL
+障碍高度带及雷达/内置 IMU 精确外参仍待厂家资料和现场验证，因此这些仍不是最终标定值。
+
+真机**静态**验收使用 `platform: real`、`mode: navigation` 后启动完整 bringup，并检查：
+
+```bash
+ros2 launch system_bringup bringup.launch.py
+timeout 10 ros2 topic hz /Odometry
+timeout 10 ros2 topic hz /cloud_registered
+timeout 10 ros2 topic hz /localization
+timeout 10 ros2 topic hz /base_controller/odom
+timeout 5 ros2 run tf2_ros tf2_echo map base_footprint
+ros2 lifecycle get /map_server
+ros2 lifecycle get /planner_server
+ros2 lifecycle get /controller_server
+ros2 lifecycle get /behavior_server
+ros2 lifecycle get /bt_navigator
+```
+
+静态判据：Vanjee → FAST-LIO → GICP/base odom → Nav2 按序放行；`map → camera_init → body
+→ base_footprint → base_link → velodyne/imu_link` 连通；五个 Nav2 lifecycle 节点均为
+`active`；先验点云、地图和 costmap 能加载。小车保持静止，不发送 Nav2 goal。这些
+FAST-LIO/GICP/Nav2 的新一体化真机运行检查目前仍为 **待完成**。
+
+**动态行驶验收另行进行，不能从静态检查推断 PASS。** 它包括最终外参与 IMU 正负轴验证、
+FAST-LIO 去畸变和行驶轨迹、GICP fitness/错误初值恢复与 `/initialpose` 重定位、Nav2
+路径跟踪、障碍 mark/clear 和控制输出实际驱动车轮。仅在小车具备安全运动条件后执行。
+
 手机访问 `http://<机器人或仿真主机IP>:8080`
 
 - mapping：点击“人工接管”后按住方向按钮驾驶
@@ -55,7 +87,7 @@ ros2 launch system_bringup bringup.launch.py
 
 ## 验收判据（PASS → 5e 完成）
 1. 五个 nav 生命周期节点全 active（`ros2 lifecycle get /bt_navigator` 等）；启动无报错。
-2. TF `map→camera_init→body→base_footprint` 全链通；`tf2_echo map base_footprint` 随车动、**旋转≈单位阵**（关键:没踩 pitch=π）。z≈**-0.56**(正常):SLAM 的 `map` 原点 z=0 在**传感器高度**(非地面),故 base_footprint=传感器-0.556≈-0.56=落在地面;若 z≈**+0.5** 则 weld_z 符号反了(车悬空)。
+2. TF `map→camera_init→body→base_footprint` 全链通；`tf2_echo body base_footprint`：仿真约 `[0,0,-0.556]`，当前真机约 `[-0.443,0,-0.905]`，旋转均为单位阵。
 3. frame 校验(global_frame 在内嵌 costmap 子节点上,不在 server 节点本身——查 `/controller_server`/`/planner_server` 会回 "Parameter not set",正常):
    `ros2 param get /behavior_server global_frame`=`camera_init`；
    `ros2 param get /local_costmap/local_costmap global_frame`=`camera_init`；

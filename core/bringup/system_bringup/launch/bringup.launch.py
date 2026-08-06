@@ -1,7 +1,7 @@
 """全栈启动。config/bringup.yaml 选 platform(sim/real) + mode(nav/map),改 config 不 rebuild。
 
 唯一入口:ros2 launch system_bringup bringup.launch.py
-流程:① 一致性闸门(失败即中止)② 底层(platform=sim: robot_gz; platform=real: 骨架 TODO)
+流程:① 一致性闸门(失败即中止)② 底层(platform=sim: robot_gz; platform=real: chassis+Vanjee)
 ③ ready_gate 等 lidar(+ sim controller)④ slam_stack(mode=navigation: fast_lio→gicp→nav2;
 mode=mapping: lio_sam)。
 切 platform/mode 改 config/bringup.yaml 顶层两行即可,不用 rebuild。
@@ -11,11 +11,23 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import (IncludeLaunchDescription, LogInfo, OpaqueFunction)
+from launch.actions import (
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+    RegisterEventHandler,
+)
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 from system_bringup import consistency_check
+from system_bringup.consistency_check import (
+    derive_real_geometry,
+    real_geometry_launch_arguments,
+    require_runtime_config_file,
+    write_real_runtime_configs,
+)
 from system_bringup.ready_gate import ready_gate
 
 
@@ -23,6 +35,38 @@ def _inc(pkg, rel, args=None):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(get_package_share_directory(pkg), rel)),
         launch_arguments=(args or {}).items())
+
+
+def _pkg_config(package, filename):
+    return os.path.join(get_package_share_directory(package), "config", filename)
+
+
+def _abort_real_sensor_gate(context, *args, **kwargs):
+    raise RuntimeError(
+        "真实传感器 gate 未通过；详细原因见 real_sensor_ready_gate 日志，"
+        "已中止整个 launch。"
+    )
+
+
+def _real_sensor_gate(then_actions):
+    waiter = Node(
+        package="system_bringup",
+        executable="real_sensor_ready_gate",
+        name="real_sensor_ready_gate",
+        output="screen",
+        parameters=[{"timeout": 300.0}],
+    )
+    handler = RegisterEventHandler(
+        OnProcessExit(
+            target_action=waiter,
+            on_exit=lambda event, context: (
+                then_actions
+                if event.returncode == 0
+                else [OpaqueFunction(function=_abort_real_sensor_gate)]
+            ),
+        )
+    )
+    return [waiter, handler]
 
 
 def _bringup(context, *args, **kwargs):
@@ -38,12 +82,28 @@ def _bringup(context, *args, **kwargs):
     if failures:
         raise RuntimeError("一致性闸门未通过(已中止,未启动任何节点):\n" + "\n".join(failures))
 
+    profile = stack_cfg[platform]
+    if mode == "mapping":
+        require_runtime_config_file(
+            _pkg_config("lio_sam", profile["lio_sam"]["config"]),
+            "LIO-SAM",
+        )
+    else:
+        require_runtime_config_file(
+            _pkg_config("fast_lio", profile["fast_lio"]["config"]),
+            "FAST-LIO",
+        )
     slam_stack = _inc(
         "system_bringup", "launch/slam_stack.launch.py",
         {"mode": mode, "use_sim_time": use_sim,
-         "fast_lio_config": stack_cfg["fast_lio"]["config"],
-         "prior_map_path": stack_cfg["gicp_localization"]["prior_map_path"],
-         "nav_map": stack_cfg["robot_navigation"]["map"],
+         "lio_sam_params_file": _pkg_config("lio_sam", profile["lio_sam"]["config"]),
+         "fast_lio_config": profile["fast_lio"]["config"],
+         "gicp_config_file": _pkg_config(
+             "gicp_localization", profile["gicp_localization"]["config"]),
+         "prior_map_path": profile["gicp_localization"]["prior_map_path"],
+         "nav2_params_file": _pkg_config(
+             "robot_navigation", profile["robot_navigation"]["config"]),
+         "nav_map": profile["robot_navigation"]["map"],
          "cmd_vel_output_topic": "/cmd_vel_auto",
          "settling": str(stack_cfg["settling"])})
 
@@ -84,17 +144,66 @@ def _bringup(context, *args, **kwargs):
             settling=stack_cfg["settling"])
 
     if platform == "real":
-        actions = [
+        runtime_paths = write_real_runtime_configs(repo_root, cfg)
+        geometry_arguments = real_geometry_launch_arguments(
+            derive_real_geometry(cfg)
+        )
+        # 覆盖上面的共享默认：真机 Nav2 参数和 body 焊接均由 real_geometry 派生。
+        slam_stack = _inc(
+            "system_bringup", "launch/slam_stack.launch.py",
+            {"mode": mode, "use_sim_time": use_sim,
+             "lio_sam_params_file": _pkg_config("lio_sam", profile["lio_sam"]["config"]),
+             "fast_lio_config": profile["fast_lio"]["config"],
+             "gicp_config_file": _pkg_config(
+                 "gicp_localization", profile["gicp_localization"]["config"]),
+             "prior_map_path": profile["gicp_localization"]["prior_map_path"],
+             "nav2_params_file": str(runtime_paths["nav2"]),
+             "nav_map": profile["robot_navigation"]["map"],
+             "cmd_vel_output_topic": "/cmd_vel_auto",
+             "settling": str(stack_cfg["settling"]),
+             "weld_x": geometry_arguments["navigation"]["weld_x"],
+             "weld_y": geometry_arguments["navigation"]["weld_y"],
+             "weld_z": geometry_arguments["navigation"]["weld_z"],
+             "weld_roll": geometry_arguments["navigation"]["weld_roll"],
+             "weld_pitch": geometry_arguments["navigation"]["weld_pitch"],
+             "weld_yaw": geometry_arguments["navigation"]["weld_yaw"]})
+        vanjee_config = _pkg_config(
+            "vanjee_lidar_ros", cfg["vanjee_lidar"]["config"]
+        )
+        chassis = _inc(
+            "robot_bringup",
+            "launch/real_chassis.launch.py",
+            {"gui": "false",
+             "controllers_file": str(runtime_paths["controllers"]),
+             "base_length": geometry_arguments["robot"]["base_length"],
+             "base_width": geometry_arguments["robot"]["base_width"],
+             "base_height": geometry_arguments["robot"]["base_height"],
+             "base_link_height": geometry_arguments["robot"]["base_link_height"],
+             "wheel_radius": geometry_arguments["robot"]["wheel_radius"],
+             "wheel_width": geometry_arguments["robot"]["wheel_width"],
+             "wheel_separation": geometry_arguments["robot"]["wheel_separation"],
+             "sensor_x": geometry_arguments["robot"]["sensor_x"],
+             "sensor_y": geometry_arguments["robot"]["sensor_y"],
+             "sensor_z": geometry_arguments["robot"]["sensor_z"],
+             "sensor_roll": geometry_arguments["robot"]["sensor_roll"],
+             "sensor_pitch": geometry_arguments["robot"]["sensor_pitch"],
+             "sensor_yaw": geometry_arguments["robot"]["sensor_yaw"]},
+        )
+        lidar = _inc(
+            "vanjee_lidar_ros",
+            "launch/vanjee_lidar.launch.py",
+            {"config_file": vanjee_config},
+        )
+        flow_log = [
             flow("一致性闸门通过 | platform=real | mode=%s | config=源码 bringup.yaml(改它不 rebuild)" % mode),
-            flow("① 真机底层未实现(骨架);上真机时在此 include robot_bringup(真实硬件)+ velodyne/imu 驱动"),
+            flow("① 起真实底盘+Vanjee 722 → 真实传感器 gate 连续验收 2s → 起共享 slam_stack"),
         ]
-        # TODO(真机): 取消下行注释并补真机底层 ——
-        #   robot_bringup robot.launch.py use_mock_hardware:=false + 真实 velodyne/imu 驱动节点。
-        # actions.append(_inc("robot_bringup", "launch/robot.launch.py",
-        #     {"use_mock_hardware": str(cfg["robot_bringup"].get("use_mock_hardware", False))}))
-        actions += ready_gate("/points_raw", 300.0, "真机 velodyne→/points_raw",
-                              [slam_stack], settling=stack_cfg["settling"])
-        return control_layer + actions
+        return (
+            control_layer
+            + flow_log
+            + [chassis, lidar]
+            + _real_sensor_gate([slam_stack])
+        )
 
     raise RuntimeError("未知 platform='%s'(应为 sim|real)" % platform)
 

@@ -67,6 +67,10 @@ def generate_launch_description():
         'auto_enable_on_start', default_value='true',
         description='Auto-enable motors on node start (true/false)')
 
+    log_level_arg = DeclareLaunchArgument(
+        'log_level', default_value='info',
+        description='ROS log level for the vendor driver process')
+
     # -------------------------------------------------------------------------
     # Node Definition
     # -------------------------------------------------------------------------
@@ -74,7 +78,8 @@ def generate_launch_description():
         package='can_driver',
         executable='can_driver_8030',
         name='can_driver_8030',
-        output='screen',
+        output='log',
+        ros_arguments=['--log-level', LaunchConfiguration('log_level')],
         parameters=[
             LaunchConfiguration('config_file'),
             {
@@ -102,5 +107,6 @@ def generate_launch_description():
         can_channel_arg,
         motor_speed_max_arg,
         auto_enable_arg,
+        log_level_arg,
         can_driver_node,
     ])

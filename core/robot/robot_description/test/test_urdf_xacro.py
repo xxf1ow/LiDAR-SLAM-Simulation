@@ -82,3 +82,46 @@ def test_xacro_expands_to_valid_urdf(use_gazebo, use_mock_hardware):
         subprocess.check_call([check_urdf, path])
     finally:
         os.remove(path)
+
+
+def test_real_geometry_arguments_place_body_wheels_and_sensor():
+    xacro_bin = shutil.which("xacro")
+    assert xacro_bin, "xacro 不在 PATH"
+    urdf = subprocess.check_output(
+        [
+            xacro_bin, XACRO,
+            "use_gazebo:=false",
+            "use_mock_hardware:=false",
+            "base_length:=0.960",
+            "base_width:=0.610",
+            "base_height:=0.377",
+            "base_link_height:=0.3315",
+            "wheel_radius:=0.1025",
+            "wheel_width:=0.101",
+            "wheel_separation:=0.463",
+            "sensor_x:=0.443",
+            "sensor_y:=0.0",
+            "sensor_z:=0.5735",
+            "sensor_roll:=0.0",
+            "sensor_pitch:=0.0",
+            "sensor_yaw:=0.0",
+        ],
+        text=True,
+    )
+    root = ET.fromstring(urdf)
+
+    def origin(joint_name):
+        return root.find(f"./joint[@name='{joint_name}']/origin").attrib
+
+    def numbers(value):
+        return pytest.approx([float(item) for item in value.split()])
+
+    assert numbers(root.find(
+        "./link[@name='base_link']/collision/geometry/box"
+    ).attrib["size"]) == [0.960, 0.610, 0.377]
+    assert numbers(origin("base_footprint_joint")["xyz"]) == [0.0, 0.0, 0.3315]
+    assert numbers(origin("left_wheel_joint")["xyz"]) == [0.0, 0.2315, -0.229]
+    assert numbers(origin("right_wheel_joint")["xyz"]) == [0.0, -0.2315, -0.229]
+    assert numbers(origin("velodyne_joint")["xyz"]) == [0.443, 0.0, 0.5735]
+    assert numbers(origin("velodyne_joint")["rpy"]) == [0.0, 0.0, 0.0]
+    assert origin("imu_joint") == origin("velodyne_joint")

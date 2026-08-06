@@ -62,6 +62,22 @@
 ### D. 定位鲁棒性
 
 - [ ] 全局重定位（如 Quatro 前端） — **已知问题**：GICP 是局部配准，大偏差 / ~90° 不自动恢复，现靠手动 `/initialpose` 引导。
+- [ ] GICP readiness 使用话题存在性代替真实配准状态 — **问题定义**：`system_bringup` 当前只等待
+  `/localization` 发布端出现；该发布端在 GICP 节点初始化时就已创建，即使尚无一次
+  `fitness >= fitness_threshold` 的有效配准，gate 也会放行 Nav2。表现为 Nav2 已 active，但
+  `map → camera_init` 仍可能只是初始值，代价地图和规划所在的全局位姿不可信。**解决思路**：
+  由 GICP 在首次接受配准后发布一次持久化 ready 状态，bringup 改为等待该状态和底盘里程计，
+  后续定位跌落另由健康监控处理。**只记录不解决的原因**：Nav2 启动后不会自行运动，当前可在
+  下发目标前人工确认配准点云已贴合先验图；未贴合时重新设置 `/initialpose`。现阶段不依赖反复
+  重启绕过，待全链路实机验收证明启动竞态确实造成问题后再增加 readiness 协议。
+- [ ] `/initialpose` 的机器人基准帧语义不一致 — **问题定义**：RViz「2D Pose Estimate」表达
+  `map → base_footprint`，当前 GICP 却把它直接当作 `map → body`，再结合 FAST-LIO 的
+  `camera_init → body` 计算初值。真机 `body → base_footprint` 存在固定偏移时，表现为箭头位置
+  和方向看似正确，但 GICP seed 带有固定平移偏差，可能导致 fitness 偏低或需要反复调整初值。
+  **解决思路**：读取或显式传入 `body → base_footprint` 外参，先把输入转换为 `map → body`，
+  再计算 `map → camera_init`，并分别验证 sim/real。**只记录不解决的原因**：该问题只影响人工
+  重定位初值，不影响已经锁定后的持续定位；当前可以通过再次调整 `/initialpose` 绕过，修改还需
+  明确输入 `frame_id`、外参来源和两套平台的兼容行为，遇到实际阻塞后再处理。
 - [ ] 退化检测与告警：长走廊、空旷等几何退化场景的自动识别。
 - [ ] 定位协方差/不确定度输出，供导航与决策使用。
 - [ ] 自动 bootstrap：基于真值或上次关机位姿的自动初始化。
