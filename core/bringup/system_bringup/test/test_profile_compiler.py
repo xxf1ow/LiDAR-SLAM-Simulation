@@ -41,6 +41,20 @@ def _pair(config_path):
     }
 
 
+def test_load_bringup_context_returns_source_config_and_selection(tmp_path):
+    config = _selection(tmp_path, "sim")
+
+    source, parsed, platform, paths = pc.load_bringup_context(config)
+
+    assert source == config.resolve()
+    assert parsed["platform"] == "sim"
+    assert platform == "sim"
+    assert paths == {
+        "sim": (tmp_path / "profiles" / "sim.yaml").resolve(),
+        "real": (tmp_path / "profiles" / "real.yaml").resolve(),
+    }
+
+
 @pytest.mark.parametrize("platform", ["sim", "real"])
 def test_load_selection_resolves_profiles_from_config_directory(
     tmp_path, monkeypatch, platform

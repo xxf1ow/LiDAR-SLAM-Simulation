@@ -102,8 +102,7 @@ def _read_yaml_mapping(path, label):
     return source, value
 
 
-def load_bringup_selection(path):
-    source, config = _read_yaml_mapping(path, "bringup config")
+def _validate_bringup_selection(source, config):
     platform = config.get("platform")
     if platform not in ("sim", "real") or isinstance(platform, bool):
         raise ValueError(f"{source}: platform must be 'sim' or 'real'")
@@ -138,6 +137,18 @@ def load_bringup_selection(path):
         if not resolved.is_file():
             raise ValueError(f"{source}: profiles.{name} does not exist: {resolved}")
         paths[name] = resolved
+    return platform, paths
+
+
+def load_bringup_context(path):
+    """Return (resolved_source, parsed_mapping, platform, profile_paths)."""
+    source, config = _read_yaml_mapping(path, "bringup config")
+    platform, paths = _validate_bringup_selection(source, config)
+    return source, config, platform, paths
+
+
+def load_bringup_selection(path):
+    _, _, platform, paths = load_bringup_context(path)
     return platform, paths
 
 
