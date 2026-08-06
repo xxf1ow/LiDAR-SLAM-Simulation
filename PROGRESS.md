@@ -18,6 +18,9 @@ YAML template 保留算法配置，由 `system_bringup` 在启动前结构化生
 - Profile 只保存机器人事实、平台差异和必须跨模块一致的策略。
 - 本机器人使用的模块原生 YAML template 集中放在 `system_bringup`；模块内部算法细节
   归对应 template 所有，不复制进中央 Profile。
+- 同一模块使用同一可执行程序和同一原生 schema 时，默认只保留一份共享完整 template，
+  不按 sim/real 拆分；平台事实和跨模块统一值由 Profile/compiler 注入。只有 backend 或
+  原生 schema 确实不同，才允许分开 template。
 - 固定 topic/frame、驱动协议换算和设备内部极限不是可调 Profile 字段。
 - Profile 中的运动参数就是系统实际采用的统一限制，不重复维护“实际值/硬上限”两套值；
   Web UI 只允许用户在此范围内运行时调速。
@@ -27,7 +30,13 @@ YAML template 保留算法配置，由 `system_bringup` 在启动前结构化生
 - 最终配置生成到 `/tmp`，不跟踪、不回写源码、不修改安装目录。
 - `platform:=sim|real` 负责选择 Profile；`mode:=mapping|navigation` 保持独立。
 - `use_sim_time` 是派生的 ROS 参数，不作为平台选择开关。
+- 源码 `system_bringup/config/bringup.yaml` 继续是正式运行时选择入口；修改选择后无需
+  rebuild，Profile 和 templates 均相对该文件解析。
+- real 配置迁移不顺带试验新参数；sim 参数只要不造成重大行为影响，可以为架构一致性
+  调整，不要求机械保持旧默认值。
 - 每个迁移小节都必须保持未迁移模块的现有行为。
+- 允许实施过程中的中间提交暂时不可运行；每个验收单元结束时必须方向完整、主动路径唯一
+  且通过该单元 gate。Git 历史用于回退，不作为保留旧 runtime fallback 的理由。
 - 严禁使用 git worktree。
 
 ## 状态说明
@@ -269,6 +278,16 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 - 正式 bringup 未接入该编译器，仍使用既有 real 几何派生与运行时生成路径，原启动行为
   保持不变。
 
+实现提交后的审查发现并已补齐两项 hardening：
+
+- Profile 相对路径校验增加与宿主无关的 Windows drive/anchor 检测，避免 Ubuntu 将
+  `C:profile.yaml` 当成普通相对文件名。
+- 数值叶节点统一拒绝无法安全参与浮点派生的超大整数；CLI 对极大正整数返回既有单行
+  validation error，不泄漏 `OverflowError` traceback。
+
+两项修复不改变第 2 节架构和正常 sim/real 结果；对应回归和完整 `system_bringup` 测试
+已通过。Ubuntu/Humble 的 colcon 验证仍按后续实施 gate 在目标构建机执行。
+
 本地设计产物：`docs/superpowers/specs/2026-08-06-profile-compiler-skeleton-design.md`
 （按用户要求不加入 Git 提交）。
 
@@ -277,8 +296,71 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 目的：统一轮径、轮宽、轮距和系统实际采用的速度/加速度限制；Web UI 允许用户在该
 范围内运行时调速。设备协议换算、左右轮符号和设备内部极限继续归驱动代码所有。
 
-完成条件：controller、Web UI 和 Nav2 的同义通用限制来自同一 Profile；各模块不同
-语义的行为参数不被错误合并；仿真与真机可分别构建、静态检查。
+本节拆成两个顺序验收单元。3A 严格依赖第 2 节审查修正完成；3B 严格依赖 3A。中间提交
+可以不可运行，但不得把旧路径保留为失败 fallback。
+
+#### [ ] 3A. Profile runtime 配置生成
+
+目的：只完成生成层，不接入正式 `bringup.launch.py`。
+
+- 将两份 Profile 的 motion 固定为：
+  - sim：线速度 `1.0 m/s`、角速度 `1.8 rad/s`、线加速度 `1.0 m/s²`、角加速度
+    `1.0 rad/s²`；
+  - real：线速度 `1.0 m/s`、角速度 `0.4 rad/s`、线加速度 `1.0 m/s²`、角加速度
+    `0.3 rad/s²`。
+- 在 `system_bringup/config/templates/` 建立共享完整的 controller、Web UI、Nav2 原生
+  templates；不区分 sim/real，不使用 overlay/Jinja2/字符串替换。
+- 保持第 2 节 `compile_profile()` 和原 CLI 的 report-only 契约；新增独立
+  `compile_runtime_configs()` 与单独 CLI。
+- 一次编译当前 platform，在唯一 `/tmp/system_bringup-runtime-*` 目录生成 controller、
+  Web UI、Nav2 和 runtime effective report 四份文件；Python manifest 作为进程内接口，
+  不增加第五份文件。effective report 最后写入并作为完整生成标记。
+- controller 注入轮径、轮距和对称正负线/角速度、加速度；轮宽只进入 Xacro manifest，
+  不虚构 controller 字段。
+- Web UI 的最大线/角速度来自 Profile，100% 对应 Profile 上限。
+- 目标 ROS 2 Humble MPPI 只注入其实际读取的 `vx_max/wz_max`；不写
+  `ax_max/ax_min/az_max`。Profile 加速度由 ros2_control 最终执行，目标机构建版本能力与
+  规划—执行偏差留到第 9 节。
+- global/local costmap footprint 由 Profile extents 派生，并保持当前 Nav2 原生字符串
+  参数类型；障碍高度、STVL、inflation 和 `consider_footprint` 仍留到第 8 节。
+- 生成临时 `compatibility.body_to_base_footprint`：在“FAST-LIO `body` 与 LiDAR 原点
+  重合”假设下，对 `base_footprint -> lidar` 做完整 SE(3) 求逆，输出 translation +
+  quaternion，不把它混入已确认的 `derived.geometry`。
+- real 的旧 Spin/behavior server 数值暂时保留并作为跨节 debt 报告，不在配置迁移中
+  顺带调参；`cmd_vel_gate` 仍只负责路由和 timeout，不新增第二层 limiter。
+
+3A 完成条件：正式 bringup 及旧配置字节不变；sim/real 均从同一组三份 templates 生成
+四份可加载产物；第 2 节接口回归、字段精确映射、跨平台隔离、非零 weld 逆变换和静态
+一致性测试全部通过。
+
+详细设计：
+`docs/superpowers/specs/2026-08-06-profile-runtime-config-generation-design.md`。
+
+#### [ ] 3B. 正式 bringup 切换
+
+目的：只消费 3A 已验收的 runtime manifest，重写主动 bringup 编排并完成动态验收。
+
+- 正式 launch 只读取一次源码 `bringup.yaml`、只调用一次 runtime compiler；后续 platform、
+  mode、配置路径和几何全部读取同一 manifest，不重新寻找仓库或读取 config。
+- 主动流程重写为“编译并校验 → shared control layer → shared SLAM stack → sim/real backend
+  → 原 readiness gate”，不再先建 sim 默认再在 real 分支复制覆盖。
+- Web UI/Nav2 直接加载 generated YAML；sim/real robot launch 都接收同一 manifest 的
+  controller 绝对路径和对应 Profile 几何。Gazebo ros2_control plugin 允许直接读取
+  `/tmp` controller 文件。
+- `navigation.launch.py` 的临时 weld 改用 `qx/qy/qz/qw`；正式 bringup 总是显式传值，
+  launch 独立调用时保留当前 sim 默认。
+- 新主动路径不得导入或调用 `derive_real_geometry()`、`build_real_runtime_configs()`、
+  `write_real_runtime_configs()`、`real_geometry_launch_arguments()`；旧代码和旧配置暂不删除，
+  只作为第 10 节删除审查对象，不是 fallback。
+- mapping/navigation 的模块顺序、topic/frame、自动/人工 gate、timeout、settling 和退出
+  语义保持现状；所有编译/一致性失败发生在创建运动节点前。
+
+3B 完成条件：静态拓扑证明 compiler 只调用一次且旧 generator 不可达；sim
+navigation/mapping 动态冒烟通过；real generated 配置、fake/mock hardware 与既有链回归
+通过；无人看护 real 动态运动不属于本节。
+
+详细设计：
+`docs/superpowers/specs/2026-08-06-profile-runtime-bringup-cutover-design.md`。
 
 ### [ ] 4. 雷达、IMU 与传感器契约
 
@@ -293,8 +375,12 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 目的：从 Profile 注入真实/仿真的传感器契约、时间同步和明确需要跨模块一致的参数；
 滤波、迭代等 FAST-LIO 内部调参仍留在模板。
 
+本节必须正式确认 FAST-LIO `body` frame 的物理含义，以及 LiDAR/IMU 外参的方向约定；
+据此确认、改正或删除 3A 引入的 `compatibility.body_to_base_footprint`。不得把临时
+“`body` 与 LiDAR 原点重合”假设静默升级为 Profile 事实。
+
 完成条件：两平台生成原生 FAST-LIO YAML；现有仿真行为不变，真机点云时间与里程计
-契约可单独验收。
+契约可单独验收；compatibility weld 已有明确的最终归属或消除方案。
 
 ### [ ] 6. GICP 配置迁移
 
@@ -323,11 +409,15 @@ Profile 获取，现有地图不会被测试过程覆盖。
 
 ### [ ] 9. Nav2 规划、控制与恢复
 
-目的：将 Profile 的通用运动限制注入同义参数；MPPI 采样、倒车、Spin 恢复和 Critic
-等不同语义的行为参数继续归中央 Nav2 template。
+目的：3A 已注入通用速度限制，本节不重复迁移。先记录目标构建机
+`nav2_mppi_controller` 的实际版本和参数能力，再审查 Humble MPPI 缺少加速度建模时与
+ros2_control 最终限幅的偏差；MPPI `vx_min`/采样、倒车、Spin 恢复、Critic 等不同语义
+的行为参数继续归中央 Nav2 template。
 
 完成条件：规划器、MPPI、底盘和恢复动作不存在互相矛盾的运动能力；保留当前已经实机
-验证的柔和转向与受阻行为。
+验证的柔和转向与受阻行为。real 应恢复并有人看护验证已记录的 `vx_min=-0.1`、
+`wz_std=0.2`、Spin `max/min=0.2/0.1 rad/s`、Spin `acc=0.2 rad/s²`；不得仅依靠
+controller clamp 掩盖 behavior server 或规划器的语义冲突。
 
 ### [ ] 10. 全链路切换、验收与文档收尾
 
@@ -358,5 +448,6 @@ Profile 获取，现有地图不会被测试过程覆盖。
 
 ## 下一步
 
-第 2 节已完成。下一步在用户确认后只进入第 3 节底盘、ros2_control 与手动控制的详细
-讨论；不提前迁移后续模块参数。
+第 2 节已完成并补齐实施后审查发现的 hardening。下一步进入 3A，只实现 runtime 配置
+生成和静态验收；3A 验收后再进入 3B 正式 bringup 切换，不提前迁移第 4 节及以后模块
+参数。

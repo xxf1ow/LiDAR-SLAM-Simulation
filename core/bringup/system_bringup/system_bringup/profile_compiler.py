@@ -3,7 +3,7 @@ import copy
 import math
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import yaml
 
@@ -127,7 +127,12 @@ def load_bringup_selection(path):
         if not isinstance(raw, str) or not raw.strip():
             raise ValueError(f"{source}: profiles.{name} must be a non-empty string")
         relative = Path(raw)
-        if relative.is_absolute() or relative.anchor or relative.drive:
+        if (
+            relative.is_absolute()
+            or relative.anchor
+            or relative.drive
+            or PureWindowsPath(raw).anchor
+        ):
             raise ValueError(f"{source}: profiles.{name} must be relative")
         resolved = (source.parent / relative).resolve()
         if not resolved.is_file():
@@ -175,8 +180,13 @@ def _validate_node(value, schema, source, path=()):
         raise ValueError(f"{source}: {_field_name(path)} must have type {expected}")
     if isinstance(value, str) and not value.strip():
         raise ValueError(f"{source}: {_field_name(path)} must be non-empty")
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError(f"{source}: {_field_name(path)} must be finite")
+    if isinstance(value, (int, float)):
+        try:
+            finite = math.isfinite(value)
+        except OverflowError:
+            finite = False
+        if not finite:
+            raise ValueError(f"{source}: {_field_name(path)} must be finite")
 
 
 def _leaf_paths(value, prefix=()):

@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 import yaml
@@ -98,6 +98,26 @@ def test_rooted_or_drive_relative_profile_path_fails(tmp_path, profile_path):
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     config["profiles"]["real"] = profile_path
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    with pytest.raises(ValueError, match=r"profiles\.real must be relative$"):
+        pc.load_bringup_selection(config_path)
+
+
+def test_windows_drive_relative_path_fails_under_posix_path_semantics(
+    tmp_path, monkeypatch
+):
+    config_path = _selection(tmp_path)
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["profiles"]["real"] = "C:profile.yaml"
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    native_path = pc.Path
+
+    def posix_path_for_windows_drive(value):
+        if value == "C:profile.yaml":
+            return PurePosixPath(value)
+        return native_path(value)
+
+    monkeypatch.setattr(pc, "Path", posix_path_for_windows_drive)
 
     with pytest.raises(ValueError, match=r"profiles\.real must be relative$"):
         pc.load_bringup_selection(config_path)
@@ -426,6 +446,28 @@ def test_cli_reports_legal_yaml_validation_errors_without_traceback(
     assert captured.err.startswith("profile compilation failed: ")
     assert expected in captured.err
     assert captured.err.count("\n") == 1
+    assert "Traceback" not in captured.err
+
+
+def test_cli_rejects_extremely_large_positive_integer_without_traceback(
+    tmp_path, capsys
+):
+    config = _selection(tmp_path)
+    real_path = tmp_path / "profiles" / "real.yaml"
+    real = yaml.safe_load(real_path.read_text(encoding="utf-8"))
+    real["robot"]["body"]["front_extent"] = 10**1000
+    real_path.write_text(yaml.safe_dump(real, sort_keys=False), encoding="utf-8")
+
+    try:
+        result = pc.main(["--bringup-config", str(config)])
+    except Exception as exc:
+        pytest.fail(f"CLI leaked {type(exc).__name__}: {exc}")
+    captured = capsys.readouterr()
+
+    assert result == 1
+    assert captured.out == ""
+    assert "front_extent" in captured.err
+    assert "finite" in captured.err
     assert "Traceback" not in captured.err
 
 
