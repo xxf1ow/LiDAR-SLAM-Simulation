@@ -1,6 +1,5 @@
 from copy import deepcopy
 from math import isfinite
-from pathlib import Path
 
 from system_bringup import profile_compiler as pc
 
