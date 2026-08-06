@@ -160,3 +160,147 @@ def test_missing_or_extra_schema_key_fails(tmp_path, mutation, expected):
 def test_allowed_null_fields_pass_schema_validation(tmp_path):
     pair = _pair(_selection(tmp_path))
     pc.validate_profile_pair(pair)
+
+
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        (("robot", "body", "front_extent"), 0.0),
+        (("robot", "body", "rear_extent"), -0.1),
+        (("robot", "body", "left_extent"), 0.0),
+        (("robot", "body", "right_extent"), -0.1),
+        (("robot", "body", "height"), 0.0),
+        (("robot", "body", "ground_clearance"), -0.001),
+        (("robot", "drive", "wheel_radius"), 0.0),
+        (("robot", "drive", "wheel_width"), -0.1),
+        (("robot", "drive", "wheel_separation"), 0.0),
+        (("sensors", "lidar", "scan_lines"), 0),
+        (("sensors", "lidar", "columns_per_scan"), -1),
+        (("sensors", "lidar", "scan_rate_hz"), 0.0),
+    ],
+)
+def test_nonphysical_derived_input_fails(tmp_path, path, value):
+    pair = _pair(_selection(tmp_path))
+    node = pair["real"][1]
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+
+    with pytest.raises(ValueError, match=path[-1]):
+        pc.validate_profile_pair(pair)
+
+
+def test_nonzero_mount_rotation_is_valid(tmp_path):
+    pair = _pair(_selection(tmp_path))
+    pair["real"][1]["robot"]["mounts"]["lidar"]["yaw"] = 1.5707963267948966
+    pc.validate_profile_pair(pair)
+
+
+@pytest.mark.parametrize(
+    "platform,expected_points,expected_period",
+    [("sim", 28800, 0.1), ("real", 38400, 0.1)],
+)
+def test_compile_profile_derives_sensor_contract(
+    tmp_path, platform, expected_points, expected_period
+):
+    config = _selection(tmp_path, platform)
+    output = tmp_path / "output"
+    path = pc.compile_profile(config, output)
+    data = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    assert path == output / "effective_profile.generated.yaml"
+    assert data["platform"] == platform
+    assert data["source_profile"] == str(
+        (tmp_path / "profiles" / f"{platform}.yaml").resolve()
+    )
+    assert data["derived"]["use_sim_time"] is (platform == "sim")
+    assert data["derived"]["sensor_contract"] == {
+        "points_per_scan": expected_points,
+        "scan_period": expected_period,
+    }
+
+
+def test_real_derived_geometry_matches_confirmed_legacy_baseline(tmp_path):
+    path = pc.compile_profile(_selection(tmp_path, "real"), tmp_path / "out")
+    geometry = yaml.safe_load(path.read_text(encoding="utf-8"))["derived"]["geometry"]
+
+    assert geometry["body"] == {
+        "length": 0.96,
+        "width": 0.61,
+        "height": 0.377,
+        "center_x": 0.0,
+        "center_y": 0.0,
+        "base_link_height": 0.3315,
+    }
+    assert geometry["drive"] == {
+        "wheel_radius": 0.1025,
+        "wheel_width": 0.101,
+        "wheel_separation": 0.463,
+    }
+    assert geometry["footprint"] == [
+        [0.480, 0.305],
+        [0.480, -0.305],
+        [-0.480, -0.305],
+        [-0.480, 0.305],
+    ]
+    assert geometry["mounts_relative_to_base_link"]["lidar"] == {
+        "x": 0.443,
+        "y": 0.0,
+        "z": 0.5735,
+        "roll": 0.0,
+        "pitch": 0.0,
+        "yaw": 0.0,
+    }
+
+
+def test_sim_derived_geometry_matches_current_xacro(tmp_path):
+    path = pc.compile_profile(_selection(tmp_path, "sim"), tmp_path / "out")
+    geometry = yaml.safe_load(path.read_text(encoding="utf-8"))["derived"]["geometry"]
+    assert geometry["body"]["length"] == 0.75
+    assert geometry["body"]["width"] == 0.55
+    assert geometry["body"]["base_link_height"] == 0.32
+    assert geometry["drive"]["wheel_radius"] == 0.12
+    assert geometry["drive"]["wheel_separation"] == 0.55
+    assert geometry["mounts_relative_to_base_link"]["lidar"]["z"] == pytest.approx(0.236)
+
+
+def test_automatic_output_uses_private_temp_directory(tmp_path, monkeypatch):
+    private = tmp_path / "private"
+
+    def fake_mkdtemp(prefix):
+        assert prefix == "system_bringup-profile-"
+        private.mkdir()
+        return str(private)
+
+    monkeypatch.setattr(pc.tempfile, "mkdtemp", fake_mkdtemp)
+    path = pc.compile_profile(_selection(tmp_path))
+    assert path == private / "effective_profile.generated.yaml"
+
+
+def test_explicit_output_overwrites_only_generated_file(tmp_path):
+    output = tmp_path / "output"
+    output.mkdir()
+    keep = output / "keep.txt"
+    keep.write_text("keep", encoding="utf-8")
+    generated = output / "effective_profile.generated.yaml"
+    generated.write_text("old", encoding="utf-8")
+
+    path = pc.compile_profile(_selection(tmp_path), output)
+
+    assert path == generated
+    assert keep.read_text(encoding="utf-8") == "keep"
+    assert yaml.safe_load(generated.read_text(encoding="utf-8"))["platform"] == "real"
+
+
+def test_failed_compilation_does_not_create_final_file(tmp_path):
+    config = _selection(tmp_path)
+    real_path = tmp_path / "profiles" / "real.yaml"
+    real = yaml.safe_load(real_path.read_text(encoding="utf-8"))
+    real["robot"]["body"]["front_extent"] = 0.0
+    real_path.write_text(yaml.safe_dump(real), encoding="utf-8")
+    output = tmp_path / "output"
+
+    with pytest.raises(ValueError, match="front_extent"):
+        pc.compile_profile(config, output)
+
+    assert not (output / "effective_profile.generated.yaml").exists()

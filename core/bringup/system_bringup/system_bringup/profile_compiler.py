@@ -1,4 +1,6 @@
+import copy
 import math
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -177,13 +179,124 @@ def _leaf_paths(value, prefix=()):
     yield prefix
 
 
+def _value_at(profile, path):
+    value = profile
+    for key in path:
+        value = value[key]
+    return value
+
+
+def _validate_semantics(profile, source):
+    positive = (
+        ("robot", "body", "front_extent"),
+        ("robot", "body", "rear_extent"),
+        ("robot", "body", "left_extent"),
+        ("robot", "body", "right_extent"),
+        ("robot", "body", "height"),
+        ("robot", "drive", "wheel_radius"),
+        ("robot", "drive", "wheel_width"),
+        ("robot", "drive", "wheel_separation"),
+        ("sensors", "lidar", "scan_lines"),
+        ("sensors", "lidar", "columns_per_scan"),
+        ("sensors", "lidar", "scan_rate_hz"),
+    )
+    for path in positive:
+        if _value_at(profile, path) <= 0:
+            raise ValueError(f"{source}: {_field_name(path)} must be > 0")
+    clearance_path = ("robot", "body", "ground_clearance")
+    if _value_at(profile, clearance_path) < 0:
+        raise ValueError(
+            f"{source}: {_field_name(clearance_path)} must be >= 0"
+        )
+
+
 def validate_profile_pair(profiles):
     if set(profiles) != {"sim", "real"}:
         raise ValueError("profile pair must contain exactly sim and real")
     for name in ("sim", "real"):
         source, profile = profiles[name]
         _validate_node(profile, _PROFILE_SCHEMA, Path(source))
+        _validate_semantics(profile, Path(source))
     sim_paths = set(_leaf_paths(profiles["sim"][1]))
     real_paths = set(_leaf_paths(profiles["real"][1]))
     if sim_paths != real_paths:
         raise ValueError("sim and real profiles must have identical leaf paths")
+
+
+def _mount_relative_to_base_link(mount, base_link_height):
+    result = copy.deepcopy(mount)
+    result["z"] = mount["z"] - base_link_height
+    return result
+
+
+def derive_effective_profile(platform, source_path, profile):
+    body = profile["robot"]["body"]
+    drive = profile["robot"]["drive"]
+    mounts = profile["robot"]["mounts"]
+    lidar = profile["sensors"]["lidar"]
+
+    front = body["front_extent"]
+    rear = body["rear_extent"]
+    left = body["left_extent"]
+    right = body["right_extent"]
+    base_link_height = body["ground_clearance"] + body["height"] / 2.0
+
+    geometry = {
+        "body": {
+            "length": front + rear,
+            "width": left + right,
+            "height": body["height"],
+            "center_x": (front - rear) / 2.0,
+            "center_y": (left - right) / 2.0,
+            "base_link_height": base_link_height,
+        },
+        "drive": copy.deepcopy(drive),
+        "footprint": [
+            [front, left],
+            [front, -right],
+            [-rear, -right],
+            [-rear, left],
+        ],
+        "mounts_relative_to_base_link": {
+            name: _mount_relative_to_base_link(mount, base_link_height)
+            for name, mount in mounts.items()
+        },
+    }
+    return {
+        "platform": platform,
+        "source_profile": str(Path(source_path).resolve()),
+        "profile": copy.deepcopy(profile),
+        "derived": {
+            "use_sim_time": platform == "sim",
+            "geometry": geometry,
+            "sensor_contract": {
+                "points_per_scan": (
+                    lidar["scan_lines"] * lidar["columns_per_scan"]
+                ),
+                "scan_period": 1.0 / lidar["scan_rate_hz"],
+            },
+        },
+    }
+
+
+def compile_profile(bringup_config_path, output_dir=None):
+    platform, paths = load_bringup_selection(bringup_config_path)
+    profiles = {
+        name: (path, load_profile(path))
+        for name, path in paths.items()
+    }
+    validate_profile_pair(profiles)
+    source, selected = profiles[platform]
+    effective = derive_effective_profile(platform, source, selected)
+
+    if output_dir is None:
+        directory = Path(tempfile.mkdtemp(prefix="system_bringup-profile-"))
+    else:
+        directory = Path(output_dir).expanduser().resolve()
+        directory.mkdir(parents=True, exist_ok=True)
+    output = directory / "effective_profile.generated.yaml"
+    output.write_text(
+        yaml.safe_dump(effective, sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    return output
