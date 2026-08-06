@@ -445,7 +445,7 @@ def run_runtime_consistency(repo_root, manifest):
             "sim": {"chassis": "gazebo", "lidar": "gazebo"},
             "real": {"chassis": "can_8030d", "lidar": "vanjee"},
         }
-        if platform in expected_backends:
+        if isinstance(platform, str) and platform in expected_backends:
             for component, expected in expected_backends[platform].items():
                 actual = _nested_value(
                     report, ("profile", "hardware", component, "backend")
@@ -507,6 +507,23 @@ def run_runtime_consistency(repo_root, manifest):
                     failures.append(
                         f"manifest compatibility_body_weld_arguments.{key} "
                         f"{actual!r} != effective weld {expected!r}"
+                    )
+                section = "translation" if key in ("x", "y", "z") else "rotation"
+                report_value = _nested_value(
+                    report,
+                    ("compatibility", "body_to_base_footprint", section, key),
+                )
+                expected_report_value = float(expected)
+                if (
+                    isinstance(report_value, bool)
+                    or not isinstance(report_value, (int, float))
+                    or report_value != expected_report_value
+                ):
+                    failures.append(
+                        "effective report "
+                        f"compatibility.body_to_base_footprint.{section}.{key} "
+                        f"{report_value!r} != derived/manifest weld "
+                        f"{expected_report_value!r}/{actual!r}"
                     )
 
     if all(name in loaded for name in _RUNTIME_ARTIFACTS.values()):

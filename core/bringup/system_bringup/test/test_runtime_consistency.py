@@ -33,6 +33,15 @@ def _mutate_yaml(path, dotted_path, value):
     _write_yaml(path, data)
 
 
+def _delete_yaml(path, dotted_path):
+    data = _load_yaml(path)
+    target = data
+    for key in dotted_path[:-1]:
+        target = target[key]
+    del target[dotted_path[-1]]
+    _write_yaml(path, data)
+
+
 @pytest.fixture
 def runtime_factory(tmp_path):
     runtime_dirs = []
@@ -139,6 +148,8 @@ def test_artifact_paths_must_share_one_runtime_directory(runtime_factory):
     "mutation,expected",
     [
         (lambda manifest: manifest.__setitem__("platform", "real"), "platform"),
+        (lambda manifest: manifest.__setitem__("platform", []), "platform"),
+        (lambda manifest: manifest.__setitem__("platform", {}), "platform"),
         (lambda manifest: manifest.__setitem__("mode", "mapping"), "mode"),
         (lambda manifest: manifest.__setitem__("mode", "unsupported"), "mode"),
         (lambda manifest: manifest.__setitem__("mode", []), "mode"),
@@ -160,6 +171,8 @@ def test_manifest_platform_mode_and_clock_mismatch_is_reported(
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
     assert any(expected in failure for failure in failures)
+    if expected == "platform" and isinstance(manifest["platform"], (list, dict)):
+        assert sum("platform" in failure for failure in failures) >= 3
 
 
 @pytest.mark.parametrize(
@@ -243,6 +256,52 @@ def test_manifest_weld_drift_is_reported(runtime_factory):
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
     assert any("compatibility_body_weld_arguments.qw" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "section,key,value",
+    [
+        ("translation", "x", 99.0),
+        ("rotation", "qw", 0.0),
+    ],
+)
+def test_effective_report_compatibility_weld_drift_is_reported(
+    runtime_factory, section, key, value
+):
+    repo_root, manifest = runtime_factory()
+    _mutate_yaml(
+        manifest["effective_profile_path"],
+        ("compatibility", "body_to_base_footprint", section, key),
+        value,
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        f"compatibility.body_to_base_footprint.{section}.{key}" in failure
+        for failure in failures
+    )
+
+
+@pytest.mark.parametrize(
+    "section,key",
+    [("translation", "x"), ("rotation", "qw")],
+)
+def test_effective_report_compatibility_weld_missing_value_is_reported(
+    runtime_factory, section, key
+):
+    repo_root, manifest = runtime_factory()
+    _delete_yaml(
+        manifest["effective_profile_path"],
+        ("compatibility", "body_to_base_footprint", section, key),
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        f"compatibility.body_to_base_footprint.{section}.{key}" in failure
+        for failure in failures
+    )
 
 
 def test_report_generated_path_reference_drift_is_reported(runtime_factory):
