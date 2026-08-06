@@ -372,6 +372,24 @@ def test_slam_stack_waits_for_localization_and_base_controller_odom_before_nav2(
     )
 
 
+def test_ready_gates_receive_the_existing_single_clock_value():
+    stack = _function(_tree(SLAM_STACK), "_stack")
+    stack_gates = _calls(stack, "ready_gate")
+    assert len(stack_gates) == 2
+    for gate in stack_gates:
+        value = _keyword(gate, "use_sim_time")
+        assert isinstance(value, ast.Name)
+        assert value.id == "use_sim"
+
+    bringup = _function(_tree(BRINGUP), "_bringup")
+    sim = _platform_branch(bringup, "sim")
+    sim_gates = _calls(sim, "ready_gate")
+    assert len(sim_gates) == 1
+    value = _keyword(sim_gates[0], "use_sim_time")
+    assert isinstance(value, ast.Name)
+    assert value.id == "use_sim"
+
+
 def test_bringup_routes_navigation_output_to_cmd_vel_auto():
     function = _function(_tree(BRINGUP), "_bringup")
     arguments = _include_arguments(

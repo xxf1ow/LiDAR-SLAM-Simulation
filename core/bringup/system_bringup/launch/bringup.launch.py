@@ -141,7 +141,7 @@ def _bringup(context, *args, **kwargs):
                   "navigation：默认自动；点击“人工接管”屏蔽 Nav2，"
                   "点击“恢复自动导航”恢复"),
              slam_stack],
-            settling=stack_cfg["settling"])
+            use_sim_time=use_sim, settling=stack_cfg["settling"])
 
     if platform == "real":
         runtime_paths = write_real_runtime_configs(repo_root, cfg)

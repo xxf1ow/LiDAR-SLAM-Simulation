@@ -3,14 +3,15 @@
 两段语义:
   ① 就绪:等 needed 话题(单个或列表)都出现在 DDS —— 替代"等启动"的大延迟。
      例如 robot_gz gate 等 ['/points_raw','/joint_states']:lidar 和 controller 都就绪。
-  ② settling:都出现后再 sleep 一小段(可配) —— 给模块稳定(controller 激活、gicp
-     收敛等)。第一条消息 ≠ 完全就绪,稍等更稳。
+  ② settling:都出现后按 ROS 节点时钟等待一小段(可配) —— 给模块稳定
+     (controller 激活、gicp 收敛等)。第一条消息 ≠ 完全就绪,稍等更稳。
 
-实现:ExecuteProcess 跑 python 子进程,轮询 get_topic_names();全部出现则 sleep settling
-后 exit 0 → OnProcessExit 触发 then_actions;轮询到 timeout 仍缺则 exit 1 → raise。
+实现:ExecuteProcess 跑 python 子进程,轮询 get_topic_names();全部出现则按节点时钟
+settling 后 exit 0 → OnProcessExit 触发 then_actions;轮询或 settling 的 wall watchdog
+达到 timeout 则 exit 1 → raise。
 全程异步(子进程),不阻塞 launch event loop。
 
-返回值是 list [waiter, handler],调用处用 + 拼接进 actions。settling 在第 5 参数覆盖。
+返回值是 list [waiter, handler],调用处用 + 拼接进 actions。
 """
 from launch.actions import ExecuteProcess, OpaqueFunction, RegisterEventHandler
 from launch.event_handlers import OnProcessExit
@@ -32,11 +33,13 @@ def _gate_script(needed, timeout, settling):
         "rclpy.init()\n"
         "n = Node('ready_gate')\n"
         f"NEEDED = {needed_list!r}\n"
-        f"END = time.monotonic() + {timeout}\n"
+        f"TIMEOUT = {timeout}\n"
         f"SETTLING = {settling}\n"
+        "DISCOVERY_DEADLINE = time.monotonic() + TIMEOUT\n"
         "ok = False\n"
+        "settling_timed_out = False\n"
         "missing = NEEDED[:]\n"
-        "while time.monotonic() < END:\n"
+        "while time.monotonic() < DISCOVERY_DEADLINE:\n"
         "    have = set(dict(n.get_topic_names_and_types()))\n"
         "    missing = [t for t in NEEDED if t not in have]\n"
         "    if not missing:\n"
@@ -45,17 +48,32 @@ def _gate_script(needed, timeout, settling):
         "    time.sleep(0.5)\n"
         "if ok:\n"
         "    print('\\n======== [ready_gate]', NEEDED, '就绪 → settling', SETTLING, 's ========')\n"
-        "    time.sleep(SETTLING)\n"
-        "else:\n"
-        f"    print('\\n======== [ready_gate]', NEEDED, 'TIMEOUT after', {timeout}, 's, missing=', missing, ' ========')\n"
+        "    SETTLING_START = n.get_clock().now().nanoseconds\n"
+        "    SETTLING_NS = int(SETTLING * 1000000000)\n"
+        "    SETTLING_WALL_DEADLINE = time.monotonic() + TIMEOUT\n"
+        "    while n.get_clock().now().nanoseconds - SETTLING_START < SETTLING_NS:\n"
+        "        if time.monotonic() >= SETTLING_WALL_DEADLINE:\n"
+        "            ok = False\n"
+        "            settling_timed_out = True\n"
+        "            break\n"
+        "        rclpy.spin_once(n, timeout_sec=0.1)\n"
+        "if not ok:\n"
+        "    if settling_timed_out:\n"
+        "        print('\\n======== [ready_gate]', NEEDED, 'TIMEOUT after', TIMEOUT, 's: ROS clock did not complete settling ========')\n"
+        "    else:\n"
+        "        print('\\n======== [ready_gate]', NEEDED, 'TIMEOUT after', TIMEOUT, 's, missing=', missing, ' ========')\n"
         "sys.exit(0 if ok else 1)\n"
     )
 
 
-def ready_gate(needed, timeout, label, then_actions, settling=3.0):
+def ready_gate(needed, timeout, label, then_actions, use_sim_time, settling=3.0):
     """返回 [waiter, handler]。needed(str 或 list)全部出现 + settling 后触发 then_actions;超时 raise。"""
+    use_sim_time_value = str(use_sim_time).lower()
     waiter = ExecuteProcess(
-        cmd=["/usr/bin/python3", "-c", _gate_script(needed, timeout, settling)],
+        cmd=[
+            "/usr/bin/python3", "-c", _gate_script(needed, timeout, settling),
+            "--ros-args", "-p", f"use_sim_time:={use_sim_time_value}",
+        ],
         name=f"gate_{abs(hash(str(needed))) % 100000}", output="screen")
     handler = RegisterEventHandler(OnProcessExit(
         target_action=waiter,

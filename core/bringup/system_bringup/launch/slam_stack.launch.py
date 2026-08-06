@@ -67,8 +67,8 @@ def _stack(context, *args, **kwargs):
                        [gicp] + ready_gate(
                            ["/localization", "/base_controller/odom"], 60.0,
                            "gicp+base_controller→/localization+/base_controller/odom",
-                           [nav2], settling=settling),
-                       settling=settling)
+                           [nav2], use_sim_time=use_sim, settling=settling),
+                       use_sim_time=use_sim, settling=settling)
     raise RuntimeError("未知 mode='%s'(应为 navigation|mapping)" % mode)
 
 
