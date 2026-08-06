@@ -15,6 +15,18 @@ from system_bringup import runtime_config_compiler as rcc
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PACKAGE_ROOT / "config"
 TEMPLATE_DIR = CONFIG_DIR / "templates"
+SIM_FOOTPRINT = [
+    [0.375, 0.275],
+    [0.375, -0.275],
+    [-0.375, -0.275],
+    [-0.375, 0.275],
+]
+REAL_FOOTPRINT = [
+    [0.48, 0.305],
+    [0.48, -0.305],
+    [-0.48, -0.305],
+    [-0.48, 0.305],
+]
 
 
 def _load_yaml(path):
@@ -41,6 +53,18 @@ class _RuntimeTree:
         target[path[-1]] = value
         profile_path.write_text(
             yaml.safe_dump(profile, sort_keys=False), encoding="utf-8"
+        )
+
+    def mutate_template(self, label, path, mutation):
+        template_path = (
+            self.config.parent
+            / "templates"
+            / rcc.TEMPLATE_FILENAMES[label]
+        )
+        template = _load_yaml(template_path)
+        _mutate_path(template, path, mutation)
+        template_path.write_text(
+            yaml.safe_dump(template, sort_keys=False), encoding="utf-8"
         )
 
 
@@ -419,25 +443,19 @@ def _mutate_path(mapping, path, mutation):
     + [("nav2", path) for path in NAV2_RENDER_PATHS],
 )
 @pytest.mark.parametrize("mutation", ["missing_parent", "missing_leaf", "wrong_type"])
-def test_renderer_rejects_template_target_drift(
-    runtime_tree, label, path, mutation
+def test_public_runtime_compile_rejects_source_template_target_drift(
+    runtime_tree, tmp_path, label, path, mutation
 ):
-    inputs = rcc._load_runtime_inputs(runtime_tree.config)
-    inputs["templates"] = deepcopy(inputs["templates"])
-    template = inputs["templates"][label]
-    node = template
-    for key in path:
-        node = node[key]
-    expected_type = (
-        bool if isinstance(node, bool) else str if isinstance(node, str) else float
-    )
-    _mutate_path(template, path, mutation)
+    runtime_tree.mutate_template(label, path, mutation)
+    output = tmp_path / "output"
+    expected_error = rf"{label} template"
+    if mutation != "missing_parent":
+        expected_error += rf".*{'.'.join(path)}"
 
-    with pytest.raises(ValueError, match=rf"{label} template"):
-        rcc._render_runtime_configs(inputs)
+    with pytest.raises(ValueError, match=expected_error):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
 
-    with pytest.raises(ValueError, match=rf"{label} template.*{'.'.join(path)}"):
-        rcc._set_template_existing(label, template, path, None, expected_type)
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("platform", ["sim", "real"])
@@ -665,6 +683,109 @@ def _temporary_files(output):
     return sorted(output.glob(".*.tmp"))
 
 
+def _yaml_schema(value):
+    if isinstance(value, dict):
+        return {key: _yaml_schema(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [_yaml_schema(child) for child in value]
+    return None
+
+
+def _profile_owned_runtime_values(manifest):
+    controllers = _load_yaml(manifest["controllers_path"])
+    base = controllers["base_controller"]["ros__parameters"]
+    web_ui = _load_yaml(manifest["web_ui_path"])["robot_web_ui"][
+        "ros__parameters"
+    ]
+    nav2 = _load_yaml(manifest["nav2_path"])
+    follow_path = nav2["controller_server"]["ros__parameters"]["FollowPath"]
+    footprints = [
+        nav2["global_costmap"]["global_costmap"]["ros__parameters"][
+            "footprint"
+        ],
+        nav2["local_costmap"]["local_costmap"]["ros__parameters"][
+            "footprint"
+        ],
+    ]
+    return {
+        "controllers": {
+            "wheel_radius": base["wheel_radius"],
+            "wheel_separation": base["wheel_separation"],
+            "max_angular_velocity": base["angular.z.max_velocity"],
+            "max_angular_acceleration": base["angular.z.max_acceleration"],
+        },
+        "web_ui": {"max_angular_speed": web_ui["max_angular_speed"]},
+        "nav2": {
+            "wz_max": follow_path["wz_max"],
+            "footprints": [json.loads(value) for value in footprints],
+        },
+    }
+
+
+def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
+    runtime_tree, tmp_path
+):
+    manifests = {}
+    generated = {}
+    for platform in ("sim", "real"):
+        runtime_tree.set_bringup_value("platform", platform)
+        manifests[platform] = rcc.compile_runtime_configs(
+            runtime_tree.config, tmp_path / platform
+        )
+        generated[platform] = {
+            name: _load_yaml(manifests[platform][f"{name}_path"])
+            for name in ("controllers", "web_ui", "nav2", "effective_profile")
+        }
+
+    for name in generated["sim"]:
+        assert _yaml_schema(generated["sim"][name]) == _yaml_schema(
+            generated["real"][name]
+        )
+
+    assert _profile_owned_runtime_values(manifests["sim"]) == {
+        "controllers": {
+            "wheel_radius": 0.12,
+            "wheel_separation": 0.55,
+            "max_angular_velocity": 1.8,
+            "max_angular_acceleration": 1.0,
+        },
+        "web_ui": {"max_angular_speed": 1.8},
+        "nav2": {
+            "wz_max": 1.8,
+            "footprints": [SIM_FOOTPRINT, SIM_FOOTPRINT],
+        },
+    }
+    assert _profile_owned_runtime_values(manifests["real"]) == {
+        "controllers": {
+            "wheel_radius": 0.1025,
+            "wheel_separation": 0.463,
+            "max_angular_velocity": 0.4,
+            "max_angular_acceleration": 0.3,
+        },
+        "web_ui": {"max_angular_speed": 0.4},
+        "nav2": {
+            "wz_max": 0.4,
+            "footprints": [REAL_FOOTPRINT, REAL_FOOTPRINT],
+        },
+    }
+
+    legacy_report_keys = {"platform", "source_profile", "profile", "derived"}
+    runtime_only_keys = {
+        "generated_configs",
+        "compatibility",
+        "deferred_compatibility",
+    }
+    for values in generated.values():
+        assert set(values["effective_profile"]) == (
+            legacy_report_keys | runtime_only_keys
+        )
+
+    profile_path = pc.compile_profile(runtime_tree.config, tmp_path / "profile")
+    profile_report = _load_yaml(profile_path)
+    assert set(profile_report) == legacy_report_keys
+    assert runtime_only_keys.isdisjoint(profile_report)
+
+
 @pytest.mark.parametrize("platform", ["sim", "real"])
 def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
     runtime_tree, tmp_path, platform, monkeypatch
@@ -704,6 +825,10 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
     assert manifest["bringup_config_path"] == runtime_tree.config.resolve()
     assert manifest["bringup_config"] == loaded[0]["config"]
     assert manifest["bringup_config"] is not loaded[0]["config"]
+    source_config = runtime_tree.config.read_bytes()
+    manifest["bringup_config"]["platform"] = "mutated"
+    assert loaded[0]["config"]["platform"] == platform
+    assert runtime_tree.config.read_bytes() == source_config
     assert manifest["platform"] == platform
     assert manifest["mode"] == "navigation"
     assert manifest["use_sim_time"] is (platform == "sim")
@@ -967,3 +1092,17 @@ def test_runtime_cli_reports_one_actionable_error_without_traceback(
         f"{runtime_tree.config.resolve()}: platform must be 'sim' or 'real'\n"
     )
     assert "Traceback" not in captured.err
+
+
+def test_formal_bringup_does_not_import_profile_runtime_compilers():
+    launch_source = (PACKAGE_ROOT / "launch/bringup.launch.py").read_text(
+        encoding="utf-8"
+    )
+
+    for name in (
+        "profile_compiler",
+        "runtime_config_compiler",
+        "compile_profile",
+        "compile_runtime_configs",
+    ):
+        assert name not in launch_source
