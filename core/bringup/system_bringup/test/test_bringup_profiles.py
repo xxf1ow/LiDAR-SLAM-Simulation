@@ -99,6 +99,33 @@ def test_profiles_are_complete_and_have_identical_leaf_paths():
     assert set(_leaf_paths(sim)) == set(_leaf_paths(real))
 
 
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        (
+            "sim.yaml",
+            {
+                "max_linear_velocity": 1.0,
+                "max_angular_velocity": 1.8,
+                "max_linear_acceleration": 1.0,
+                "max_angular_acceleration": 1.0,
+            },
+        ),
+        (
+            "real.yaml",
+            {
+                "max_linear_velocity": 1.0,
+                "max_angular_velocity": 0.4,
+                "max_linear_acceleration": 1.0,
+                "max_angular_acceleration": 0.3,
+            },
+        ),
+    ],
+)
+def test_profiles_define_confirmed_motion_limits(name, expected):
+    assert _load_profile(name)["motion"] == expected
+
+
 @pytest.mark.parametrize("name", ["sim.yaml", "real.yaml"])
 def test_every_profile_scalar_has_an_inline_comment(name):
     path = PROFILE_DIR / name

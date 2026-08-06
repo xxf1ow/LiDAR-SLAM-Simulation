@@ -53,10 +53,10 @@ sensors:
     rate_hz: 200.0 # IMU 标称发布频率，单位 Hz
 
 motion:
-  max_linear_velocity: null # 第 3 节确认，单位 m/s
-  max_angular_velocity: null # 第 3 节确认，单位 rad/s
-  max_linear_acceleration: null # 第 3 节确认，单位 m/s²
-  max_angular_acceleration: null # 第 3 节确认，单位 rad/s²
+  max_linear_velocity: 1.0 # 最大线速度，单位 m/s
+  max_angular_velocity: 0.4 # 最大角速度，单位 rad/s
+  max_linear_acceleration: 1.0 # 最大线加速度，单位 m/s²
+  max_angular_acceleration: 0.3 # 最大角加速度，单位 rad/s²
 
 perception:
   obstacle_height:
