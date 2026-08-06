@@ -358,6 +358,7 @@ _ACTIVE_TOPOLOGY_FILES = {
     "real_robot": "core/robot/robot_bringup/launch/robot.launch.py",
     "navigation": "core/navigation/robot_navigation/launch/navigation.launch.py",
     "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
+    "web_ui": "core/bringup/robot_web_ui/robot_web_ui/web_ui_node.py",
 }
 _ROBOT_ARGUMENTS = (
     "controllers_file",
@@ -394,6 +395,10 @@ _INSTALLED_TOPOLOGY_SHARES = {
     "real_robot": ("robot_bringup", "launch/robot.launch.py"),
     "navigation": ("robot_navigation", "launch/navigation.launch.py"),
 }
+_INSTALLED_TOPOLOGY_MODULES = {
+    "cmd_gate": "cmd_vel_gate.gate_node",
+    "web_ui": "robot_web_ui.web_ui_node",
+}
 _GEOMETRY_ARGUMENTS = tuple(
     name
     for name in _ROBOT_ARGUMENTS
@@ -413,7 +418,9 @@ def _resolve_installed_topology_paths(failures):
     except (ImportError, ModuleNotFoundError) as exc:
         failures.append(
             "active installed topology cannot be resolved outside a sourced ROS "
-            f"environment: {exc}"
+            "environment; package shares and node modules "
+            "cmd_vel_gate.gate_node, robot_web_ui.web_ui_node are required: "
+            f"{exc}"
         )
         return {}
 
@@ -441,19 +448,20 @@ def _resolve_installed_topology_paths(failures):
         if path is not None:
             paths[label] = path
 
-    try:
-        spec = importlib.util.find_spec("cmd_vel_gate.gate_node")
-    except (ImportError, ModuleNotFoundError, AttributeError, ValueError) as exc:
-        failures.append(f"active installed cmd_vel_gate.gate_node cannot be resolved: {exc}")
-    else:
+    for label, module_name in _INSTALLED_TOPOLOGY_MODULES.items():
+        try:
+            spec = importlib.util.find_spec(module_name)
+        except (ImportError, ModuleNotFoundError, AttributeError, ValueError) as exc:
+            failures.append(f"active installed {module_name} cannot be resolved: {exc}")
+            continue
         origin = None if spec is None else spec.origin
         path = _normalize_path(
             origin,
-            "active installed cmd_vel_gate.gate_node",
+            f"active installed {module_name}",
             failures,
         )
         if path is not None:
-            paths["cmd_gate"] = path
+            paths[label] = path
     return paths
 
 
@@ -485,19 +493,19 @@ def _active_source_trees(repo_root, failures):
         if reviewed_path is None:
             continue
         try:
-            reviewed_source = reviewed_path.read_text(encoding="utf-8")
-            active_source = (
-                reviewed_source
+            reviewed_bytes = reviewed_path.read_bytes()
+            active_bytes = (
+                reviewed_bytes
                 if active_path == reviewed_path
-                else active_path.read_text(encoding="utf-8")
+                else active_path.read_bytes()
             )
-        except (OSError, RuntimeError, UnicodeError) as exc:
+        except (OSError, RuntimeError) as exc:
             failures.append(
                 f"active topology {relative_path} cannot be read from reviewed/installed "
                 f"paths {reviewed_path}/{active_path}: {exc}"
             )
             continue
-        if active_source != reviewed_source:
+        if active_bytes != reviewed_bytes:
             failures.append(
                 "active installed topology differs from reviewed source; rebuild the "
                 "workspace (prefer --symlink-install) before launch: "
@@ -505,8 +513,9 @@ def _active_source_trees(repo_root, failures):
             )
             continue
         try:
+            active_source = active_bytes.decode("utf-8")
             trees[label] = ast.parse(active_source, filename=str(active_path))
-        except SyntaxError as exc:
+        except (SyntaxError, UnicodeError) as exc:
             failures.append(f"active installed topology {active_path} is invalid: {exc}")
     return trees
 
@@ -799,6 +808,13 @@ def _declare_names(function, assignments):
     return names
 
 
+def _same_unique_members(actual, required):
+    try:
+        return len(actual) == len(required) and set(actual) == set(required)
+    except (TypeError, ValueError):
+        return False
+
+
 def _dict_comprehension_launch_configs(node, required_names, assignments):
     node = _resolve_alias(node, assignments)
     if not isinstance(node, ast.DictComp) or len(node.generators) != 1:
@@ -816,7 +832,7 @@ def _dict_comprehension_launch_configs(node, required_names, assignments):
     ):
         value = value.func.value
     return (
-        values == tuple(required_names)
+        _same_unique_members(values, required_names)
         and isinstance(node.key, ast.Name)
         and node.key.id == name
         and isinstance(value, ast.Call)
@@ -1279,9 +1295,16 @@ def _validate_real_topology(chassis_tree, robot_tree, failures):
             "controller/full geometry/use_sim_time",
         )
 
-    remappings = _remapping_pairs(controls[0], robot_assignments) if len(controls) == 1 else None
-    if remappings != [("~/robot_description", "/robot_description"),
-                      ("/base_controller/cmd_vel", "/cmd_vel")]:
+    remappings = (
+        _remapping_pairs(controls[0], robot_assignments)
+        if len(controls) == 1
+        else None
+    )
+    required_remappings = (
+        ("~/robot_description", "/robot_description"),
+        ("/base_controller/cmd_vel", "/cmd_vel"),
+    )
+    if not _same_unique_members(remappings, required_remappings):
         _contract_failure(
             failures,
             "command gate routing",
@@ -1399,6 +1422,46 @@ def _validate_slam_topology(tree, failures):
 def _validate_navigation_topology(tree, failures):
     function = _definition(tree, "generate_launch_description")
     assignments = _assignments(function)
+    map_function = next(
+        (
+            node
+            for node in (function.body if function is not None else ())
+            if isinstance(node, ast.FunctionDef) and node.name == "_map_server"
+        ),
+        None,
+    )
+    map_assignments = dict(assignments)
+    map_assignments.update(_assignments(map_function))
+    map_nodes = _node_by_identity(
+        map_function, ("nav2_map_server", "map_server"), map_assignments
+    )
+    map_parameters = (
+        _sequence(_keyword(map_nodes[0], "parameters"), map_assignments)
+        if len(map_nodes) == 1
+        else None
+    )
+    map_override, map_expansions = (
+        _dict_parts(map_parameters[1], map_assignments)
+        if map_parameters is not None and len(map_parameters) == 2
+        else (None, None)
+    )
+    map_params_ok = (
+        map_parameters is not None
+        and len(map_parameters) == 2
+        and _same_expression(map_parameters[0], "params_file", map_assignments)
+        and map_override is not None
+        and set(map_override) == {"yaml_filename"}
+        and not map_expansions
+        and _same_expression(
+            map_override["yaml_filename"], "map_yaml", map_assignments
+        )
+    )
+    if not map_params_ok:
+        _contract_failure(
+            failures,
+            "generated runtime artifacts",
+            "map_server must consume generated params_file plus only yaml_filename override",
+        )
     controller = _node_by_identity(
         function, ("nav2_controller", "controller_server"), assignments
     )
@@ -1557,6 +1620,54 @@ def _validate_cmd_gate_topology(tree, failures):
         )
 
 
+def _validate_web_ui_topology(tree, failures):
+    class_node = _definition(tree, "WebUiNode", ast.ClassDef)
+    publishers = []
+    direct_remap = False
+    if class_node is not None:
+        for method in (
+            node for node in class_node.body if isinstance(node, ast.FunctionDef)
+        ):
+            assignments = _assignments(method)
+            publishers.extend(
+                (call, assignments)
+                for call in _calls(method, "create_publisher")
+            )
+            for call in _calls(method):
+                pairs = _remapping_pairs(call, assignments)
+                if pairs is None or any(target == "/cmd_vel" for _, target in pairs):
+                    direct_remap = True
+
+    twist_publishers = [
+        (call, assignments)
+        for call, assignments in publishers
+        if call.args
+        and _signature(call.args[0], assignments) == ("name", "TwistStamped")
+    ]
+    publisher_topics = [
+        _literal(call.args[1], assignments)
+        for call, assignments in publishers
+        if len(call.args) >= 2
+    ]
+    routing_ok = (
+        len(twist_publishers) == 1
+        and len(twist_publishers[0][0].args) >= 2
+        and _literal(
+            twist_publishers[0][0].args[1], twist_publishers[0][1]
+        )
+        == "/cmd_vel_manual"
+        and "/cmd_vel" not in publisher_topics
+        and not direct_remap
+    )
+    if not routing_ok:
+        _contract_failure(
+            failures,
+            "command gate routing",
+            "WebUiNode requires exactly one TwistStamped /cmd_vel_manual publisher "
+            "and no direct /cmd_vel publisher/remap",
+        )
+
+
 def _validate_active_topology(repo_root, failures):
     trees = _active_source_trees(repo_root, failures)
     if set(trees) != set(_ACTIVE_TOPOLOGY_FILES):
@@ -1567,6 +1678,7 @@ def _validate_active_topology(repo_root, failures):
     _validate_slam_topology(trees["slam"], failures)
     _validate_navigation_topology(trees["navigation"], failures)
     _validate_cmd_gate_topology(trees["cmd_gate"], failures)
+    _validate_web_ui_topology(trees["web_ui"], failures)
 
 
 def _validate_report_metadata(report, expected_weld, runtime_compiler, failures):

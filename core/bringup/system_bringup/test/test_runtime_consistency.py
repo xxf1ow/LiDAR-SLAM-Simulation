@@ -1,3 +1,4 @@
+import builtins
 import shutil
 import tempfile
 from pathlib import Path
@@ -20,6 +21,7 @@ ACTIVE_TOPOLOGY_FILES = {
     "real_robot": "core/robot/robot_bringup/launch/robot.launch.py",
     "navigation": "core/navigation/robot_navigation/launch/navigation.launch.py",
     "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
+    "web_ui": "core/bringup/robot_web_ui/robot_web_ui/web_ui_node.py",
 }
 
 
@@ -68,7 +70,11 @@ def runtime_factory(tmp_path, monkeypatch):
     monkeypatch.setattr(
         cc,
         "_resolve_installed_topology_paths",
-        lambda failures: dict(active_paths),
+        lambda failures: {
+            label: path
+            for label, path in active_paths.items()
+            if label in cc._ACTIVE_TOPOLOGY_FILES
+        },
         raising=False,
     )
 
@@ -605,7 +611,11 @@ def test_active_topology_rejects_source_install_mismatch(
     monkeypatch.setattr(
         cc,
         "_resolve_installed_topology_paths",
-        lambda failures: installed_paths,
+        lambda failures: {
+            label: path
+            for label, path in installed_paths.items()
+            if label in cc._ACTIVE_TOPOLOGY_FILES
+        },
         raising=False,
     )
 
@@ -617,6 +627,98 @@ def test_active_topology_rejects_source_install_mismatch(
         and "rebuild" in failure
         for failure in failures
     )
+
+
+def test_active_topology_source_install_comparison_is_byte_exact(
+    runtime_factory, tmp_path, monkeypatch
+):
+    repo_root, manifest = runtime_factory()
+    installed_root = tmp_path / "installed-newlines"
+    installed_paths = {}
+    for label, relative_path in ACTIVE_TOPOLOGY_FILES.items():
+        source = repo_root / relative_path
+        destination = installed_root / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+        installed_paths[label] = destination
+    formal = installed_paths["formal"]
+    formal.write_bytes(formal.read_bytes().replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(
+        cc,
+        "_resolve_installed_topology_paths",
+        lambda failures: installed_paths,
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "installed topology differs from reviewed source" in failure
+        for failure in failures
+    )
+
+
+def test_installed_resolver_no_ros_diagnostic_names_both_node_modules(
+    monkeypatch,
+):
+    real_import = builtins.__import__
+
+    def reject_ament(name, *args, **kwargs):
+        if name.startswith("ament_index_python"):
+            raise ModuleNotFoundError("forced missing ament")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", reject_ament)
+    failures = []
+
+    assert cc._resolve_installed_topology_paths(failures) == {}
+    assert any(
+        "cmd_vel_gate.gate_node" in failure
+        and "robot_web_ui.web_ui_node" in failure
+        for failure in failures
+    )
+
+
+def test_active_topology_rejects_web_ui_manual_publisher_bypass_with_dead_decoy(
+    runtime_factory,
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["web_ui"],
+        '            "/cmd_vel_manual",\n',
+        '            "/cmd_vel",\n',
+    )
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["web_ui"],
+        "        self._manual_publisher = self.create_publisher(\n",
+        "        if False:\n"
+        '            "/cmd_vel_manual"\n'
+        "        self._manual_publisher = self.create_publisher(\n",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("command gate routing" in failure for failure in failures)
+
+
+def test_active_topology_rejects_additive_web_ui_direct_publisher(
+    runtime_factory,
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["web_ui"],
+        "        mode_qos = QoSProfile(\n",
+        "        self._bypass_publisher = self.create_publisher(\n"
+        '            TwistStamped, "/cmd_vel", 1\n'
+        "        )\n"
+        "        mode_qos = QoSProfile(\n",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("command gate routing" in failure for failure in failures)
 
 
 @pytest.mark.parametrize(
@@ -778,6 +880,63 @@ def test_active_topology_rejects_generated_nav2_dataflow_drift(
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
     assert any("generated runtime artifacts" in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "parameters=[default_params, {'yaml_filename': map_yaml}],",
+        "parameters=[{'yaml_filename': map_yaml}],",
+        "parameters=[params_file, {'yaml_filename': map_yaml}, "
+        "{'use_sim_time': use_sim_time}],",
+    ],
+)
+def test_active_topology_rejects_map_server_parameter_drift(
+    runtime_factory, replacement
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["navigation"],
+        "parameters=[params_file, {'yaml_filename': map_yaml}],",
+        replacement,
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("generated runtime artifacts" in failure for failure in failures)
+
+
+def test_active_topology_accepts_reordered_real_geometry_arguments(
+    runtime_factory,
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["real_chassis"],
+        '            "controllers_file",\n'
+        '            "base_length", "base_width", "base_height", "base_link_height",\n',
+        '            "base_length",\n'
+        '            "controllers_file", "base_width", "base_height", "base_link_height",\n',
+    )
+
+    assert cc.run_runtime_consistency(repo_root, manifest) == []
+
+
+def test_active_topology_accepts_reordered_real_controller_remappings(
+    runtime_factory,
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["real_robot"],
+        '            ("~/robot_description", "/robot_description"),\n'
+        '            ("/base_controller/cmd_vel", "/cmd_vel"),\n',
+        '            ("/base_controller/cmd_vel", "/cmd_vel"),\n'
+        '            ("~/robot_description", "/robot_description"),\n',
+    )
+
+    assert cc.run_runtime_consistency(repo_root, manifest) == []
 
 
 def test_active_topology_accepts_equivalent_local_aliases_and_assigned_dict(
