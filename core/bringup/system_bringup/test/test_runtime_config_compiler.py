@@ -3,6 +3,7 @@ from copy import deepcopy
 import json
 from math import cos, sin, sqrt
 from pathlib import Path
+import tempfile
 
 import pytest
 import yaml
@@ -658,3 +659,311 @@ def test_real_runtime_report_preserves_deferred_compatibility_difference(runtime
         "max_angular_velocity": 0.4,
         "max_angular_acceleration": 0.3,
     }
+
+
+def _temporary_files(output):
+    return sorted(output.glob(".*.tmp"))
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
+    runtime_tree, tmp_path, platform, monkeypatch
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    output = tmp_path / f"{platform}-output"
+    loaded = []
+    original = rcc._load_runtime_inputs
+
+    def capture_inputs(path):
+        inputs = original(path)
+        loaded.append(inputs)
+        return inputs
+
+    monkeypatch.setattr(rcc, "_load_runtime_inputs", capture_inputs)
+
+    manifest = rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert len(loaded) == 1
+    paths = {
+        key: output / filename for key, filename in rcc.OUTPUT_FILENAMES.items()
+    }
+    assert set(output.iterdir()) == set(paths.values())
+    assert set(manifest) == {
+        "bringup_config_path",
+        "bringup_config",
+        "platform",
+        "mode",
+        "use_sim_time",
+        "effective_profile_path",
+        "controllers_path",
+        "web_ui_path",
+        "nav2_path",
+        "robot_launch_arguments",
+        "compatibility_body_weld_arguments",
+    }
+    assert manifest["bringup_config_path"] == runtime_tree.config.resolve()
+    assert manifest["bringup_config"] == loaded[0]["config"]
+    assert manifest["bringup_config"] is not loaded[0]["config"]
+    assert manifest["platform"] == platform
+    assert manifest["mode"] == "navigation"
+    assert manifest["use_sim_time"] is (platform == "sim")
+    assert manifest["effective_profile_path"] == paths["effective_profile"]
+    assert manifest["controllers_path"] == paths["controllers"]
+    assert manifest["web_ui_path"] == paths["web_ui"]
+    assert manifest["nav2_path"] == paths["nav2"]
+    assert manifest["robot_launch_arguments"] == rcc._derive_robot_launch_arguments(
+        loaded[0]["effective"]
+    )
+    assert manifest["compatibility_body_weld_arguments"] == (
+        rcc._derive_compatibility_body_weld_arguments(
+            loaded[0]["selected_profile"]
+        )
+    )
+
+    report = _load_yaml(paths["effective_profile"])
+    assert report["generated_configs"] == {
+        "controllers": str(paths["controllers"]),
+        "web_ui": str(paths["web_ui"]),
+        "nav2": str(paths["nav2"]),
+    }
+    assert _temporary_files(output) == []
+
+
+def test_compile_runtime_configs_uses_unique_private_temp_directories(runtime_tree):
+    first = rcc.compile_runtime_configs(runtime_tree.config)
+    second = rcc.compile_runtime_configs(runtime_tree.config)
+    first_dir = first["effective_profile_path"].parent
+    second_dir = second["effective_profile_path"].parent
+
+    assert first_dir != second_dir
+    for output in (first_dir, second_dir):
+        assert output.name.startswith("system_bringup-runtime-")
+        assert output.is_absolute()
+        assert output.parent == Path(tempfile.gettempdir()).resolve()
+        assert set(path.name for path in output.iterdir()) == set(
+            rcc.OUTPUT_FILENAMES.values()
+        )
+
+
+def test_explicit_runtime_output_preserves_unowned_files_across_compiles(
+    runtime_tree, tmp_path
+):
+    output = tmp_path / "output"
+    output.mkdir()
+    keep = output / "keep.txt"
+    keep.write_text("keep exactly", encoding="utf-8")
+
+    first = rcc.compile_runtime_configs(runtime_tree.config, output)
+    first_report = first["effective_profile_path"].read_bytes()
+    runtime_tree.set_bringup_value("platform", "real")
+    second = rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert first["effective_profile_path"] == second["effective_profile_path"]
+    assert second["effective_profile_path"].read_bytes() != first_report
+    assert keep.read_text(encoding="utf-8") == "keep exactly"
+    assert set(path.name for path in output.iterdir()) == {
+        "keep.txt",
+        *rcc.OUTPUT_FILENAMES.values(),
+    }
+    assert _temporary_files(output) == []
+
+
+def test_runtime_compilation_does_not_modify_source_or_formal_files(
+    runtime_tree, tmp_path
+):
+    core_dir = PACKAGE_ROOT.parents[1]
+    protected = [
+        *(TEMPLATE_DIR / filename for filename in rcc.TEMPLATE_FILENAMES.values()),
+        *(
+            runtime_tree.config.parent / "templates" / filename
+            for filename in rcc.TEMPLATE_FILENAMES.values()
+        ),
+        core_dir / "robot/robot_bringup/config/robot_controllers.yaml",
+        core_dir / "navigation/robot_navigation/config/nav2_params.yaml",
+        core_dir / "navigation/robot_navigation/config/nav2_params_real.yaml",
+        PACKAGE_ROOT / "launch/bringup.launch.py",
+    ]
+    before = {path: path.read_bytes() for path in protected}
+
+    rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "output")
+
+    assert {path: path.read_bytes() for path in protected} == before
+
+
+def test_runtime_resources_resolve_from_config_for_absolute_and_relative_paths(
+    runtime_tree, tmp_path, monkeypatch
+):
+    monkeypatch.chdir(tmp_path)
+    absolute = rcc.compile_runtime_configs(
+        runtime_tree.config.resolve(), tmp_path / "absolute-output"
+    )
+    relative_config = runtime_tree.config.relative_to(tmp_path)
+    relative = rcc.compile_runtime_configs(
+        relative_config, tmp_path / "relative-output"
+    )
+
+    assert _load_yaml(absolute["controllers_path"]) == _load_yaml(
+        relative["controllers_path"]
+    )
+    assert absolute["bringup_config_path"] == relative["bringup_config_path"]
+
+
+def test_in_memory_validation_failure_creates_no_completion_marker(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+
+    def fail_validation(*args):
+        raise ValueError("in-memory drift")
+
+    monkeypatch.setattr(rcc, "_validate_generated_configs", fail_validation)
+
+    with pytest.raises(ValueError, match="in-memory drift"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert not (output / rcc.OUTPUT_FILENAMES["effective_profile"]).exists()
+    assert not output.exists()
+
+
+def test_staging_write_failure_cleans_every_temporary_file(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    original = rcc.yaml.safe_dump
+    calls = 0
+
+    def fail_fourth_dump(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise OSError("staging write failed")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(rcc.yaml, "safe_dump", fail_fourth_dump)
+
+    with pytest.raises(OSError, match="staging write failed"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert not (output / rcc.OUTPUT_FILENAMES["effective_profile"]).exists()
+    assert _temporary_files(output) == []
+    assert list(output.iterdir()) == []
+
+
+def test_staged_reload_validation_failure_precedes_all_replacements(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    rcc.compile_runtime_configs(runtime_tree.config, output)
+    before = {path: path.read_bytes() for path in output.iterdir()}
+    runtime_tree.set_bringup_value("platform", "real")
+    original = rcc._validate_generated_configs
+    validations = 0
+
+    def fail_second_validation(*args):
+        nonlocal validations
+        validations += 1
+        if validations == 2:
+            raise ValueError("staged drift")
+        return original(*args)
+
+    monkeypatch.setattr(rcc, "_validate_generated_configs", fail_second_validation)
+
+    with pytest.raises(ValueError, match="staged drift"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert validations == 2
+    assert {path: path.read_bytes() for path in output.iterdir()} == before
+    assert _temporary_files(output) == []
+
+
+def test_mid_replace_failure_does_not_update_existing_completion_marker(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    runtime_tree.set_bringup_value("platform", "real")
+    original = rcc.os.replace
+    replaced = []
+
+    def fail_second_replace(source, destination):
+        replaced.append(Path(destination).name)
+        if len(replaced) == 2:
+            raise OSError("replace interrupted")
+        return original(source, destination)
+
+    monkeypatch.setattr(rcc.os, "replace", fail_second_replace)
+
+    with pytest.raises(OSError, match="replace interrupted"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert replaced == [
+        rcc.OUTPUT_FILENAMES["controllers"],
+        rcc.OUTPUT_FILENAMES["web_ui"],
+    ]
+    assert marker.read_bytes() == marker_before
+    assert _temporary_files(output) == []
+
+
+def test_effective_report_is_replaced_last_before_manifest_is_returned(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    original = rcc.os.replace
+    replaced = []
+
+    def record_replace(source, destination):
+        replaced.append(Path(destination).name)
+        return original(source, destination)
+
+    monkeypatch.setattr(rcc.os, "replace", record_replace)
+
+    manifest = rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert replaced == [
+        rcc.OUTPUT_FILENAMES["controllers"],
+        rcc.OUTPUT_FILENAMES["web_ui"],
+        rcc.OUTPUT_FILENAMES["nav2"],
+        rcc.OUTPUT_FILENAMES["effective_profile"],
+    ]
+    assert manifest["effective_profile_path"].exists()
+    assert _temporary_files(output) == []
+
+
+def test_runtime_cli_prints_one_absolute_report_path(runtime_tree, tmp_path, capsys):
+    output = tmp_path / "output"
+
+    result = rcc.main(
+        [
+            "--bringup-config",
+            str(runtime_tree.config),
+            "--output-dir",
+            str(output),
+        ]
+    )
+
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.err == ""
+    assert captured.out == (
+        f"{(output / rcc.OUTPUT_FILENAMES['effective_profile']).resolve()}\n"
+    )
+
+
+def test_runtime_cli_reports_one_actionable_error_without_traceback(
+    runtime_tree, capsys
+):
+    runtime_tree.set_bringup_value("platform", "invalid")
+
+    with pytest.raises(SystemExit) as exc_info:
+        rcc.main(["--bringup-config", str(runtime_tree.config)])
+
+    captured = capsys.readouterr()
+    assert exc_info.value.code == 2
+    assert captured.out == ""
+    assert captured.err == (
+        "compile_runtime_configs: "
+        f"{runtime_tree.config.resolve()}: platform must be 'sim' or 'real'\n"
+    )
+    assert "Traceback" not in captured.err

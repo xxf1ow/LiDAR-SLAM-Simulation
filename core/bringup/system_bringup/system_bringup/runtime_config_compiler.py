@@ -1,6 +1,12 @@
+import argparse
 from copy import deepcopy
 import json
 from math import cos, isfinite, sin, sqrt
+import os
+from pathlib import Path
+import tempfile
+
+import yaml
 
 from system_bringup import profile_compiler as pc
 
@@ -16,6 +22,12 @@ TEMPLATE_FILENAMES = {
     "controllers": "robot_controllers.yaml",
     "web_ui": "robot_web_ui.yaml",
     "nav2": "nav2.yaml",
+}
+OUTPUT_FILENAMES = {
+    "controllers": "robot_controllers.generated.yaml",
+    "web_ui": "robot_web_ui.generated.yaml",
+    "nav2": "nav2.generated.yaml",
+    "effective_profile": "effective_profile.generated.yaml",
 }
 CONTROLLER_TIME_PATHS = (
     ("controller_manager", "ros__parameters", "use_sim_time"),
@@ -407,3 +419,137 @@ def _render_runtime_configs(inputs):
     nav2 = _render_nav2(templates["nav2"], effective)
     _validate_generated_configs(effective, controllers, web_ui, nav2)
     return {"controllers": controllers, "web_ui": web_ui, "nav2": nav2}
+
+
+def _prepare_output_dir(output_dir):
+    if output_dir is None:
+        return Path(tempfile.mkdtemp(prefix="system_bringup-runtime-"))
+    target = Path(output_dir).expanduser().resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _stage_yaml(path, data):
+    temporary_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            delete=False,
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            mode="w",
+            encoding="utf-8",
+        ) as stream:
+            temporary_path = Path(stream.name)
+            yaml.safe_dump(
+                data,
+                stream,
+                sort_keys=False,
+                allow_unicode=True,
+            )
+            stream.flush()
+        return temporary_path
+    except Exception:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
+        raise
+
+
+def _load_staged_yaml(path, label):
+    with path.open("r", encoding="utf-8") as stream:
+        data = yaml.safe_load(stream)
+    if not isinstance(data, dict):
+        raise ValueError(f"staged {label} root must be a mapping")
+    return data
+
+
+def compile_runtime_configs(bringup_config_path, output_dir=None):
+    inputs = _load_runtime_inputs(bringup_config_path)
+    effective = inputs["effective"]
+    templates = inputs["templates"]
+    generated = {
+        "controllers": _render_controller(templates["controllers"], effective),
+        "web_ui": _render_web_ui(templates["web_ui"], effective),
+        "nav2": _render_nav2(templates["nav2"], effective),
+    }
+    robot_launch_arguments = _derive_robot_launch_arguments(inputs["effective"])
+    body_weld = _derive_compatibility_body_weld_transform(
+        inputs["selected_profile"]
+    )
+    body_weld_arguments = {
+        key: str(value) for key, value in body_weld.items()
+    }
+    _validate_generated_configs(
+        effective,
+        generated["controllers"],
+        generated["web_ui"],
+        generated["nav2"],
+    )
+
+    output = _prepare_output_dir(output_dir)
+    paths = {
+        key: output / filename for key, filename in OUTPUT_FILENAMES.items()
+    }
+    report = _build_runtime_report(effective, body_weld)
+    report["generated_configs"] = {
+        "controllers": str(paths["controllers"]),
+        "web_ui": str(paths["web_ui"]),
+        "nav2": str(paths["nav2"]),
+    }
+    manifest = {
+        "bringup_config_path": inputs["source"],
+        "bringup_config": deepcopy(inputs["config"]),
+        "platform": inputs["platform"],
+        "mode": inputs["mode"],
+        "use_sim_time": effective["derived"]["use_sim_time"],
+        "effective_profile_path": paths["effective_profile"],
+        "controllers_path": paths["controllers"],
+        "web_ui_path": paths["web_ui"],
+        "nav2_path": paths["nav2"],
+        "robot_launch_arguments": robot_launch_arguments,
+        "compatibility_body_weld_arguments": body_weld_arguments,
+    }
+    staged_data = {
+        "controllers": generated["controllers"],
+        "web_ui": generated["web_ui"],
+        "nav2": generated["nav2"],
+        "effective_profile": report,
+    }
+    staged_paths = {}
+    try:
+        for key in OUTPUT_FILENAMES:
+            staged_paths[key] = _stage_yaml(paths[key], staged_data[key])
+
+        reloaded = {
+            key: _load_staged_yaml(staged_paths[key], key)
+            for key in OUTPUT_FILENAMES
+        }
+        _validate_generated_configs(
+            reloaded["effective_profile"],
+            reloaded["controllers"],
+            reloaded["web_ui"],
+            reloaded["nav2"],
+        )
+
+        for key in ("controllers", "web_ui", "nav2", "effective_profile"):
+            os.replace(staged_paths[key], paths[key])
+        return manifest
+    finally:
+        for temporary_path in staged_paths.values():
+            temporary_path.unlink(missing_ok=True)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bringup-config", required=True, type=Path)
+    parser.add_argument("--output-dir", type=Path)
+    args = parser.parse_args(argv)
+    try:
+        manifest = compile_runtime_configs(
+            args.bringup_config,
+            output_dir=args.output_dir,
+        )
+    except (OSError, ValueError, yaml.YAMLError) as exc:
+        parser.exit(2, f"compile_runtime_configs: {exc}\n")
+    print(manifest["effective_profile_path"].resolve())
+    return 0

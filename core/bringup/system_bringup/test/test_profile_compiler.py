@@ -515,6 +515,6 @@ def test_setup_registers_compiler_and_installs_profiles():
     assert (
         "compile_runtime_configs = "
         "system_bringup.runtime_config_compiler:main"
-    ) not in setup_source
+    ) in setup_source
     assert "bringup.yaml" not in setup_source
     assert "glob('config/*.yaml')" not in setup_source
