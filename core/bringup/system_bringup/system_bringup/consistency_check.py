@@ -1422,6 +1422,15 @@ def _validate_slam_topology(tree, failures):
 def _validate_navigation_topology(tree, failures):
     function = _definition(tree, "generate_launch_description")
     assignments = _assignments(function)
+    outer_params_binding = assignments.get("params_file")
+    outer_params_ok = _launch_configuration(
+        outer_params_binding, "params_file", assignments
+    )
+    expected_params_signature = (
+        _signature(outer_params_binding, assignments)
+        if outer_params_ok
+        else None
+    )
     map_function = next(
         (
             node
@@ -1446,9 +1455,11 @@ def _validate_navigation_topology(tree, failures):
         else (None, None)
     )
     map_params_ok = (
-        map_parameters is not None
+        outer_params_ok
+        and map_parameters is not None
         and len(map_parameters) == 2
-        and _same_expression(map_parameters[0], "params_file", map_assignments)
+        and _signature(map_parameters[0], map_assignments)
+        == expected_params_signature
         and map_override is not None
         and set(map_override) == {"yaml_filename"}
         and not map_expansions

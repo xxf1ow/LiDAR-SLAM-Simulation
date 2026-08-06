@@ -907,6 +907,44 @@ def test_active_topology_rejects_map_server_parameter_drift(
     assert any("generated runtime artifacts" in failure for failure in failures)
 
 
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "    params_file = default_params\n",
+        "    params_file = LaunchConfiguration('legacy_params')\n",
+    ],
+)
+def test_active_topology_rejects_outer_params_file_rebinding(
+    runtime_factory, replacement
+):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["navigation"],
+        "    params_file = LaunchConfiguration('params_file')\n",
+        replacement,
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("generated runtime artifacts" in failure for failure in failures)
+
+
+def test_active_topology_rejects_inner_params_file_shadow(runtime_factory):
+    repo_root, manifest = runtime_factory()
+    _replace_source(
+        repo_root,
+        ACTIVE_TOPOLOGY_FILES["navigation"],
+        "    def _map_server(context, *args, **kwargs):\n",
+        "    def _map_server(context, *args, **kwargs):\n"
+        "        params_file = default_params\n",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("generated runtime artifacts" in failure for failure in failures)
+
+
 def test_active_topology_accepts_reordered_real_geometry_arguments(
     runtime_factory,
 ):
