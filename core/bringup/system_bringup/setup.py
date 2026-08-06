@@ -17,6 +17,10 @@ setup(
             os.path.join('share', package_name, 'config', 'profiles'),
             glob('config/profiles/*.yaml'),
         ),
+        (
+            os.path.join('share', package_name, 'config', 'templates'),
+            glob('config/templates/*.yaml'),
+        ),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
