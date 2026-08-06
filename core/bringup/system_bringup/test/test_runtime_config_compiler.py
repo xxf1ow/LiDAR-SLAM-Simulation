@@ -1267,15 +1267,18 @@ def test_runtime_cli_unknown_argument_is_one_line(runtime_tree, capsys):
     assert "Traceback" not in captured.err
 
 
-def test_formal_bringup_does_not_import_profile_runtime_compilers():
+def test_formal_bringup_imports_only_the_integrated_runtime_compiler():
     launch_source = (PACKAGE_ROOT / "launch/bringup.launch.py").read_text(
         encoding="utf-8"
     )
 
     for name in (
         "profile_compiler",
-        "runtime_config_compiler",
         "compile_profile",
-        "compile_runtime_configs",
     ):
         assert name not in launch_source
+    assert launch_source.count("compile_runtime_configs(") == 1
+    assert (
+        "from system_bringup.runtime_config_compiler import "
+        "compile_runtime_configs"
+    ) in launch_source
