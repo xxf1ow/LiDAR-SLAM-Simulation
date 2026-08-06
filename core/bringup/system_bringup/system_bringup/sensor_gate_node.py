@@ -1,5 +1,3 @@
-import time
-
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -13,7 +11,7 @@ class SensorGateNode(Node):
         super().__init__("real_sensor_ready_gate")
         self.state = SensorGateState()
         self.timeout = float(self.declare_parameter("timeout", 300.0).value)
-        self.started_at = time.monotonic()
+        self.started_at = self._now_seconds()
         self.last_report_at = self.started_at
         self.exit_code = 1
         self.finished = False
@@ -26,10 +24,11 @@ class SensorGateNode(Node):
         self.timer = self.create_timer(0.1, self._check_status)
 
     def _on_points(self, msg):
+        now = self._now_seconds()
         self.state.observe_point(
-            received=time.monotonic(),
+            received=now,
             stamp=msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
-            now_ros=self.get_clock().now().nanoseconds * 1e-9,
+            now_ros=now,
             frame_id=msg.header.frame_id,
             height=msg.height,
             width=msg.width,
@@ -37,17 +36,18 @@ class SensorGateNode(Node):
         )
 
     def _on_imu(self, msg):
+        now = self._now_seconds()
         self.state.observe_imu(
-            received=time.monotonic(),
+            received=now,
             stamp=msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9,
-            now_ros=self.get_clock().now().nanoseconds * 1e-9,
+            now_ros=now,
             frame_id=msg.header.frame_id,
         )
 
     def _check_status(self):
         if self.finished:
             return
-        now = time.monotonic()
+        now = self._now_seconds()
         ready, reason = self.state.status(now)
         if ready:
             self._finish(
@@ -61,6 +61,9 @@ class SensorGateNode(Node):
         elif now - self.last_report_at >= 5.0:
             self.get_logger().info(f"real sensor contract waiting: {reason}")
             self.last_report_at = now
+
+    def _now_seconds(self):
+        return self.get_clock().now().nanoseconds / 1_000_000_000.0
 
     def _finish(self, exit_code, message):
         self.finished = True

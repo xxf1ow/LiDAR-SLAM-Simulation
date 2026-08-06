@@ -2,8 +2,12 @@ import pytest
 
 from system_bringup.sensor_gate_logic import (
     IMU_FRAME,
+    MAX_STAMP_AGE,
+    MIN_IMU_HZ,
+    MIN_POINT_HZ,
     POINT_FIELDS,
     POINT_FRAME,
+    STABLE_DURATION,
     SensorGateState,
 )
 
@@ -36,6 +40,13 @@ def feed_healthy(state, duration, point_hz=10.0, imu_hz=200.0, start=0.0):
                 frame_id=IMU_FRAME,
             )
         state.status(received)
+
+
+def test_sensor_gate_contract_thresholds_are_unchanged():
+    assert MIN_POINT_HZ == 8.0
+    assert MIN_IMU_HZ == 150.0
+    assert MAX_STAMP_AGE == 0.5
+    assert STABLE_DURATION == 2.0
 
 
 def test_healthy_streams_become_ready_after_two_stable_seconds():
