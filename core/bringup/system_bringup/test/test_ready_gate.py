@@ -45,12 +45,15 @@ class _RosTime:
 
 class _Clock:
     def __init__(self, values):
-        self._values = iter(values)
-        self._last = 0
+        values = iter(values)
+        self._current = next(values, 0)
+        self._pending = values
 
     def now(self):
-        self._last = next(self._values, self._last)
-        return _RosTime(self._last)
+        return _RosTime(self._current)
+
+    def advance(self):
+        self._current = next(self._pending, self._current)
 
 
 def _run_script(monkeypatch, script, clock_values, topics):
@@ -68,7 +71,13 @@ def _run_script(monkeypatch, script, clock_values, topics):
 
     rclpy = types.ModuleType("rclpy")
     rclpy.init = lambda: None
-    rclpy.spin_once = lambda node, timeout_sec: None
+    spins = []
+
+    def _spin_once(node, timeout_sec):
+        spins.append(timeout_sec)
+        clock.advance()
+
+    rclpy.spin_once = _spin_once
     rclpy_node = types.ModuleType("rclpy.node")
     rclpy_node.Node = _Node
     monkeypatch.setitem(sys.modules, "rclpy", rclpy)
@@ -80,7 +89,7 @@ def _run_script(monkeypatch, script, clock_values, topics):
 
     with pytest.raises(SystemExit) as exc_info:
         exec(compile(script, "<ready_gate>", "exec"), {})
-    return exc_info.value.code
+    return exc_info.value.code, len(spins)
 
 
 @pytest.mark.parametrize(
@@ -125,21 +134,43 @@ def test_generated_script_releases_after_ros_time_settling(monkeypatch):
     module = _load_ready_gate(monkeypatch)
     script = module._gate_script(["/ready"], timeout=10.0, settling=1.0)
 
-    assert _run_script(
+    result, _ = _run_script(
         monkeypatch,
         script,
-        clock_values=[0, 0, 500_000_000, 1_000_000_000],
+        clock_values=[0, 500_000_000, 1_000_000_000, 1_500_000_000],
         topics=["/ready"],
-    ) == 0
+    )
+    assert result == 0
+
+
+def test_generated_script_does_not_count_queued_sim_uptime_as_settling(monkeypatch):
+    module = _load_ready_gate(monkeypatch)
+    script = module._gate_script(["/ready"], timeout=10.0, settling=1.0)
+
+    result, spins = _run_script(
+        monkeypatch,
+        script,
+        clock_values=[
+            0,
+            100_000_000_000,
+            100_500_000_000,
+            101_000_000_000,
+        ],
+        topics=["/ready"],
+    )
+
+    assert result == 0
+    assert spins == 3
 
 
 def test_generated_script_fails_when_ros_clock_is_frozen(monkeypatch):
     module = _load_ready_gate(monkeypatch)
     script = module._gate_script(["/ready"], timeout=3.0, settling=1.0)
 
-    assert _run_script(
+    result, _ = _run_script(
         monkeypatch,
         script,
         clock_values=[0],
         topics=["/ready"],
-    ) == 1
+    )
+    assert result == 1
