@@ -1,8 +1,13 @@
 import ast
 from pathlib import Path
+import re
+from xml.etree import ElementTree
 
 
 LAUNCH_PATH = Path(__file__).resolve().parents[1] / "launch" / "robot_gz.launch.py"
+PACKAGE_ROOT = LAUNCH_PATH.parents[1]
+CMAKE_PATH = PACKAGE_ROOT / "CMakeLists.txt"
+PACKAGE_XML_PATH = PACKAGE_ROOT / "package.xml"
 RUNTIME_ARGUMENTS = {
     "controllers_file",
     "base_length", "base_width", "base_height", "base_link_height",
@@ -73,6 +78,23 @@ def test_manifest_owned_inputs_are_required_launch_arguments():
         assert not any(
             keyword.arg == "default_value" for keyword in declarations[name].keywords
         )
+
+
+def test_launch_contract_test_is_registered_with_ament():
+    cmake = CMAKE_PATH.read_text(encoding="utf-8")
+    assert "if(BUILD_TESTING)" in cmake
+    assert "find_package(ament_cmake_pytest REQUIRED)" in cmake
+    assert re.search(
+        r"ament_add_pytest_test\(\s*robot_gz_launch\s+"
+        r"test/test_robot_gz_launch\.py\s*\)",
+        cmake,
+    )
+
+    root = ElementTree.parse(PACKAGE_XML_PATH).getroot()
+    test_dependencies = {
+        element.text for element in root.findall("test_depend")
+    }
+    assert "ament_cmake_pytest" in test_dependencies
 
 
 def test_xacro_receives_generated_controller_and_all_runtime_geometry():

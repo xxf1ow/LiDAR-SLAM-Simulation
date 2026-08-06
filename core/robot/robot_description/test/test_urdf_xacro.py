@@ -19,6 +19,9 @@ COMBOS = [
     ("false", "true"),   # mock 硬件分支
     ("true", "false"),   # Gz 仿真分支
 ]
+GENERATED_CONTROLLERS_PATH = (
+    "/tmp/system_bringup-runtime-test/generated_robot_controllers.yaml"
+)
 
 
 @pytest.mark.parametrize("use_gazebo,use_mock_hardware", COMBOS)
@@ -33,7 +36,7 @@ def test_xacro_expands_to_valid_urdf(use_gazebo, use_mock_hardware):
             xacro_bin, XACRO,
             f"use_gazebo:={use_gazebo}",
             f"use_mock_hardware:={use_mock_hardware}",
-            "gz_controllers_file:=/tmp/robot_controllers.yaml",
+            f"gz_controllers_file:={GENERATED_CONTROLLERS_PATH}",
         ],
         text=True,
     )
@@ -70,6 +73,14 @@ def test_xacro_expands_to_valid_urdf(use_gazebo, use_mock_hardware):
     if use_gazebo == "true":
         assert "gz_ros2_control/GazeboSimSystem" in urdf
         assert "gz_ros2_control-system" in urdf  # gazebo 插件标签也注入了
+        plugin = next(
+            item
+            for item in root.findall("./gazebo/plugin")
+            if item.attrib.get("filename") == "gz_ros2_control-system"
+        )
+        parameters = plugin.find("parameters")
+        assert parameters is not None
+        assert (parameters.text or "").strip() == GENERATED_CONTROLLERS_PATH
     elif use_mock_hardware == "true":
         assert "mock_components/GenericSystem" in urdf
     else:
