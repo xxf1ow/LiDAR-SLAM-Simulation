@@ -1,5 +1,7 @@
+import argparse
 import copy
 import math
+import sys
 import tempfile
 from pathlib import Path
 
@@ -300,3 +302,31 @@ def compile_profile(bringup_config_path, output_dir=None):
         encoding="utf-8",
     )
     return output
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Validate and compile a selected platform Profile"
+    )
+    parser.add_argument(
+        "--bringup-config",
+        required=True,
+        help="Path to source bringup.yaml",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        help="Generated file directory; default is a private temporary directory",
+    )
+    args = parser.parse_args(argv)
+    try:
+        output = compile_profile(args.bringup_config, args.output_dir)
+    except (OSError, ValueError) as exc:
+        print(f"profile compilation failed: {exc}", file=sys.stderr)
+        return 1
+    print(output.resolve())
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

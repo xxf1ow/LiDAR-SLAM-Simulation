@@ -304,3 +304,47 @@ def test_failed_compilation_does_not_create_final_file(tmp_path):
         pc.compile_profile(config, output)
 
     assert not (output / "effective_profile.generated.yaml").exists()
+
+
+def test_cli_prints_absolute_generated_path(tmp_path, capsys):
+    output = tmp_path / "output"
+    result = pc.main([
+        "--bringup-config", str(_selection(tmp_path)),
+        "--output-dir", str(output),
+    ])
+    captured = capsys.readouterr()
+    assert result == 0
+    assert captured.err == ""
+    assert captured.out.strip() == str(
+        (output / "effective_profile.generated.yaml").resolve()
+    )
+
+
+def test_cli_reports_validation_error_without_traceback(tmp_path, capsys):
+    config = _selection(tmp_path)
+    value = yaml.safe_load(config.read_text(encoding="utf-8"))
+    value["platform"] = "bad"
+    config.write_text(yaml.safe_dump(value), encoding="utf-8")
+
+    result = pc.main(["--bringup-config", str(config)])
+    captured = capsys.readouterr()
+    assert result == 1
+    assert "platform" in captured.err
+    assert "Traceback" not in captured.err
+
+
+def test_formal_bringup_does_not_import_profile_compiler():
+    launch = (
+        PACKAGE_ROOT / "launch" / "bringup.launch.py"
+    ).read_text(encoding="utf-8")
+    assert "profile_compiler" not in launch
+    assert "compile_profile" not in launch
+
+
+def test_setup_registers_compiler_and_installs_profiles():
+    setup_source = (PACKAGE_ROOT / "setup.py").read_text(encoding="utf-8")
+    assert (
+        "compile_profile = system_bringup.profile_compiler:main"
+        in setup_source
+    )
+    assert "config/profiles/*.yaml" in setup_source

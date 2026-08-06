@@ -246,7 +246,7 @@ m/s²，角速度/加速度使用 rad/s、rad/s²。驱动要求其他单位时�
 Spin 速度、倒车速度、MPPI 采样标准差等不是通用运动限制的重复表达，继续由 Nav2
 template 独立拥有。人工驾驶速度由用户在 Web UI 中运行时选择，不另建人工驾驶 Profile。
 
-### [~] 2. Profile 编译器最小骨架
+### [x] 2. Profile 编译器最小骨架
 
 目的：建立读取 Profile、校验、派生并在 `/tmp` 报告有效配置的最小流程。
 
@@ -259,6 +259,15 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 
 完成条件：sim/real 都能生成有效报告；缺字段、类型错误和非法几何明确失败；real 已确认
 几何与旧原型等价；原有测试通过且现有启动行为不变。
+
+本节已实现：
+
+- `sim.yaml` 与 `real.yaml` 两份完整、同 schema 且逐字段注释的 Profile。
+- 独立 `profile_compiler.py`，提供严格 schema/几何校验、派生值和
+  `effective_profile.generated.yaml` 报告；可通过 `ros2 run system_bringup
+  compile_profile --bringup-config PATH [--output-dir DIR]` 调用。
+- 正式 bringup 未接入该编译器，仍使用既有 real 几何派生与运行时生成路径，原启动行为
+  保持不变。
 
 本地设计产物：`docs/superpowers/specs/2026-08-06-profile-compiler-skeleton-design.md`
 （按用户要求不加入 Git 提交）。
@@ -349,5 +358,5 @@ Profile 获取，现有地图不会被测试过程覆盖。
 
 ## 下一步
 
-第 1 节设计已完成。下一步在用户确认后进入第 2 节，只讨论并实现 Profile 编译器最小
-骨架；不提前迁移第 3 节及后续模块参数。
+第 2 节已完成。下一步在用户确认后只进入第 3 节底盘、ros2_control 与手动控制的详细
+讨论；不提前迁移后续模块参数。
