@@ -1,5 +1,7 @@
 import ast
+import importlib.util
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from xml.etree import ElementTree
 
 
@@ -31,6 +33,74 @@ def _setup_keyword(name):
 
 def _node_tree():
     return ast.parse(NODE_PATH.read_text(encoding="utf-8"))
+
+
+def _load_gate_node(monkeypatch):
+    class Node:
+        pass
+
+    class ExternalShutdownException(Exception):
+        pass
+
+    class TwistStamped:
+        def __init__(self):
+            self.header = SimpleNamespace(stamp=None, frame_id="")
+            self.twist = SimpleNamespace()
+
+    class String:
+        def __init__(self, data=""):
+            self.data = data
+
+    class Trigger:
+        pass
+
+    rclpy = ModuleType("rclpy")
+    rclpy.init = lambda *args, **kwargs: None
+    rclpy.spin = lambda *args, **kwargs: None
+    rclpy.try_shutdown = lambda *args, **kwargs: None
+    executors = ModuleType("rclpy.executors")
+    executors.ExternalShutdownException = ExternalShutdownException
+    node = ModuleType("rclpy.node")
+    node.Node = Node
+    qos = ModuleType("rclpy.qos")
+    qos.DurabilityPolicy = SimpleNamespace(TRANSIENT_LOCAL=object())
+    qos.HistoryPolicy = SimpleNamespace(KEEP_LAST=object())
+    qos.QoSProfile = object
+    qos.ReliabilityPolicy = SimpleNamespace(RELIABLE=object())
+    geometry_msgs = ModuleType("geometry_msgs")
+    geometry_msgs_msg = ModuleType("geometry_msgs.msg")
+    geometry_msgs_msg.TwistStamped = TwistStamped
+    std_msgs = ModuleType("std_msgs")
+    std_msgs_msg = ModuleType("std_msgs.msg")
+    std_msgs_msg.String = String
+    std_srvs = ModuleType("std_srvs")
+    std_srvs_srv = ModuleType("std_srvs.srv")
+    std_srvs_srv.Trigger = Trigger
+    package = ModuleType("cmd_vel_gate")
+    package.__path__ = [str(ROOT / "cmd_vel_gate")]
+
+    for name, module in {
+        "rclpy": rclpy,
+        "rclpy.executors": executors,
+        "rclpy.node": node,
+        "rclpy.qos": qos,
+        "geometry_msgs": geometry_msgs,
+        "geometry_msgs.msg": geometry_msgs_msg,
+        "std_msgs": std_msgs,
+        "std_msgs.msg": std_msgs_msg,
+        "std_srvs": std_srvs,
+        "std_srvs.srv": std_srvs_srv,
+        "cmd_vel_gate": package,
+    }.items():
+        monkeypatch.setitem(__import__("sys").modules, name, module)
+
+    spec = importlib.util.spec_from_file_location(
+        "cmd_vel_gate.gate_node",
+        NODE_PATH,
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _function(name):
@@ -222,6 +292,63 @@ def test_node_uses_exact_timeout_and_zero_period():
     }
     assert constants["SOURCE_TIMEOUT"] == 0.5
     assert constants["ZERO_PERIOD"] == 0.05
+
+
+def test_source_timeout_uses_only_the_node_clock(monkeypatch):
+    module = _load_gate_node(monkeypatch)
+
+    class FakeTime:
+        def __init__(self, seconds):
+            self.nanoseconds = int(seconds * 1_000_000_000)
+
+        def to_msg(self):
+            return object()
+
+    class FakeClock:
+        def __init__(self, seconds):
+            self.seconds = seconds
+
+        def now(self):
+            return FakeTime(self.seconds)
+
+    class RecordingState:
+        def __init__(self):
+            self.accepted_at = None
+            self.stale_check = None
+
+        def accept(self, _source, now):
+            self.accepted_at = now
+            return True
+
+        def selected_source_is_stale(self, now, timeout):
+            self.stale_check = (now, timeout)
+            return False
+
+    class RecordingPublisher:
+        def __init__(self):
+            self.messages = []
+
+        def publish(self, message):
+            self.messages.append(message)
+
+    clock = FakeClock(12.25)
+    gate = module.CmdVelGate.__new__(module.CmdVelGate)
+    gate.get_clock = lambda: clock
+    gate._state = RecordingState()
+    gate._publisher = RecordingPublisher()
+    message = module.TwistStamped()
+
+    gate._forward(module.Mode.AUTOMATIC, message)
+    assert gate._state.accepted_at == 12.25
+
+    clock.seconds = 12.75
+    gate._on_timer()
+    assert gate._state.stale_check == (12.75, module.SOURCE_TIMEOUT)
+
+    source = NODE_PATH.read_text(encoding="utf-8")
+    assert "time.monotonic" not in source
+    assert "platform" not in source
+    assert "backend" not in source
 
 
 def test_switch_stops_before_zero_and_selects_after_zero():

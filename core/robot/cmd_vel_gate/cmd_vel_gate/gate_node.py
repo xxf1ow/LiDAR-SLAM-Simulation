@@ -1,5 +1,3 @@
-import time
-
 import rclpy
 from geometry_msgs.msg import TwistStamped
 from rclpy.executors import ExternalShutdownException
@@ -67,8 +65,11 @@ class CmdVelGate(Node):
     def _manual_callback(self, message: TwistStamped) -> None:
         self._forward(Mode.MANUAL, message)
 
+    def _now_seconds(self) -> float:
+        return self.get_clock().now().nanoseconds / 1_000_000_000.0
+
     def _forward(self, source: Mode, message: TwistStamped) -> None:
-        if self._state.accept(source, time.monotonic()):
+        if self._state.accept(source, self._now_seconds()):
             output = self._new_output()
             output.twist = message.twist
             self._publisher.publish(output)
@@ -87,7 +88,7 @@ class CmdVelGate(Node):
 
     def _on_timer(self) -> None:
         if self._state.selected_source_is_stale(
-            time.monotonic(),
+            self._now_seconds(),
             SOURCE_TIMEOUT,
         ):
             self._publish_zero()
