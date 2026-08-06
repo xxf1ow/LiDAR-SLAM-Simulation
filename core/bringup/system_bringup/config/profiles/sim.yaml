@@ -1,0 +1,64 @@
+hardware:
+  chassis:
+    backend: gazebo # 仿真底盘后端
+  lidar:
+    backend: gazebo # 仿真雷达后端
+    model: gpu_lidar # Gazebo GPU 雷达模型
+    host_address: null # 仿真不使用主机雷达网口
+    device_address: null # 仿真不使用雷达设备地址
+    host_msop_port: null # 仿真不接收 MSOP UDP
+    device_msop_port: null # 仿真不发送 MSOP UDP
+
+robot:
+  body:
+    front_extent: 0.375 # base_footprint 到车体前端，单位 m
+    rear_extent: 0.375 # base_footprint 到车体后端，单位 m
+    left_extent: 0.275 # base_footprint 到车体左侧，单位 m
+    right_extent: 0.275 # base_footprint 到车体右侧，单位 m
+    height: 0.40 # 车体高度，单位 m
+    ground_clearance: 0.12 # 车体底面离地高度，单位 m
+  drive:
+    wheel_radius: 0.12 # 驱动轮半径，单位 m
+    wheel_width: 0.06 # 单个驱动轮宽度，单位 m
+    wheel_separation: 0.55 # 两驱动轮中心距，单位 m
+  mounts:
+    lidar:
+      x: 0.0 # 雷达相对 base_footprint 的前向位置，单位 m
+      y: 0.0 # 雷达相对 base_footprint 的左向位置，单位 m
+      z: 0.556 # 雷达相对 base_footprint 的高度，单位 m
+      roll: 0.0 # 雷达绕 x 轴安装角，单位 rad
+      pitch: 0.0 # 雷达绕 y 轴安装角，单位 rad
+      yaw: 0.0 # 雷达绕 z 轴安装角，单位 rad
+    imu:
+      x: 0.0 # IMU 相对 base_footprint 的前向位置，单位 m
+      y: 0.0 # IMU 相对 base_footprint 的左向位置，单位 m
+      z: 0.556 # IMU 相对 base_footprint 的高度，单位 m
+      roll: 0.0 # IMU 绕 x 轴安装角，单位 rad
+      pitch: 0.0 # IMU 绕 y 轴安装角，单位 rad
+      yaw: 0.0 # IMU 绕 z 轴安装角，单位 rad
+
+sensors:
+  lidar:
+    scan_lines: 16 # 垂直扫描线数
+    columns_per_scan: 1800 # 每帧每线水平点数
+    scan_rate_hz: 10.0 # 完整点云频率，单位 Hz
+    min_range: 0.9 # 仿真雷达最小量程，单位 m
+    max_range: 100.0 # 仿真雷达最大量程，单位 m
+    horizontal_start_angle: -3.14159 # 水平起始角，单位 rad
+    horizontal_end_angle: 3.14159 # 水平终止角，单位 rad
+    point_time_field: time # PointCloud2 逐点相对时间字段名
+    point_time_unit: seconds # 逐点时间数值单位
+    point_time_reference: scan_start # 逐点时间相对本帧起始时刻
+  imu:
+    rate_hz: 200.0 # IMU 标称发布频率，单位 Hz
+
+motion:
+  max_linear_velocity: null # 第 3 节确认，单位 m/s
+  max_angular_velocity: null # 第 3 节确认，单位 rad/s
+  max_linear_acceleration: null # 第 3 节确认，单位 m/s²
+  max_angular_acceleration: null # 第 3 节确认，单位 rad/s²
+
+perception:
+  obstacle_height:
+    min: null # 第 8 节确认，离地高度，单位 m
+    max: null # 第 8 节确认，离地高度，单位 m

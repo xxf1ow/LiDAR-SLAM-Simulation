@@ -6,6 +6,11 @@
 platform: sim              # sim | real
 mode: navigation           # navigation | mapping
 
+# === 平台事实 Profile：路径相对本文件解析 ===
+profiles:
+  sim: profiles/sim.yaml    # 仿真平台完整事实
+  real: profiles/real.yaml  # 当前实机完整事实
+
 # === 仿真底层:robot_gz_bringup(platform=sim 时生效)===
 robot_gz:
   gui: "true"
