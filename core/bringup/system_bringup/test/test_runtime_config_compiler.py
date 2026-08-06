@@ -1,4 +1,6 @@
 import shutil
+from copy import deepcopy
+import json
 from pathlib import Path
 
 import pytest
@@ -232,3 +234,205 @@ def test_nav2_template_preserves_complete_current_sim_baseline():
         "behavior_server",
         "bt_navigator",
     }
+
+
+def _rendered(runtime_tree, platform, mode="navigation"):
+    runtime_tree.set_bringup_value("platform", platform)
+    runtime_tree.set_bringup_value("mode", mode)
+    return rcc._render_runtime_configs(rcc._load_runtime_inputs(runtime_tree.config))
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_renderer_maps_profile_motion_and_geometry_to_all_modules(
+    runtime_tree, platform
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    rendered = rcc._render_runtime_configs(inputs)
+    effective = inputs["effective"]
+    geometry = effective["derived"]["geometry"]
+    motion = effective["profile"]["motion"]
+    controllers = rendered["controllers"]
+    base = controllers["base_controller"]["ros__parameters"]
+    web_ui = rendered["web_ui"]["robot_web_ui"]["ros__parameters"]
+    follow_path = rendered["nav2"]["controller_server"]["ros__parameters"][
+        "FollowPath"
+    ]
+
+    assert base["wheel_radius"] == geometry["drive"]["wheel_radius"]
+    assert base["wheel_separation"] == geometry["drive"]["wheel_separation"]
+    assert "wheel_width" not in base
+    assert base["linear.x.max_velocity"] == motion["max_linear_velocity"]
+    assert base["linear.x.min_velocity"] == -motion["max_linear_velocity"]
+    assert base["linear.x.max_acceleration"] == motion["max_linear_acceleration"]
+    assert base["linear.x.min_acceleration"] == -motion["max_linear_acceleration"]
+    assert base["angular.z.max_velocity"] == motion["max_angular_velocity"]
+    assert base["angular.z.min_velocity"] == -motion["max_angular_velocity"]
+    assert base["angular.z.max_acceleration"] == motion["max_angular_acceleration"]
+    assert base["angular.z.min_acceleration"] == -motion["max_angular_acceleration"]
+    assert base["linear.x.has_acceleration_limits"] is True
+    assert base["angular.z.has_acceleration_limits"] is True
+    assert base["linear.x.has_jerk_limits"] is False
+    assert base["angular.z.has_jerk_limits"] is False
+
+    assert web_ui["max_linear_speed"] == motion["max_linear_velocity"]
+    assert web_ui["max_angular_speed"] == motion["max_angular_velocity"]
+    assert web_ui["host"] == "0.0.0.0"
+    assert web_ui["port"] == 8080
+
+    assert follow_path["vx_max"] == motion["max_linear_velocity"]
+    assert follow_path["wz_max"] == motion["max_angular_velocity"]
+    assert follow_path["vx_min"] == -0.35
+    assert {"ax_max", "ax_min", "az_max"}.isdisjoint(follow_path)
+    assert follow_path["vx_std"] == 0.2
+    assert follow_path["wz_std"] == 0.6
+    assert rendered["nav2"]["controller_server"]["ros__parameters"][
+        "controller_frequency"
+    ] == 10.0
+    assert rendered["nav2"]["behavior_server"]["ros__parameters"][
+        "spin"
+    ] == {"plugin": "nav2_behaviors/Spin"}
+    assert rendered["nav2"]["behavior_server"]["ros__parameters"][
+        "backup"
+    ] == {"plugin": "nav2_behaviors/BackUp"}
+    assert rendered["nav2"]["controller_server"]["ros__parameters"][
+        "FollowPath"
+    ]["ConstraintCritic"] == {"enabled": True, "cost_power": 1, "cost_weight": 4.0}
+
+    footprints = [
+        rendered["nav2"]["global_costmap"]["global_costmap"]["ros__parameters"][
+            "footprint"
+        ],
+        rendered["nav2"]["local_costmap"]["local_costmap"]["ros__parameters"][
+            "footprint"
+        ],
+    ]
+    assert all(isinstance(value, str) for value in footprints)
+    assert footprints[0] == footprints[1]
+    assert json.loads(footprints[0]) == geometry["footprint"]
+
+    expected_time = platform == "sim"
+    for mapping, paths in (
+        (controllers, rcc.CONTROLLER_TIME_PATHS),
+        (rendered["web_ui"], rcc.WEB_UI_TIME_PATHS),
+        (rendered["nav2"], rcc.NAV2_TIME_PATHS),
+    ):
+        for path in paths:
+            node = mapping
+            for key in path:
+                node = node[key]
+            assert node is expected_time
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_renderer_does_not_depend_on_mode(runtime_tree, platform):
+    assert _rendered(runtime_tree, platform, "mapping") == _rendered(
+        runtime_tree, platform, "navigation"
+    )
+
+
+def test_renderer_does_not_mutate_loaded_templates(runtime_tree):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    original_templates = deepcopy(inputs["templates"])
+
+    rcc._render_runtime_configs(inputs)
+
+    assert inputs["templates"] == original_templates
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda rendered: rendered["controllers"]["base_controller"][
+            "ros__parameters"
+        ].__setitem__("wheel_width", 0.06),
+        lambda rendered: rendered["web_ui"]["robot_web_ui"]["ros__parameters"].__setitem__(
+            "max_linear_speed", 99.0
+        ),
+        lambda rendered: rendered["nav2"]["controller_server"]["ros__parameters"][
+            "FollowPath"
+        ].__setitem__("ax_max", 1.0),
+    ],
+)
+def test_generated_config_validator_rejects_cross_module_drift(
+    runtime_tree, mutate
+):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    rendered = rcc._render_runtime_configs(inputs)
+    mutate(rendered)
+
+    with pytest.raises(ValueError):
+        rcc._validate_generated_configs(
+            inputs["effective"],
+            rendered["controllers"],
+            rendered["web_ui"],
+            rendered["nav2"],
+        )
+
+
+CONTROLLER_RENDER_PATHS = (
+    ("base_controller", "ros__parameters", "wheel_radius"),
+    ("base_controller", "ros__parameters", "wheel_separation"),
+    ("base_controller", "ros__parameters", "linear.x.max_velocity"),
+    ("base_controller", "ros__parameters", "linear.x.min_velocity"),
+    ("base_controller", "ros__parameters", "linear.x.max_acceleration"),
+    ("base_controller", "ros__parameters", "linear.x.min_acceleration"),
+    ("base_controller", "ros__parameters", "angular.z.max_velocity"),
+    ("base_controller", "ros__parameters", "angular.z.min_velocity"),
+    ("base_controller", "ros__parameters", "angular.z.max_acceleration"),
+    ("base_controller", "ros__parameters", "angular.z.min_acceleration"),
+) + rcc.CONTROLLER_TIME_PATHS
+WEB_UI_RENDER_PATHS = (
+    ("robot_web_ui", "ros__parameters", "max_linear_speed"),
+    ("robot_web_ui", "ros__parameters", "max_angular_speed"),
+) + rcc.WEB_UI_TIME_PATHS
+NAV2_RENDER_PATHS = (
+    ("controller_server", "ros__parameters", "FollowPath", "vx_max"),
+    ("controller_server", "ros__parameters", "FollowPath", "wz_max"),
+    ("global_costmap", "global_costmap", "ros__parameters", "footprint"),
+    ("local_costmap", "local_costmap", "ros__parameters", "footprint"),
+) + rcc.NAV2_TIME_PATHS
+
+
+def _mutate_path(mapping, path, mutation):
+    node = mapping
+    for key in path[:-1]:
+        node = node[key]
+    if mutation == "missing_leaf":
+        del node[path[-1]]
+    elif mutation == "wrong_type":
+        node[path[-1]] = "wrong" if isinstance(node[path[-1]], bool) else True
+    else:
+        parent = path[-2]
+        grandparent = mapping
+        for key in path[:-2]:
+            grandparent = grandparent[key]
+        del grandparent[parent]
+
+
+@pytest.mark.parametrize(
+    ("label", "path"),
+    [("controllers", path) for path in CONTROLLER_RENDER_PATHS]
+    + [("web_ui", path) for path in WEB_UI_RENDER_PATHS]
+    + [("nav2", path) for path in NAV2_RENDER_PATHS],
+)
+@pytest.mark.parametrize("mutation", ["missing_parent", "missing_leaf", "wrong_type"])
+def test_renderer_rejects_template_target_drift(
+    runtime_tree, label, path, mutation
+):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    inputs["templates"] = deepcopy(inputs["templates"])
+    template = inputs["templates"][label]
+    node = template
+    for key in path:
+        node = node[key]
+    expected_type = (
+        bool if isinstance(node, bool) else str if isinstance(node, str) else float
+    )
+    _mutate_path(template, path, mutation)
+
+    with pytest.raises(ValueError, match=rf"{label} template"):
+        rcc._render_runtime_configs(inputs)
+
+    with pytest.raises(ValueError, match=rf"{label} template.*{'.'.join(path)}"):
+        rcc._set_template_existing(label, template, path, None, expected_type)
