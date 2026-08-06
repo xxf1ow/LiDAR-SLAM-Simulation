@@ -16,7 +16,10 @@ from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
-from system_bringup.consistency_check import run_runtime_consistency
+from system_bringup.consistency_check import (
+    require_runtime_config_file,
+    run_runtime_consistency,
+)
 from system_bringup.ready_gate import ready_gate
 from system_bringup.runtime_config_compiler import compile_runtime_configs
 
@@ -111,6 +114,16 @@ def _bringup(context, *args, **kwargs):
     cfg = manifest["bringup_config"]
     stack_cfg = cfg["slam_stack"]
     profile = stack_cfg[platform]
+    if mode == "mapping":
+        require_runtime_config_file(
+            _pkg_config("lio_sam", profile["lio_sam"]["config"]),
+            "LIO-SAM",
+        )
+    else:
+        require_runtime_config_file(
+            _pkg_config("fast_lio", profile["fast_lio"]["config"]),
+            "FAST-LIO",
+        )
     geometry = manifest["robot_launch_arguments"]
     weld = manifest["compatibility_body_weld_arguments"]
     use_sim = "true" if use_sim_time else "false"
@@ -167,12 +180,12 @@ def _bringup(context, *args, **kwargs):
             "robot_gz_bringup",
             "launch/robot_gz.launch.py",
             {
-                "gui": gz.get("gui", "true"),
-                "rviz": gz.get("rviz", "false"),
-                "world": gz.get("world", "factory.sdf"),
-                "spawn_x": gz.get("spawn_x", "4.0"),
-                "spawn_y": gz.get("spawn_y", "0.0"),
-                "spawn_z": gz.get("spawn_z", "0.05"),
+                "gui": gz["gui"],
+                "rviz": gz["rviz"],
+                "world": gz["world"],
+                "spawn_x": gz["spawn_x"],
+                "spawn_y": gz["spawn_y"],
+                "spawn_z": gz["spawn_z"],
                 "controllers_file": str(manifest["controllers_path"]),
                 "use_sim_time": use_sim,
                 **geometry,
@@ -207,9 +220,6 @@ def _bringup(context, *args, **kwargs):
             "launch/real_chassis.launch.py",
             {
                 "gui": "false",
-                "use_mock_hardware": (
-                    "true" if cfg["robot_bringup"]["use_mock_hardware"] else "false"
-                ),
                 "controllers_file": str(manifest["controllers_path"]),
                 "use_sim_time": use_sim,
                 **geometry,

@@ -1,6 +1,6 @@
-# system_bringup 运行配置 —— bringup.launch.py 运行时用 find_repo_root() 读**源码**本文件
-# (不经 install),故改这里不用 rebuild system_bringup。
-# 勿加进 setup.py data_files(不 install)——否则改了要 rebuild,失去本设计的意义。
+# system_bringup 运行配置 —— bringup.launch.py 从 colcon install 布局固定映射到**源码**本文件，
+# 再由 compile_runtime_configs() 编译到独立 /tmp 运行时目录；改本文件不用 rebuild。
+# 本文件仍不进入 setup.py data_files，避免 install 副本成为第二配置源。
 
 # === 顶层:改这两行切 4 组合(sim/real × navigation/mapping),不用 rebuild ===
 platform: sim              # sim | real

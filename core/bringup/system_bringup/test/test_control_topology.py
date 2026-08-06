@@ -318,6 +318,7 @@ def test_real_chassis_passes_runtime_geometry_to_robot_launch():
         for item in geometry.generators[0].iter.elts
     }
     assert declared - {"gui"} == names
+    assert "use_mock_hardware" not in declared
 
     robot = _assigned_value(function, "robot")
     launch_arguments = _keyword(robot, "launch_arguments")
@@ -329,6 +330,7 @@ def test_real_chassis_passes_runtime_geometry_to_robot_launch():
         and value.id == "geometry_arguments"
         for key, value in zip(passed.keys, passed.values)
     )
+    assert _string(_dict_value(passed, "use_mock_hardware")) == "false"
 
 
 def test_real_chassis_requires_authoritative_geometry_instead_of_sim_defaults():
@@ -617,6 +619,70 @@ def test_formal_bringup_failures_construct_no_actions(
     assert actions == []
 
 
+@pytest.mark.parametrize(
+    ("mode", "package", "filename", "component"),
+    (
+        ("mapping", "lio_sam", "params.yaml", "LIO-SAM"),
+        ("navigation", "fast_lio", "gazebo_velodyne.yaml", "FAST-LIO"),
+    ),
+)
+def test_missing_selected_slam_config_fails_before_action_construction(
+    monkeypatch, tmp_path, mode, package, filename, component
+):
+    launch_module = _fake_launch_module(monkeypatch, tmp_path / "share")
+    source = (tmp_path / "core/bringup/system_bringup/config/bringup.yaml").resolve()
+    profile = {
+        "lio_sam": {"config": "params.yaml"},
+        "fast_lio": {"config": "gazebo_velodyne.yaml"},
+    }
+    manifest = {
+        "platform": "sim",
+        "mode": mode,
+        "use_sim_time": True,
+        "bringup_config": {
+            "slam_stack": {"settling": 20.0, "sim": profile},
+        },
+    }
+    required = []
+    actions = []
+    monkeypatch.setattr(launch_module, "_source_bringup_config_path", lambda: source)
+    monkeypatch.setattr(
+        launch_module, "compile_runtime_configs", lambda path: manifest
+    )
+    monkeypatch.setattr(
+        launch_module, "run_runtime_consistency", lambda repo_root, value: []
+    )
+    monkeypatch.setattr(
+        launch_module,
+        "_pkg_config",
+        lambda pkg, selected: f"/installed/{pkg}/config/{selected}",
+    )
+
+    def reject_missing(path, label):
+        required.append((path, label))
+        raise RuntimeError(f"{label} 运行时配置不存在: {path}")
+
+    monkeypatch.setattr(
+        launch_module, "require_runtime_config_file", reject_missing, raising=False
+    )
+    for name in ("Node", "_inc", "ready_gate", "LogInfo"):
+        monkeypatch.setattr(
+            launch_module,
+            name,
+            lambda *args, _name=name, **kwargs: actions.append(_name),
+        )
+
+    selected_path = f"/installed/{package}/config/{filename}"
+    with pytest.raises(
+        RuntimeError,
+        match=rf"{component} 运行时配置不存在: {selected_path}",
+    ):
+        launch_module._bringup(None)
+
+    assert required == [(selected_path, component)]
+    assert actions == []
+
+
 def test_bringup_constructs_one_shared_control_and_slam_layer_before_branching():
     function = _function(_tree(BRINGUP), "_bringup")
     sim = _platform_branch(function, "sim")
@@ -713,9 +779,7 @@ def test_sim_backend_uses_manifest_controller_geometry_clock_and_existing_gate()
     _assert_manifest_robot_interface(arguments)
     for name in ("gui", "rviz", "world", "spawn_x", "spawn_y", "spawn_z"):
         value = _dict_value(arguments, name)
-        assert isinstance(value, ast.Call)
-        assert isinstance(value.func, ast.Attribute) and value.func.attr == "get"
-        assert isinstance(value.func.value, ast.Name) and value.func.value.id == "gz"
+        assert _subscript_path(value) == ("gz", (name,))
     gate = _calls(sim, "ready_gate")
     assert len(gate) == 1
     assert {_string(item) for item in gate[0].args[0].elts} == {
@@ -734,11 +798,7 @@ def test_real_backend_uses_same_interface_and_gates_shared_stack_after_drivers()
     )
     _assert_manifest_robot_interface(chassis)
     assert _string(_dict_value(chassis, "gui")) == "false"
-    mock_hardware = _dict_value(chassis, "use_mock_hardware")
-    assert isinstance(mock_hardware, ast.IfExp)
-    assert _subscript_path(mock_hardware.test) == (
-        "cfg", ("robot_bringup", "use_mock_hardware")
-    )
+    assert all(_string(key) != "use_mock_hardware" for key in chassis.keys)
     lidar = _include_arguments(
         real, "vanjee_lidar_ros", "launch/vanjee_lidar.launch.py"
     )
