@@ -6,12 +6,20 @@ import urllib.error
 import urllib.request
 from contextlib import contextmanager
 from http.server import HTTPServer, ThreadingHTTPServer
+from pathlib import Path
 
 import pytest
 
 import robot_web_ui.http_server as http_server
 from robot_web_ui.http_server import ActionUnavailable, create_server
 from robot_web_ui.manual_command import command_values
+
+
+WEB_UI_NODE_PATH = (
+    Path(__file__).parents[1]
+    / "robot_web_ui"
+    / "web_ui_node.py"
+)
 
 
 class FakeActions:
@@ -66,6 +74,15 @@ class FakeActions:
         self.calls.append(("resume_automatic",))
         self.mode = "automatic"
         return self.mode
+
+
+def test_odometry_freshness_uses_only_the_ros_node_clock():
+    source = WEB_UI_NODE_PATH.read_text(encoding="utf-8")
+
+    assert "time.monotonic" not in source
+    assert "platform" not in source
+    assert "backend" not in source
+    assert "ODOM_TIMEOUT = 0.5" in source
 
 
 @contextmanager

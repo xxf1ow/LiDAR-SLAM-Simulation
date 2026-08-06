@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-import time
 from pathlib import Path
 
 import rclpy
@@ -141,18 +140,21 @@ class WebUiNode(Node):
         if message.data in {"manual", "automatic"}:
             self._gate_mode = message.data
 
+    def _now_seconds(self) -> float:
+        return self.get_clock().now().nanoseconds / 1_000_000_000.0
+
     def _odom_callback(self, message: Odometry) -> None:
         self._odom_feedback = (
             float(message.twist.twist.linear.x),
             float(message.twist.twist.angular.z),
-            time.monotonic(),
+            self._now_seconds(),
         )
 
     def motion_status(self) -> dict[str, object]:
         feedback = self._odom_feedback
         if (
             feedback is None
-            or time.monotonic() - feedback[2] >= ODOM_TIMEOUT
+            or self._now_seconds() - feedback[2] >= ODOM_TIMEOUT
         ):
             return {
                 "linear_x": None,

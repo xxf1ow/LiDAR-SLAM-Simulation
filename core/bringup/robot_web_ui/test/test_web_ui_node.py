@@ -149,6 +149,15 @@ def bare_node(module):
     return object.__new__(module.WebUiNode)
 
 
+def set_clock(node, *seconds):
+    readings = iter(seconds)
+    node.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(
+            nanoseconds=int(next(readings) * 1_000_000_000)
+        )
+    )
+
+
 def test_manual_command_publishes_one_stamped_base_link_message(node_module):
     node = bare_node(node_module)
     publisher = FakePublisher()
@@ -230,21 +239,17 @@ def test_motion_status_is_absent_before_odometry_feedback(node_module):
 
 
 def test_motion_status_returns_fresh_odometry_snapshot(
-    node_module, monkeypatch
+    node_module,
 ):
-    clock = iter((10.0, 10.49))
-    monkeypatch.setattr(
-        node_module.time,
-        "monotonic",
-        lambda: next(clock),
-    )
     node = bare_node(node_module)
+    set_clock(node, 10.0, 10.49)
     message = node_module.Odometry()
     message.twist.twist.linear.x = 0.3
     message.twist.twist.angular.z = -0.2
 
     node._odom_callback(message)
 
+    assert node._odom_feedback == (0.3, -0.2, 10.0)
     assert node.motion_status() == {
         "linear_x": 0.3,
         "angular_z": -0.2,
@@ -253,15 +258,10 @@ def test_motion_status_returns_fresh_odometry_snapshot(
 
 
 def test_motion_status_expires_at_timeout_boundary(
-    node_module, monkeypatch
+    node_module,
 ):
-    clock = iter((10.0, 10.5))
-    monkeypatch.setattr(
-        node_module.time,
-        "monotonic",
-        lambda: next(clock),
-    )
     node = bare_node(node_module)
+    set_clock(node, 10.0, 10.5)
     message = node_module.Odometry()
     message.twist.twist.linear.x = 0.3
     message.twist.twist.angular.z = -0.2
