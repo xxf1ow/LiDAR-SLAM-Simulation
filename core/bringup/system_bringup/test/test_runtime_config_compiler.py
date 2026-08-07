@@ -1079,9 +1079,8 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
     manifest = rcc.compile_runtime_configs(runtime_tree.config, output)
 
     assert len(loaded) == 1
-    paths = {
-        key: output / filename for key, filename in rcc.OUTPUT_FILENAMES.items()
-    }
+    output_filenames = rcc._output_filenames(platform)
+    paths = {key: output / filename for key, filename in output_filenames.items()}
     assert set(output.iterdir()) == set(paths.values())
     assert set(manifest) == {
         "bringup_config_path",
@@ -1093,6 +1092,7 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
         "controllers_path",
         "web_ui_path",
         "nav2_path",
+        *(f"{key}_path" for key in rcc.SENSOR_OUTPUT_FILENAMES[platform]),
         "robot_launch_arguments",
         "compatibility_body_weld_arguments",
     }
@@ -1126,11 +1126,72 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
 
     report = _load_yaml(paths["effective_profile"])
     assert report["generated_configs"] == {
-        "controllers": str(paths["controllers"]),
-        "web_ui": str(paths["web_ui"]),
-        "nav2": str(paths["nav2"]),
+        key: str(paths[key])
+        for key in output_filenames
+        if key != "effective_profile"
     }
     assert _temporary_files(output) == []
+
+
+@pytest.mark.parametrize(
+    "platform,manifest_sensor_keys,absent_key",
+    [
+        (
+            "sim",
+            {"lidar_adapter_path", "sensor_gate_path"},
+            "vanjee_lidar_path",
+        ),
+        (
+            "real",
+            {"vanjee_lidar_path", "sensor_gate_path"},
+            "lidar_adapter_path",
+        ),
+    ],
+)
+def test_runtime_compile_writes_only_selected_sensor_artifacts(
+    runtime_tree,
+    tmp_path,
+    platform,
+    manifest_sensor_keys,
+    absent_key,
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    output = tmp_path / platform
+
+    manifest = rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    expected_outputs = rcc._output_filenames(platform)
+    assert {path.name for path in output.iterdir()} == set(
+        expected_outputs.values()
+    )
+    assert manifest_sensor_keys <= set(manifest)
+    assert absent_key not in manifest
+    for key in manifest_sensor_keys:
+        assert manifest[key].is_absolute()
+        assert manifest[key].parent == output.resolve()
+
+    report = _load_yaml(manifest["effective_profile_path"])
+    expected_refs = {
+        key: str(output.resolve() / filename)
+        for key, filename in expected_outputs.items()
+        if key != "effective_profile"
+    }
+    assert report["generated_configs"] == expected_refs
+    assert set(manifest["robot_launch_arguments"]) == {
+        "base_length",
+        "base_width",
+        "base_height",
+        "base_link_height",
+        "wheel_radius",
+        "wheel_width",
+        "wheel_separation",
+        "sensor_x",
+        "sensor_y",
+        "sensor_z",
+        "sensor_roll",
+        "sensor_pitch",
+        "sensor_yaw",
+    }
 
 
 def test_compile_runtime_configs_uses_integrated_renderer(
@@ -1171,7 +1232,7 @@ def test_compile_runtime_configs_uses_unique_private_temp_directories(runtime_tr
         assert output.is_absolute()
         assert output.parent == Path(tempfile.gettempdir()).resolve()
         assert set(path.name for path in output.iterdir()) == set(
-            rcc.OUTPUT_FILENAMES.values()
+            rcc._output_filenames("sim").values()
         )
 
 
@@ -1193,7 +1254,8 @@ def test_explicit_runtime_output_preserves_unowned_files_across_compiles(
     assert keep.read_text(encoding="utf-8") == "keep exactly"
     assert set(path.name for path in output.iterdir()) == {
         "keep.txt",
-        *rcc.OUTPUT_FILENAMES.values(),
+        *rcc._output_filenames("sim").values(),
+        *rcc._output_filenames("real").values(),
     }
     assert _temporary_files(output) == []
 
@@ -1205,8 +1267,18 @@ def test_runtime_compilation_does_not_modify_source_or_formal_files(
     protected = [
         *(TEMPLATE_DIR / filename for filename in rcc.TEMPLATE_FILENAMES.values()),
         *(
+            TEMPLATE_DIR / filename
+            for filenames in rcc.SENSOR_TEMPLATE_FILENAMES.values()
+            for filename in filenames.values()
+        ),
+        *(
             runtime_tree.config.parent / "templates" / filename
             for filename in rcc.TEMPLATE_FILENAMES.values()
+        ),
+        *(
+            runtime_tree.config.parent / "templates" / filename
+            for filenames in rcc.SENSOR_TEMPLATE_FILENAMES.values()
+            for filename in filenames.values()
         ),
         core_dir / "robot/robot_bringup/config/robot_controllers.yaml",
         core_dir / "navigation/robot_navigation/config/nav2_params.yaml",
@@ -1252,6 +1324,24 @@ def test_in_memory_validation_failure_creates_no_completion_marker(
         rcc.compile_runtime_configs(runtime_tree.config, output)
 
     assert not (output / rcc.OUTPUT_FILENAMES["effective_profile"]).exists()
+    assert not output.exists()
+
+
+def test_sensor_in_memory_validation_failure_creates_no_output_directory(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+
+    def fail_validation(*args):
+        raise ValueError("sensor in-memory drift")
+
+    monkeypatch.setattr(
+        rcc, "_validate_sensor_generated_configs", fail_validation
+    )
+
+    with pytest.raises(ValueError, match="sensor in-memory drift"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
     assert not output.exists()
 
 
@@ -1306,6 +1396,37 @@ def test_staged_reload_validation_failure_precedes_all_replacements(
     assert _temporary_files(output) == []
 
 
+def test_sensor_staged_reload_failure_precedes_all_replacements(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    original_load = rcc._load_staged_yaml
+    original_replace = rcc.os.replace
+    replaced = []
+
+    def fail_sensor_load(path, label):
+        if label == "lidar_adapter":
+            raise ValueError("sensor staged drift")
+        return original_load(path, label)
+
+    def record_replace(source, destination):
+        replaced.append(Path(destination).name)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(rcc, "_load_staged_yaml", fail_sensor_load)
+    monkeypatch.setattr(rcc.os, "replace", record_replace)
+
+    with pytest.raises(ValueError, match="sensor staged drift"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert replaced == []
+    assert marker.read_bytes() == marker_before
+    assert _temporary_files(output) == []
+
+
 def test_mid_replace_failure_does_not_update_existing_completion_marker(
     runtime_tree, tmp_path, monkeypatch
 ):
@@ -1336,6 +1457,31 @@ def test_mid_replace_failure_does_not_update_existing_completion_marker(
     assert _temporary_files(output) == []
 
 
+def test_sensor_replace_failure_does_not_update_existing_completion_marker(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    original = rcc.os.replace
+
+    def fail_sensor_replace(source, destination):
+        if Path(destination).name == rcc.SENSOR_OUTPUT_FILENAMES["sim"][
+            "lidar_adapter"
+        ]:
+            raise OSError("sensor replace interrupted")
+        return original(source, destination)
+
+    monkeypatch.setattr(rcc.os, "replace", fail_sensor_replace)
+
+    with pytest.raises(OSError, match="sensor replace interrupted"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert marker.read_bytes() == marker_before
+    assert _temporary_files(output) == []
+
+
 def test_effective_report_is_replaced_last_before_manifest_is_returned(
     runtime_tree, tmp_path, monkeypatch
 ):
@@ -1351,13 +1497,34 @@ def test_effective_report_is_replaced_last_before_manifest_is_returned(
 
     manifest = rcc.compile_runtime_configs(runtime_tree.config, output)
 
-    assert replaced == [
-        rcc.OUTPUT_FILENAMES["controllers"],
-        rcc.OUTPUT_FILENAMES["web_ui"],
-        rcc.OUTPUT_FILENAMES["nav2"],
-        rcc.OUTPUT_FILENAMES["effective_profile"],
-    ]
+    assert replaced == list(rcc._output_filenames("sim").values())
     assert manifest["effective_profile_path"].exists()
+    assert _temporary_files(output) == []
+
+
+def test_effective_report_replace_failure_keeps_previous_completion_marker(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    runtime_tree.set_profile_value(
+        "sim", ("motion", "max_linear_velocity"), 0.7
+    )
+    original = rcc.os.replace
+
+    def fail_report_replace(source, destination):
+        if Path(destination).name == rcc.EFFECTIVE_PROFILE_FILENAME:
+            raise OSError("report replace interrupted")
+        return original(source, destination)
+
+    monkeypatch.setattr(rcc.os, "replace", fail_report_replace)
+
+    with pytest.raises(OSError, match="report replace interrupted"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert marker.read_bytes() == marker_before
     assert _temporary_files(output) == []
 
 

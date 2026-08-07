@@ -33,10 +33,25 @@ SENSOR_TEMPLATE_FILENAMES = {
         "sensor_gate": "sensor_gate.yaml",
     },
 }
-OUTPUT_FILENAMES = {
+COMMON_OUTPUT_FILENAMES = {
     "controllers": "robot_controllers.generated.yaml",
     "web_ui": "robot_web_ui.generated.yaml",
     "nav2": "nav2.generated.yaml",
+}
+SENSOR_OUTPUT_FILENAMES = {
+    "sim": {
+        "lidar_adapter": "lidar_adapter.generated.yaml",
+        "sensor_gate": "sensor_gate.generated.yaml",
+    },
+    "real": {
+        "vanjee_lidar": "vanjee_lidar.generated.yaml",
+        "sensor_gate": "sensor_gate.generated.yaml",
+    },
+}
+EFFECTIVE_PROFILE_FILENAME = "effective_profile.generated.yaml"
+# Kept for callers that only need the platform-independent output set.
+OUTPUT_FILENAMES = {
+    **COMMON_OUTPUT_FILENAMES,
     "effective_profile": "effective_profile.generated.yaml",
 }
 CONTROLLER_TIME_PATHS = (
@@ -58,6 +73,16 @@ NAV2_TIME_PATHS = (
 class _OneLineArgumentParser(argparse.ArgumentParser):
     def error(self, message):
         self.exit(2, f"compile_runtime_configs: {message}\n")
+
+
+def _output_filenames(platform):
+    if platform not in SENSOR_OUTPUT_FILENAMES:
+        raise ValueError("platform must be 'sim' or 'real'")
+    return {
+        **COMMON_OUTPUT_FILENAMES,
+        **SENSOR_OUTPUT_FILENAMES[platform],
+        "effective_profile": EFFECTIVE_PROFILE_FILENAME,
+    }
 
 
 def _validate_mode(config):
@@ -677,6 +702,7 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
     inputs = _load_runtime_inputs(bringup_config_path)
     effective = inputs["effective"]
     generated = _render_runtime_configs(inputs)
+    generated.update(_render_sensor_configs(inputs))
     robot_launch_arguments = _derive_robot_launch_arguments(inputs["effective"])
     body_weld = _derive_compatibility_body_weld_transform(
         inputs["selected_profile"]
@@ -686,14 +712,15 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
     }
 
     output = _prepare_output_dir(output_dir)
+    output_filenames = _output_filenames(inputs["platform"])
     paths = {
-        key: output / filename for key, filename in OUTPUT_FILENAMES.items()
+        key: output / filename for key, filename in output_filenames.items()
     }
     report = _build_runtime_report(effective, body_weld)
     report["generated_configs"] = {
-        "controllers": str(paths["controllers"]),
-        "web_ui": str(paths["web_ui"]),
-        "nav2": str(paths["nav2"]),
+        key: str(paths[key])
+        for key in output_filenames
+        if key != "effective_profile"
     }
     manifest = {
         "bringup_config_path": inputs["source"],
@@ -708,20 +735,17 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
         "robot_launch_arguments": robot_launch_arguments,
         "compatibility_body_weld_arguments": body_weld_arguments,
     }
-    staged_data = {
-        "controllers": generated["controllers"],
-        "web_ui": generated["web_ui"],
-        "nav2": generated["nav2"],
-        "effective_profile": report,
-    }
+    for key in SENSOR_OUTPUT_FILENAMES[inputs["platform"]]:
+        manifest[f"{key}_path"] = paths[key]
+    staged_data = {**generated, "effective_profile": report}
     staged_paths = {}
     try:
-        for key in OUTPUT_FILENAMES:
+        for key in output_filenames:
             staged_paths[key] = _stage_yaml(paths[key], staged_data[key])
 
         reloaded = {
             key: _load_staged_yaml(staged_paths[key], key)
-            for key in OUTPUT_FILENAMES
+            for key in output_filenames
         }
         _validate_generated_configs(
             reloaded["effective_profile"],
@@ -729,8 +753,16 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
             reloaded["web_ui"],
             reloaded["nav2"],
         )
+        _validate_sensor_generated_configs(
+            inputs["platform"],
+            reloaded["effective_profile"],
+            {
+                key: reloaded[key]
+                for key in SENSOR_OUTPUT_FILENAMES[inputs["platform"]]
+            },
+        )
 
-        for key in ("controllers", "web_ui", "nav2", "effective_profile"):
+        for key in output_filenames:
             os.replace(staged_paths[key], paths[key])
         return manifest
     finally:
