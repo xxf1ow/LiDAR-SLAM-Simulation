@@ -301,6 +301,13 @@ def _validate_sensor_semantics(platform, profile, source):
         raise ValueError(
             f"{source}: sensors.lidar.max_range must be greater than min_range"
         )
+    if platform == "real" and not (
+        0 <= lidar["horizontal_start_angle"] <= math.tau
+        and 0 <= lidar["horizontal_end_angle"] <= math.tau
+    ):
+        raise ValueError(
+            f"{source}: real sensors.lidar horizontal angles must be in [0, 2*pi]"
+        )
     span = lidar["horizontal_end_angle"] - lidar["horizontal_start_angle"]
     if span <= 0 or span > math.tau:
         raise ValueError(

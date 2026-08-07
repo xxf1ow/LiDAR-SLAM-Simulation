@@ -400,6 +400,43 @@ def test_sensor_gate_renderer_maps_profile_facts_and_preserves_thresholds(
     }
 
 
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_sensor_renderer_normalizes_ros_double_parameters(
+    runtime_tree, platform
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    runtime_tree.set_profile_value(
+        platform, ("sensors", "lidar", "scan_rate_hz"), 10
+    )
+    runtime_tree.set_profile_value(
+        platform, ("sensors", "imu", "rate_hz"), 200
+    )
+    if platform == "real":
+        runtime_tree.set_profile_value(
+            platform, ("sensors", "lidar", "min_range"), 1
+        )
+        runtime_tree.set_profile_value(
+            platform, ("sensors", "lidar", "max_range"), 70
+        )
+
+    generated = rcc._render_sensor_configs(
+        rcc._load_runtime_inputs(runtime_tree.config)
+    )
+
+    gate = generated["sensor_gate"]["sensor_contract_gate"]["ros__parameters"]
+    assert type(gate["expected_point_hz"]) is float
+    assert type(gate["expected_imu_hz"]) is float
+    if platform == "sim":
+        adapter = generated["lidar_adapter"]["lidar_pointcloud_adapter"][
+            "ros__parameters"
+        ]
+        assert type(adapter["scan_period"]) is float
+    else:
+        vanjee = generated["vanjee_lidar"]["vanjee_lidar"]["ros__parameters"]
+        for key in ("start_angle", "end_angle", "min_distance", "max_distance"):
+            assert type(vanjee[key]) is float
+
+
 @pytest.mark.parametrize(
     "platform,config_name,path,value",
     [
@@ -423,6 +460,12 @@ def test_sensor_gate_renderer_maps_profile_facts_and_preserves_thresholds(
         ),
         (
             "sim",
+            "lidar_adapter",
+            ("lidar_pointcloud_adapter", "ros__parameters", "use_sim_time"),
+            1,
+        ),
+        (
+            "sim",
             "sensor_gate",
             ("sensor_contract_gate", "ros__parameters", "expected_points_per_scan"),
             1,
@@ -438,6 +481,12 @@ def test_sensor_gate_renderer_maps_profile_facts_and_preserves_thresholds(
             "sensor_gate",
             ("sensor_contract_gate", "ros__parameters", "minimum_imu_rate_ratio"),
             1.1,
+        ),
+        (
+            "real",
+            "sensor_gate",
+            ("sensor_contract_gate", "ros__parameters", "minimum_imu_rate_ratio"),
+            1,
         ),
         (
             "real",

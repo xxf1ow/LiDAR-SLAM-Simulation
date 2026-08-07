@@ -1,3 +1,4 @@
+import math
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -274,6 +275,34 @@ def test_sensor_numeric_semantics_are_strict(
     _set_pair_value(pair, platform, path, value)
 
     with pytest.raises(ValueError, match=expected):
+        pc.validate_profile_pair(pair)
+
+
+@pytest.mark.parametrize(
+    "start_angle,end_angle",
+    [
+        (-math.pi, math.pi),
+        (1.0, math.tau + 0.5),
+    ],
+)
+def test_real_lidar_angles_must_match_vanjee_parameter_range(
+    tmp_path, start_angle, end_angle
+):
+    pair = _pair(_selection(tmp_path))
+    _set_pair_value(
+        pair,
+        "real",
+        ("sensors", "lidar", "horizontal_start_angle"),
+        start_angle,
+    )
+    _set_pair_value(
+        pair,
+        "real",
+        ("sensors", "lidar", "horizontal_end_angle"),
+        end_angle,
+    )
+
+    with pytest.raises(ValueError, match=r"real.*\[0, 2\*pi\]"):
         pc.validate_profile_pair(pair)
 
 

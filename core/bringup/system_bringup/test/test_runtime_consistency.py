@@ -183,6 +183,51 @@ def test_consistency_requires_only_selected_sensor_artifacts(
     )
 
 
+@pytest.mark.parametrize(
+    "platform,foreign_key",
+    [
+        ("sim", "vanjee_lidar_path"),
+        ("real", "lidar_adapter_path"),
+    ],
+)
+def test_consistency_rejects_unselected_sensor_manifest_path(
+    runtime_factory, platform, foreign_key
+):
+    repo_root, manifest = runtime_factory(platform)
+    manifest[foreign_key] = manifest["sensor_gate_path"]
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        foreign_key in failure and platform in failure for failure in failures
+    )
+
+
+@pytest.mark.parametrize(
+    "platform,foreign_artifact",
+    [
+        ("sim", "vanjee_lidar"),
+        ("real", "lidar_adapter"),
+    ],
+)
+def test_consistency_rejects_unselected_sensor_report_reference(
+    runtime_factory, platform, foreign_artifact
+):
+    repo_root, manifest = runtime_factory(platform)
+    _mutate_yaml(
+        manifest["effective_profile_path"],
+        ("generated_configs", foreign_artifact),
+        str(manifest["sensor_gate_path"]),
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "generated_configs" in failure and foreign_artifact in failure
+        for failure in failures
+    )
+
+
 def test_sensor_artifact_path_must_stay_in_os_runtime_directory(
     runtime_factory, tmp_path
 ):

@@ -595,6 +595,14 @@ def run_runtime_consistency(repo_root, manifest):
     platform = manifest.get("platform")
     if platform not in ("sim", "real"):
         failures.append(f"manifest platform must be 'sim' or 'real'; got {platform!r}")
+    else:
+        unselected_sensor_path = (
+            "vanjee_lidar_path" if platform == "sim" else "lidar_adapter_path"
+        )
+        if unselected_sensor_path in manifest:
+            failures.append(
+                f"manifest {unselected_sensor_path} is not valid for platform {platform}"
+            )
     mode = manifest.get("mode")
     if not isinstance(mode, str) or mode not in rcc.SUPPORTED_MODES:
         failures.append(
@@ -704,6 +712,18 @@ def run_runtime_consistency(repo_root, manifest):
                     )
 
         generated_refs = report.get("generated_configs")
+        if isinstance(generated_refs, dict):
+            expected_generated_keys = {
+                artifact_name
+                for artifact_name in artifacts.values()
+                if artifact_name != "effective_profile"
+            }
+            if set(generated_refs) != expected_generated_keys:
+                failures.append(
+                    "effective report generated_configs keys "
+                    f"{sorted(map(repr, generated_refs))} != expected "
+                    f"{sorted(expected_generated_keys)} for platform {platform}"
+                )
         for manifest_key, artifact_name in artifacts.items():
             if artifact_name == "effective_profile":
                 continue

@@ -184,6 +184,10 @@ def _get_existing(mapping, path):
     return node
 
 
+def _same_typed_value(actual, expected):
+    return type(actual) is type(expected) and actual == expected
+
+
 def _format_footprint(footprint):
     return json.dumps(footprint, ensure_ascii=False, separators=(", ", ": "))
 
@@ -390,7 +394,7 @@ def _render_lidar_adapter(template, effective):
         ("use_sim_time", effective["derived"]["use_sim_time"], bool),
         (
             "scan_period",
-            effective["derived"]["sensor_contract"]["scan_period"],
+            float(effective["derived"]["sensor_contract"]["scan_period"]),
             float,
         ),
     ):
@@ -414,10 +418,10 @@ def _render_vanjee_lidar(template, effective):
         ("lidar_address", hardware["device_address"], str),
         ("host_msop_port", hardware["host_msop_port"], int),
         ("lidar_msop_port", hardware["device_msop_port"], int),
-        ("start_angle", degrees(lidar["horizontal_start_angle"]), float),
-        ("end_angle", degrees(lidar["horizontal_end_angle"]), float),
-        ("min_distance", lidar["min_range"], float),
-        ("max_distance", lidar["max_range"], float),
+        ("start_angle", float(degrees(lidar["horizontal_start_angle"])), float),
+        ("end_angle", float(degrees(lidar["horizontal_end_angle"])), float),
+        ("min_distance", float(lidar["min_range"]), float),
+        ("max_distance", float(lidar["max_range"]), float),
     )
     for key, value, expected_type in values:
         _set_template_existing(
@@ -441,8 +445,8 @@ def _render_sensor_gate(template, effective):
             effective["derived"]["sensor_contract"]["points_per_scan"],
             int,
         ),
-        ("expected_point_hz", lidar["scan_rate_hz"], float),
-        ("expected_imu_hz", imu["rate_hz"], float),
+        ("expected_point_hz", float(lidar["scan_rate_hz"]), float),
+        ("expected_imu_hz", float(imu["rate_hz"]), float),
     )
     for key, value, expected_type in values:
         _set_template_existing(
@@ -471,13 +475,13 @@ def _validate_sensor_generated_configs(platform, effective, generated):
             "input_topic": "/lidar/points",
             "output_topic": "/points_raw",
             "output_frame": "velodyne",
-            "scan_period": effective["derived"]["sensor_contract"][
-                "scan_period"
-            ],
+            "scan_period": float(
+                effective["derived"]["sensor_contract"]["scan_period"]
+            ),
         }
         for key, expected in expected_adapter.items():
             path = adapter_path + (key,)
-            if _get_existing(adapter, path) != expected:
+            if not _same_typed_value(_get_existing(adapter, path), expected):
                 raise ValueError(
                     f"generated lidar_adapter mismatch: {'.'.join(path)}"
                 )
@@ -491,10 +495,10 @@ def _validate_sensor_generated_configs(platform, effective, generated):
             "lidar_address": hardware["device_address"],
             "host_msop_port": hardware["host_msop_port"],
             "lidar_msop_port": hardware["device_msop_port"],
-            "start_angle": degrees(lidar["horizontal_start_angle"]),
-            "end_angle": degrees(lidar["horizontal_end_angle"]),
-            "min_distance": lidar["min_range"],
-            "max_distance": lidar["max_range"],
+            "start_angle": float(degrees(lidar["horizontal_start_angle"])),
+            "end_angle": float(degrees(lidar["horizontal_end_angle"])),
+            "min_distance": float(lidar["min_range"]),
+            "max_distance": float(lidar["max_range"]),
             "lidar_frame": "velodyne",
             "imu_frame": "imu_link",
             "point_cloud_topic": "/points_raw",
@@ -502,7 +506,7 @@ def _validate_sensor_generated_configs(platform, effective, generated):
         }
         for key, expected in expected_vanjee.items():
             path = vanjee_path + (key,)
-            if _get_existing(vanjee, path) != expected:
+            if not _same_typed_value(_get_existing(vanjee, path), expected):
                 raise ValueError(
                     f"generated vanjee_lidar mismatch: {'.'.join(path)}"
                 )
@@ -514,20 +518,21 @@ def _validate_sensor_generated_configs(platform, effective, generated):
         "expected_points_per_scan": effective["derived"]["sensor_contract"][
             "points_per_scan"
         ],
-        "expected_point_hz": lidar["scan_rate_hz"],
-        "expected_imu_hz": effective["profile"]["sensors"]["imu"]["rate_hz"],
+        "expected_point_hz": float(lidar["scan_rate_hz"]),
+        "expected_imu_hz": float(
+            effective["profile"]["sensors"]["imu"]["rate_hz"]
+        ),
     }
     for key, expected in expected_gate.items():
         path = gate_path + (key,)
-        if _get_existing(gate, path) != expected:
+        if not _same_typed_value(_get_existing(gate, path), expected):
             raise ValueError(f"generated sensor_gate mismatch: {'.'.join(path)}")
 
     for key in ("minimum_point_rate_ratio", "minimum_imu_rate_ratio"):
         path = gate_path + (key,)
         value = _get_existing(gate, path)
         if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
+            type(value) is not float
             or not isfinite(value)
             or not 0 < value <= 1
         ):
@@ -538,8 +543,7 @@ def _validate_sensor_generated_configs(platform, effective, generated):
         path = gate_path + (key,)
         value = _get_existing(gate, path)
         if (
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
+            type(value) is not float
             or not isfinite(value)
             or value <= 0
         ):
