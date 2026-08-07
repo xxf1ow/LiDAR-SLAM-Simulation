@@ -292,7 +292,7 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 本地设计产物：`docs/superpowers/specs/2026-08-06-profile-compiler-skeleton-design.md`
 （按用户要求不加入 Git 提交）。
 
-### [ ] 3. 底盘、ros2_control 与手动控制
+### [x] 3. 底盘、ros2_control 与手动控制
 
 目的：统一轮径、轮宽、轮距和系统实际采用的速度/加速度限制；Web UI 允许用户在该
 范围内运行时调速。设备协议换算、左右轮符号和设备内部极限继续归驱动代码所有。
@@ -334,14 +334,11 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 四份可加载产物；第 2 节接口回归、字段精确映射、跨平台隔离、非零 weld 逆变换和静态
 一致性测试全部通过。
 
-详细设计：
-`docs/superpowers/specs/2026-08-06-profile-runtime-config-generation-design.md`。
-
 验收记录：3A 源码实现和最终修复截至 `3c41858`；本地 `system_bringup` 纯 Python 回归
 `375 passed`，runtime smoke 生成且加载恰好四份 YAML；Ubuntu/Humble 全工作区最终回归为
 `556 tests, 0 errors, 0 failures, 0 skipped`。正式 bringup 和 3B launch 路径未在 3A 接入。
 
-#### [ ] 3B. 正式 bringup 切换
+#### [x] 3B. 正式 bringup 切换
 
 目的：只消费 3A 已验收的 runtime manifest，重写主动 bringup 编排并完成动态验收。
 
@@ -358,23 +355,30 @@ perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供�
 - `cmd_vel_gate` 只接收标准 `use_sim_time` 参数，命令接收时间、timer 和 source timeout
   全部使用同一个 `node.get_clock()`；gate 业务逻辑不读取 platform，也不识别、选择或分支
   判断当前是仿真时钟还是系统时钟。
-- 功能新鲜度、频率、稳定窗口和功能 timeout 使用各节点自己的同一 node clock；墙钟只属于
-  launch/process supervision watchdog，不传入功能状态机，也不以双时钟 fallback 掩盖
-  `/clock` 缺失或冻结。
+- 功能新鲜度、频率、稳定窗口和功能 timeout 使用各节点自己的同一 node clock；graph-only
+  `ready_gate` 的墙钟只约束必需 topic discovery，topic 出现后的 settling 只按 node clock
+  累计。仿真暂停或低 RTF 时保持等待并在恢复后继续，不实现双时钟 fallback。
+- 生产启动的一致性闸门只检查 manifest、生成产物、effective report、所选配置和源码/安装态
+  新鲜度；精确节点数、参数字典、launch 表达式和旧路径不可达等拓扑断言只放在测试中，
+  生产代码不解析 launch 源码 AST，也不维护第二份拓扑。
 - `navigation.launch.py` 的临时 weld 改用 `qx/qy/qz/qw`；正式 bringup 总是显式传值，
   launch 独立调用时保留当前 sim 默认。
 - 新主动路径不得导入或调用 `derive_real_geometry()`、`build_real_runtime_configs()`、
   `write_real_runtime_configs()`、`real_geometry_launch_arguments()`；旧代码和旧配置暂不删除，
   只作为第 10 节删除审查对象，不是 fallback。
-- mapping/navigation 的模块顺序、topic/frame、自动/人工 gate、timeout、settling 和退出
-  语义保持现状；所有编译/一致性失败发生在创建运动节点前。
+- mapping/navigation 的模块顺序、topic/frame、自动/人工 gate、settling 和退出语义保持现状；
+  `ready_gate` 的 `discovery_timeout` 只处理必需 topic 始终未出现，所有编译/一致性失败发生在
+  创建运动节点前。
 
 3B 完成条件：静态拓扑证明 compiler 只调用一次且旧 generator 不可达；sim
 navigation/mapping 动态冒烟通过；real generated 配置、fake/mock hardware 与既有链回归
 通过；无人看护 real 动态运动不属于本节。
 
-详细设计：
-`docs/superpowers/specs/2026-08-06-profile-runtime-bringup-cutover-design.md`。
+验收记录：3B 主实现及最终审查修复截至 `6119a7b`。最终修复将 graph-only readiness 的
+墙钟范围收窄到 topic discovery，并从生产一致性闸门移除 AST 拓扑解释器；本地
+`system_bringup` 回归 `443 passed`，相关 `cmd_vel_gate` / Web UI 契约回归 `13 passed`。
+用户在 Ubuntu/Humble 完成全工作区 `colcon build` 与 `colcon test`，均全部通过；无人看护
+real 动态运动仍不属于本节。第 3 节至此结束。
 
 ### [ ] 4. 雷达、IMU 与传感器契约
 
