@@ -169,6 +169,34 @@ def test_navigation_declares_cmd_vel_output_topic_with_legacy_default():
     assert _declaration_default(_tree(NAVIGATION), "cmd_vel_output_topic") == "/cmd_vel"
 
 
+def test_navigation_map_server_uses_generated_params_with_only_map_override():
+    function = _function(_tree(NAVIGATION), "generate_launch_description")
+    assert _launch_configuration_assignment(function, "params_file", "params_file")
+    map_function = next(
+        node
+        for node in function.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_map_server"
+    )
+    assert not any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "params_file"
+            for target in node.targets
+        )
+        for node in ast.walk(map_function)
+    )
+
+    map_server = _node_call(map_function, "nav2_map_server", "map_server")
+    parameters = _keyword(map_server, "parameters")
+    assert isinstance(parameters, ast.List) and len(parameters.elts) == 2
+    assert isinstance(parameters.elts[0], ast.Name)
+    assert parameters.elts[0].id == "params_file"
+    override = parameters.elts[1]
+    assert isinstance(override, ast.Dict) and len(override.keys) == 1
+    map_yaml = _dict_value(override, "yaml_filename")
+    assert isinstance(map_yaml, ast.Name) and map_yaml.id == "map_yaml"
+
+
 def test_navigation_accepts_complete_body_weld_transform():
     tree = _tree(NAVIGATION)
     assert {

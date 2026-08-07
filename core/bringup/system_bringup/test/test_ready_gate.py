@@ -84,12 +84,18 @@ def _run_script(monkeypatch, script, clock_values, topics):
     monkeypatch.setitem(sys.modules, "rclpy.node", rclpy_node)
 
     ticks = iter(range(100))
-    monkeypatch.setattr(time, "monotonic", lambda: float(next(ticks)))
+    wall_reads = []
+
+    def _monotonic():
+        wall_reads.append(None)
+        return float(next(ticks))
+
+    monkeypatch.setattr(time, "monotonic", _monotonic)
     monkeypatch.setattr(time, "sleep", lambda duration: None)
 
     with pytest.raises(SystemExit) as exc_info:
         exec(compile(script, "<ready_gate>", "exec"), {})
-    return exc_info.value.code, len(spins)
+    return exc_info.value.code, len(spins), len(wall_reads)
 
 
 @pytest.mark.parametrize(
@@ -102,6 +108,8 @@ def test_ready_gate_requires_and_forwards_one_clock_value(
     module = _load_ready_gate(monkeypatch)
     signature = inspect.signature(module.ready_gate)
     assert signature.parameters["use_sim_time"].default is inspect.Parameter.empty
+    assert "discovery_timeout" in signature.parameters
+    assert "timeout" not in signature.parameters
 
     waiter, _ = module.ready_gate(
         ["/points_raw"],
@@ -117,12 +125,17 @@ def test_ready_gate_requires_and_forwards_one_clock_value(
     ]
 
 
-def test_generated_script_uses_wall_supervision_and_ros_time_settling(monkeypatch):
+def test_generated_script_uses_wall_only_for_discovery(monkeypatch):
     module = _load_ready_gate(monkeypatch)
-    script = module._gate_script(["/ready"], timeout=60.0, settling=3.0)
+    script = module._gate_script(
+        ["/ready"], discovery_timeout=60.0, settling=3.0
+    )
 
-    assert "DISCOVERY_DEADLINE = time.monotonic() + TIMEOUT" in script
-    assert "SETTLING_WALL_DEADLINE = time.monotonic() + TIMEOUT" in script
+    assert (
+        "DISCOVERY_DEADLINE = time.monotonic() + DISCOVERY_TIMEOUT" in script
+    )
+    assert "SETTLING_WALL_DEADLINE" not in script
+    assert "settling_timed_out" not in script
     assert "SETTLING_START = n.get_clock().now().nanoseconds" in script
     assert "n.get_clock().now().nanoseconds - SETTLING_START" in script
     assert "rclpy.spin_once(n, timeout_sec=0.1)" in script
@@ -132,9 +145,11 @@ def test_generated_script_uses_wall_supervision_and_ros_time_settling(monkeypatc
 
 def test_generated_script_releases_after_ros_time_settling(monkeypatch):
     module = _load_ready_gate(monkeypatch)
-    script = module._gate_script(["/ready"], timeout=10.0, settling=1.0)
+    script = module._gate_script(
+        ["/ready"], discovery_timeout=10.0, settling=1.0
+    )
 
-    result, _ = _run_script(
+    result, _, _ = _run_script(
         monkeypatch,
         script,
         clock_values=[0, 500_000_000, 1_000_000_000, 1_500_000_000],
@@ -145,9 +160,11 @@ def test_generated_script_releases_after_ros_time_settling(monkeypatch):
 
 def test_generated_script_does_not_count_queued_sim_uptime_as_settling(monkeypatch):
     module = _load_ready_gate(monkeypatch)
-    script = module._gate_script(["/ready"], timeout=10.0, settling=1.0)
+    script = module._gate_script(
+        ["/ready"], discovery_timeout=10.0, settling=1.0
+    )
 
-    result, spins = _run_script(
+    result, spins, _ = _run_script(
         monkeypatch,
         script,
         clock_values=[
@@ -163,14 +180,44 @@ def test_generated_script_does_not_count_queued_sim_uptime_as_settling(monkeypat
     assert spins == 3
 
 
-def test_generated_script_fails_when_ros_clock_is_frozen(monkeypatch):
+def test_generated_script_waits_across_wall_timeout_until_ros_clock_resumes(
+    monkeypatch,
+):
     module = _load_ready_gate(monkeypatch)
-    script = module._gate_script(["/ready"], timeout=3.0, settling=1.0)
+    script = module._gate_script(
+        ["/ready"], discovery_timeout=3.0, settling=1.0
+    )
 
-    result, _ = _run_script(
+    result, _, wall_reads = _run_script(
+        monkeypatch,
+        script,
+        clock_values=[
+            0,
+            0,
+            0,
+            500_000_000,
+            500_000_000,
+            1_000_000_000,
+            1_500_000_000,
+        ],
+        topics=["/ready"],
+    )
+    assert result == 0
+    assert wall_reads == 2
+
+
+def test_generated_script_fails_when_topics_are_not_discovered(monkeypatch):
+    module = _load_ready_gate(monkeypatch)
+    script = module._gate_script(
+        ["/ready"], discovery_timeout=3.0, settling=1.0
+    )
+
+    result, spins, _ = _run_script(
         monkeypatch,
         script,
         clock_values=[0],
-        topics=["/ready"],
+        topics=[],
     )
+
     assert result == 1
+    assert spins == 0
