@@ -14,7 +14,7 @@ index dd334c9..2e947c1 100644
 -    pointCloudTopic: "/points"                   # Point cloud data
 -    imuTopic: "/imu/data"                        # IMU data
 +    pointCloudTopic: "points_raw"                # Point cloud data (Gazebo velodyne_simulator output)
-+    imuTopic: "/imu_plugin/out"                  # IMU data (Gazebo IMU plugin output)
++    imuTopic: "/imu/data"                        # IMU data (Gazebo IMU bridge output)
      odomTopic: "odometry/imu"                    # IMU pre-preintegration odometry, same frequency as IMU
      gpsTopic: "odometry/gpsz"                    # GPS odometry topic from navsat, see module_navsat.launch file
  

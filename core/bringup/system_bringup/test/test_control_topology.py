@@ -160,15 +160,6 @@ def _subscript_path(node):
     return node.id if isinstance(node, ast.Name) else None, tuple(reversed(path))
 
 
-def _is_vanjee_config_call(node):
-    return (
-        isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Name)
-        and node.func.id == "_pkg_config"
-        and _string(node.args[0]) == "vanjee_lidar_ros"
-    )
-
-
 def _assigned_value(function, name):
     return next(
         node.value
@@ -796,17 +787,34 @@ def test_sim_backend_uses_manifest_controller_geometry_clock_and_existing_gate()
         sim, "robot_gz_bringup", "launch/robot_gz.launch.py"
     )
     _assert_manifest_robot_interface(arguments)
+    adapter = _dict_value(arguments, "lidar_adapter_config")
+    assert isinstance(adapter, ast.Call) and adapter.func.id == "str"
+    assert _subscript_path(adapter.args[0]) == (
+        "manifest", ("lidar_adapter_path",)
+    )
     for name in ("gui", "rviz", "world", "spawn_x", "spawn_y", "spawn_z"):
         value = _dict_value(arguments, name)
         assert _subscript_path(value) == ("gz", (name,))
     gate = _calls(sim, "ready_gate")
     assert len(gate) == 1
-    assert {_string(item) for item in gate[0].args[0].elts} == {
-        "/points_raw", "/joint_states"
-    }
+    assert [_string(item) for item in gate[0].args[0].elts] == ["/joint_states"]
     assert gate[0].args[1].value == 300.0
     assert _keyword(gate[0], "settling").id == "settling"
     assert _keyword(gate[0], "use_sim_time").id == "use_sim"
+
+    sensor_gate = _assigned_value(sim, "sensor_gate_actions")
+    assert isinstance(sensor_gate, ast.Call)
+    assert isinstance(sensor_gate.func, ast.Name)
+    assert sensor_gate.func.id == "_sensor_gate"
+    assert isinstance(sensor_gate.args[0], ast.List)
+    assert any(
+        isinstance(item, ast.Name) and item.id == "slam_stack"
+        for item in sensor_gate.args[0].elts
+    )
+    assert isinstance(sensor_gate.args[1], ast.Name)
+    assert sensor_gate.args[1].id == "manifest"
+    assert isinstance(gate[0].args[3], ast.Name)
+    assert gate[0].args[3].id == "sensor_gate_actions"
 
 
 def test_real_backend_uses_same_interface_and_gates_shared_stack_after_drivers():
@@ -822,32 +830,50 @@ def test_real_backend_uses_same_interface_and_gates_shared_stack_after_drivers()
         real, "vanjee_lidar_ros", "launch/vanjee_lidar.launch.py"
     )
     lidar_config = _dict_value(lidar, "config_file")
-    assert isinstance(lidar_config, ast.Name)
-    assert lidar_config.id == "vanjee_config"
+    assert isinstance(lidar_config, ast.Call) and lidar_config.func.id == "str"
+    assert _subscript_path(lidar_config.args[0]) == (
+        "manifest", ("vanjee_lidar_path",)
+    )
 
     result = next(node.value for node in real.body if isinstance(node, ast.Return))
     terms = _add_terms(result)
     gate_index = next(
         index for index, term in enumerate(terms)
-        if isinstance(term, ast.Call)
-        and isinstance(term.func, ast.Name)
-        and term.func.id == "_real_sensor_gate"
+        if isinstance(term, ast.Name) and term.id == "sensor_gate_actions"
     )
     preceding_names = {
         name.id for term in terms[:gate_index] for name in ast.walk(term)
         if isinstance(name, ast.Name)
     }
     assert {"chassis", "lidar"} <= preceding_names
-    gate = terms[gate_index]
-    assert [item.id for item in gate.args[0].elts] == ["slam_stack"]
-    assert isinstance(gate.args[1], ast.Name) and gate.args[1].id == "use_sim_time"
+    sensor_gate = _assigned_value(real, "sensor_gate_actions")
+    assert isinstance(sensor_gate, ast.Call)
+    assert isinstance(sensor_gate.func, ast.Name)
+    assert sensor_gate.func.id == "_sensor_gate"
+    assert [item.id for item in sensor_gate.args[0].elts] == ["slam_stack"]
+    assert isinstance(sensor_gate.args[1], ast.Name)
+    assert sensor_gate.args[1].id == "manifest"
 
-    gate_function = _function(_tree(BRINGUP), "_real_sensor_gate")
-    waiter = _node_call(gate_function, "system_bringup", "real_sensor_ready_gate")
-    parameters = _keyword(waiter, "parameters").elts[0]
-    assert _dict_value(parameters, "timeout").value == 300.0
-    assert isinstance(_dict_value(parameters, "use_sim_time"), ast.Name)
-    assert _dict_value(parameters, "use_sim_time").id == "use_sim_time"
+
+def test_shared_sensor_gate_uses_only_generated_yaml_and_neutral_abort():
+    gate_function = _function(_tree(BRINGUP), "_sensor_gate")
+    assert [argument.arg for argument in gate_function.args.args] == [
+        "then_actions", "manifest"
+    ]
+    nodes = _calls(gate_function, "Node")
+    assert len(nodes) == 1
+    waiter = nodes[0]
+    assert _string(_keyword(waiter, "package")) == "system_bringup"
+    assert _string(_keyword(waiter, "executable")) == "sensor_contract_gate"
+    assert _string(_keyword(waiter, "name")) == "sensor_contract_gate"
+    parameters = _keyword(waiter, "parameters")
+    assert isinstance(parameters, ast.List) and len(parameters.elts) == 1
+    config_path = parameters.elts[0]
+    assert isinstance(config_path, ast.Call) and config_path.func.id == "str"
+    assert _subscript_path(config_path.args[0]) == (
+        "manifest", ("sensor_gate_path",)
+    )
+
     handler = next(call for call in _calls(gate_function, "OnProcessExit"))
     on_exit = _keyword(handler, "on_exit")
     assert isinstance(on_exit.body, ast.IfExp)
@@ -861,7 +887,7 @@ def test_real_backend_uses_same_interface_and_gates_shared_stack_after_drivers()
     assert on_exit.body.body.id == "then_actions"
     abort = on_exit.body.orelse.elts[0]
     assert abort.func.id == "OpaqueFunction"
-    assert _keyword(abort, "function").id == "_abort_real_sensor_gate"
+    assert _keyword(abort, "function").id == "_abort_sensor_gate"
 
 
 def test_sensor_contract_gate_finishes_callback_without_shutting_down_executor():
@@ -906,27 +932,13 @@ def test_sensor_contract_gate_replaces_the_legacy_console_entry_point():
     assert "real_sensor_ready_gate" not in source
 
 
-def test_real_branch_resolves_vanjee_config_only_after_platform_selection():
+def test_bringup_does_not_read_legacy_vanjee_config():
     function = _function(_tree(BRINGUP), "_bringup")
-    real = _platform_branch(function, "real")
-    assignment = next(
-        node
-        for node in real.body
-        if isinstance(node, ast.Assign)
-        and any(
-            isinstance(target, ast.Name) and target.id == "vanjee_config"
-            for target in node.targets
-        )
+    assert not any(
+        _subscript_path(node) == ("cfg", ("vanjee_lidar", "config"))
+        for node in ast.walk(function)
+        if isinstance(node, ast.Subscript)
     )
-
-    assert _is_vanjee_config_call(assignment.value)
-    assert _subscript_path(assignment.value.args[1]) == (
-        "cfg", ("vanjee_lidar", "config")
-    )
-    vanjee_config_calls = [
-        call for call in _calls(function, "_pkg_config") if _is_vanjee_config_call(call)
-    ]
-    assert vanjee_config_calls == [assignment.value]
 
 
 def test_real_branch_does_not_publish_duplicate_lidar_static_tf():

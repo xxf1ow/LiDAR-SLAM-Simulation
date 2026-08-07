@@ -50,20 +50,20 @@ def _source_bringup_config_path():
     return (workspace / "bringup/system_bringup/config/bringup.yaml").resolve()
 
 
-def _abort_real_sensor_gate(context, *args, **kwargs):
+def _abort_sensor_gate(context, *args, **kwargs):
     raise RuntimeError(
-        "真实传感器 gate 未通过；详细原因见 real_sensor_ready_gate 日志，"
+        "传感器契约 gate 未通过；详细原因见 sensor_contract_gate 日志，"
         "已中止整个 launch。"
     )
 
 
-def _real_sensor_gate(then_actions, use_sim_time):
+def _sensor_gate(then_actions, manifest):
     waiter = Node(
         package="system_bringup",
-        executable="real_sensor_ready_gate",
-        name="real_sensor_ready_gate",
+        executable="sensor_contract_gate",
+        name="sensor_contract_gate",
         output="screen",
-        parameters=[{"timeout": 300.0, "use_sim_time": use_sim_time}],
+        parameters=[str(manifest["sensor_gate_path"])],
     )
     handler = RegisterEventHandler(
         OnProcessExit(
@@ -71,7 +71,7 @@ def _real_sensor_gate(then_actions, use_sim_time):
             on_exit=lambda event, context: (
                 then_actions
                 if event.returncode == 0
-                else [OpaqueFunction(function=_abort_real_sensor_gate)]
+                else [OpaqueFunction(function=_abort_sensor_gate)]
             ),
         )
     )
@@ -187,6 +187,7 @@ def _bringup(context, *args, **kwargs):
                 "spawn_y": gz["spawn_y"],
                 "spawn_z": gz["spawn_z"],
                 "controllers_file": str(manifest["controllers_path"]),
+                "lidar_adapter_config": str(manifest["lidar_adapter_path"]),
                 "use_sim_time": use_sim,
                 **geometry,
             },
@@ -198,23 +199,25 @@ def _bringup(context, *args, **kwargs):
             ),
             flow(
                 "① 起 robot_gz 仿真底层 → ready_gate 等 "
-                "/points_raw+/joint_states + settling %ss 后起 slam_stack"
+                "/joint_states + settling %ss → 传感器契约 gate → 起 slam_stack"
                 % settling
             ),
         ]
-        return control_layer + flow_log + [base] + ready_gate(
-            ["/points_raw", "/joint_states"], 300.0, "robot_gz(lidar+controller)",
-            [flow("手机访问 http://<机器人或仿真主机IP>:8080\n"
+        sensor_gate_actions = _sensor_gate(
+            [*flow_log,
+             flow("手机访问 http://<机器人或仿真主机IP>:8080\n"
                   "mapping：点击“人工接管”后按住方向按钮驾驶\n"
                   "navigation：默认自动；点击“人工接管”屏蔽 Nav2，"
                   "点击“恢复自动导航”恢复"),
              slam_stack],
+            manifest,
+        )
+        return control_layer + [base] + ready_gate(
+            ["/joint_states"], 300.0, "robot_gz(controller)",
+            sensor_gate_actions,
             use_sim_time=use_sim, settling=settling)
 
     if platform == "real":
-        vanjee_config = _pkg_config(
-            "vanjee_lidar_ros", cfg["vanjee_lidar"]["config"]
-        )
         chassis = _inc(
             "robot_bringup",
             "launch/real_chassis.launch.py",
@@ -228,7 +231,7 @@ def _bringup(context, *args, **kwargs):
         lidar = _inc(
             "vanjee_lidar_ros",
             "launch/vanjee_lidar.launch.py",
-            {"config_file": vanjee_config},
+            {"config_file": str(manifest["vanjee_lidar_path"])},
         )
         flow_log = [
             flow(
@@ -237,11 +240,12 @@ def _bringup(context, *args, **kwargs):
             ),
             flow("① 起真实底盘+Vanjee 722 → 真实传感器 gate 连续验收 2s → 起共享 slam_stack"),
         ]
+        sensor_gate_actions = _sensor_gate([slam_stack], manifest)
         return (
             control_layer
             + flow_log
             + [chassis, lidar]
-            + _real_sensor_gate([slam_stack], use_sim_time)
+            + sensor_gate_actions
         )
 
 

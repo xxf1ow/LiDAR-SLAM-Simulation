@@ -10,6 +10,7 @@ CMAKE_PATH = PACKAGE_ROOT / "CMakeLists.txt"
 PACKAGE_XML_PATH = PACKAGE_ROOT / "package.xml"
 RUNTIME_ARGUMENTS = {
     "controllers_file",
+    "lidar_adapter_config",
     "base_length", "base_width", "base_height", "base_link_height",
     "wheel_radius", "wheel_width", "wheel_separation",
     "lidar_x", "lidar_y", "lidar_z",
@@ -125,8 +126,28 @@ def test_xacro_receives_generated_controller_and_all_runtime_geometry():
     assert _is_launch_configuration(
         _assigned_value(tree, "controllers_file"), "controllers_file"
     )
-    for name in RUNTIME_ARGUMENTS - {"controllers_file", "use_sim_time"}:
+    for name in RUNTIME_ARGUMENTS - {
+        "controllers_file", "lidar_adapter_config", "use_sim_time"
+    }:
         assert _is_launch_configuration(configured[name], name)
+
+
+def test_lidar_adapter_uses_only_generated_config_file():
+    function = next(
+        node for node in _tree().body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "generate_launch_description"
+    )
+    adapter = next(
+        call for call in _calls(function, "Node")
+        if _string(_keyword(call, "package")) == "lidar_pointcloud_adapter"
+        and _string(_keyword(call, "executable")) == "adapter_node"
+    )
+    parameters = _keyword(adapter, "parameters")
+    assert isinstance(parameters, ast.List) and len(parameters.elts) == 1
+    assert _is_launch_configuration(
+        parameters.elts[0], "lidar_adapter_config"
+    )
 
 
 def test_non_template_nodes_share_the_launch_clock_without_literal_true():
@@ -147,7 +168,6 @@ def test_non_template_nodes_share_the_launch_clock_without_literal_true():
     )
     expected_nodes = {
         ("ros_gz_bridge", "parameter_bridge"),
-        ("lidar_pointcloud_adapter", "adapter_node"),
         ("rviz2", "rviz2"),
     }
     checked = set()

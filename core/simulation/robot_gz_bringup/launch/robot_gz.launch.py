@@ -40,6 +40,7 @@ def generate_launch_description():
         DeclareLaunchArgument("spawn_z", default_value="0.05",
                               description="机器人 spawn Z(根=base_footprint 在地面，留 5cm 落地余量)。"),
         DeclareLaunchArgument("controllers_file"),
+        DeclareLaunchArgument("lidar_adapter_config"),
         DeclareLaunchArgument("base_length"),
         DeclareLaunchArgument("base_width"),
         DeclareLaunchArgument("base_height"),
@@ -145,7 +146,7 @@ def generate_launch_description():
         condition=UnlessCondition(gui),
     )
 
-    # 桥接：clock + /lidar/points + /imu→/imu_plugin/out
+    # 桥接：clock + /lidar/points + /imu→/imu/data
     bridge = Node(
         package="ros_gz_bridge", executable="parameter_bridge",
         name="ros_gz_bridge", output="screen",
@@ -156,13 +157,7 @@ def generate_launch_description():
     lidar_adapter = Node(
         package="lidar_pointcloud_adapter", executable="adapter_node",
         name="lidar_pointcloud_adapter", output="screen",
-        parameters=[{
-            "input_topic": "/lidar/points",
-            "output_topic": "/points_raw",
-            "output_frame": "velodyne",
-            "scan_period": 0.1,
-            "use_sim_time": use_sim_time,
-        }],
+        parameters=[LaunchConfiguration("lidar_adapter_config")],
     )
 
     gz_spawn_entity = Node(

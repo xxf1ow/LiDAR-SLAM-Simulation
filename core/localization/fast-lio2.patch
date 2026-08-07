@@ -43,7 +43,7 @@ index 0000000..1111111
 +
 +        common:
 +            lid_topic:  "points_raw"
-+            imu_topic:  "/imu_plugin/out"
++            imu_topic:  "/imu/data"
 +            time_sync_en: false
 +            time_offset_lidar_to_imu: 0.0
 +

@@ -6,10 +6,21 @@ from pathlib import Path
 import pytest
 
 from system_bringup import consistency_check as cc
+from system_bringup import runtime_config_compiler as rcc
 
 
 def _root():
     return cc.find_repo_root(__file__)
+
+
+@pytest.fixture
+def sim_adapter_scan_period(tmp_path):
+    config = Path(_root()) / "core/bringup/system_bringup/config/bringup.yaml"
+    manifest = rcc.compile_runtime_configs(config, tmp_path / "runtime")
+    adapter = cc._yaml(
+        Path(manifest["lidar_adapter_path"]).read_text(encoding="utf-8")
+    )
+    return adapter["lidar_pointcloud_adapter"]["ros__parameters"]["scan_period"]
 
 
 def _guarded_read(monkeypatch, forbidden):
@@ -86,6 +97,28 @@ def test_fastlio_sim_patch_yaml_reconstructed_by_path():
     }
 
 
+def test_sim_imu_topic_is_atomically_fixed_across_active_sources():
+    root = _root()
+    fastlio = cc._yaml(
+        cc._patch_added_file(
+            cc._read(root, cc.F_FASTLIO_PATCH),
+            "config/gazebo_velodyne.yaml",
+        )
+    )["/**"]["ros__parameters"]
+    assert fastlio["common"]["imu_topic"] == "/imu/data"
+
+    liosam_patch = cc._read(root, cc.F_LIOSAM_PATCH)
+    assert cc._patch_added_value(
+        liosam_patch, "config/params.yaml", "imuTopic"
+    ) == "/imu/data"
+
+    bridge = cc._yaml(
+        cc._read(root, "core/simulation/robot_gz_bringup/config/bridge.yaml")
+    )
+    imu_bridge = next(item for item in bridge if item["gz_topic_name"] == "/imu")
+    assert imu_bridge["ros_topic_name"] == "/imu/data"
+
+
 def test_fastlio_patch_uses_sensor_data_qos_for_imu_subscription():
     patch = cc._read(_root(), cc.F_FASTLIO_PATCH)
     section = cc._patch_file_section(patch, "src/laserMapping.cpp")
@@ -131,8 +164,12 @@ def test_gazebo_lidar_block():
     assert gz["range_min"] == 0.9
 
 
-def test_adapter_scan_period():
-    assert cc._adapter_scan_period(cc._read(_root(), cc.F_GZ_LAUNCH)) == 0.1
+def test_adapter_scan_period(sim_adapter_scan_period):
+    assert sim_adapter_scan_period == 0.1
+
+
+def test_legacy_checker_does_not_parse_generated_adapter_config_from_launch():
+    assert not hasattr(cc, "_adapter_scan_period")
 
 
 def test_geometry_consistent():
@@ -159,7 +196,6 @@ def test_sim_lidar_reads_only_sim_sources(monkeypatch):
         cc.F_LIOSAM_PATCH,
         cc.F_GAZEBO,
         cc.F_ROBOT_XACRO,
-        cc.F_GZ_LAUNCH,
     }
     assert added_files == [cc.FASTLIO_CONFIG["sim"]]
 
