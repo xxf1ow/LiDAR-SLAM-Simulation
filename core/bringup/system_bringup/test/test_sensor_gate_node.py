@@ -39,14 +39,28 @@ class FakeLogger:
 @pytest.fixture
 def node_module(monkeypatch):
     clock = FakeClock(10.0)
+    generated = {
+        "expected_points_per_scan": 16 * 1800,
+        "expected_point_hz": 20.0,
+        "expected_imu_hz": 300.0,
+        "minimum_point_rate_ratio": 0.8,
+        "minimum_imu_rate_ratio": 0.5,
+        "max_stamp_age": 0.25,
+        "rate_window": 1.5,
+        "stable_duration": 1.0,
+        "timeout": 42.0,
+    }
 
     class FakeNode:
         def __init__(self, _name):
+            self.name = _name
             self._clock = clock
             self._logger = FakeLogger()
+            self.declared_parameters = []
 
-        def declare_parameter(self, _name, default):
-            return types.SimpleNamespace(value=default)
+        def declare_parameter(self, name, default):
+            self.declared_parameters.append((name, default))
+            return types.SimpleNamespace(value=generated.get(name, default))
 
         def create_subscription(self, *args, **kwargs):
             return types.SimpleNamespace(args=args, kwargs=kwargs)
@@ -88,7 +102,7 @@ def node_module(monkeypatch):
     module_name = "system_bringup.sensor_gate_node"
     sys.modules.pop(module_name, None)
     module = importlib.import_module(module_name)
-    yield module, clock
+    yield module, clock, generated
     sys.modules.pop(module_name, None)
 
 
@@ -105,8 +119,8 @@ def _point_message(stamp):
         header=types.SimpleNamespace(
             stamp=_stamp(stamp), frame_id="vanjee_lidar"
         ),
-        height=32,
-        width=1200,
+        height=16,
+        width=1800,
         fields=[
             types.SimpleNamespace(name=name)
             for name in ("x", "y", "z", "intensity", "ring", "time")
@@ -151,13 +165,28 @@ class RecordingState:
         return self.ready, self.reason
 
 
+def test_node_loads_generated_contract_parameters_and_uses_neutral_name(node_module):
+    module, _clock, generated = node_module
+    node = module.SensorGateNode()
+
+    assert node.name == "sensor_contract_gate"
+    assert [name for name, _default in node.declared_parameters] == list(generated)
+    assert node.timeout == generated["timeout"]
+    assert node.state.expected_points_per_scan == generated["expected_points_per_scan"]
+    assert node.state.minimum_point_hz == 16.0
+    assert node.state.minimum_imu_hz == 150.0
+    assert node.state.max_stamp_age == generated["max_stamp_age"]
+    assert node.state.point_rate.window == generated["rate_window"]
+    assert node.state.stable_duration == generated["stable_duration"]
+
+
 def test_startup_and_samples_use_one_ros_clock_domain(node_module):
-    module, clock = node_module
+    module, clock, _generated = node_module
     node = module.SensorGateNode()
 
     assert node.started_at == 10.0
     assert node.last_report_at == 10.0
-    assert node.timeout == 300.0
+    assert node.timeout == 42.0
 
     state = RecordingState()
     node.state = state
@@ -174,7 +203,7 @@ def test_startup_and_samples_use_one_ros_clock_domain(node_module):
 
 
 def test_status_and_rate_windows_use_the_ros_clock(node_module):
-    module, clock = node_module
+    module, clock, _generated = node_module
     node = module.SensorGateNode()
     state = RecordingState(ready=True, reason="ready")
     node.state = state
@@ -189,12 +218,12 @@ def test_status_and_rate_windows_use_the_ros_clock(node_module):
     assert node.finished
     assert node.timer.cancelled
     assert node.get_logger().messages == [
-        "real sensor contract ready (point=12.0 Hz, imu=180.0 Hz)"
+        "sensor contract ready (point=12.0 Hz, imu=180.0 Hz)"
     ]
 
 
 def test_reporting_and_final_timeout_use_the_ros_clock(node_module):
-    module, clock = node_module
+    module, clock, _generated = node_module
     reporting_node = module.SensorGateNode()
     reporting_state = RecordingState(reason="still waiting")
     reporting_node.state = reporting_state
@@ -208,21 +237,21 @@ def test_reporting_and_final_timeout_use_the_ros_clock(node_module):
     assert reporting_state.status_times == [14.99, 15.0]
     assert reporting_node.last_report_at == 15.0
     assert reporting_node.get_logger().messages == [
-        "real sensor contract waiting: still waiting"
+        "sensor contract waiting: still waiting"
     ]
 
     timeout_node = module.SensorGateNode()
     timeout_state = RecordingState(reason="sensor missing")
     timeout_node.state = timeout_state
-    clock.seconds = 315.0
+    clock.seconds = 57.0
     timeout_node._check_status()
 
-    assert timeout_state.status_times == [315.0]
+    assert timeout_state.status_times == [57.0]
     assert timeout_node.exit_code == 1
     assert timeout_node.finished
     assert timeout_node.timer.cancelled
     assert timeout_node.get_logger().messages == [
-        "real sensor contract timed out: sensor missing"
+        "sensor contract timed out: sensor missing"
     ]
 
 

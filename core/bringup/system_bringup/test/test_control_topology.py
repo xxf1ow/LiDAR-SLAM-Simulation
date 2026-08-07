@@ -15,6 +15,7 @@ BRINGUP = ROOT / "core/bringup/system_bringup/launch/bringup.launch.py"
 ROBOT = ROOT / "core/robot/robot_bringup/launch/robot.launch.py"
 REAL_CHASSIS = ROOT / "core/robot/robot_bringup/launch/real_chassis.launch.py"
 SENSOR_GATE = ROOT / "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
+SETUP = ROOT / "core/bringup/system_bringup/setup.py"
 MANIFEST = ROOT / "core/bringup/system_bringup/package.xml"
 ROBOT_GEOMETRY_ARGUMENTS = {
     "base_length", "base_width", "base_height", "base_link_height",
@@ -863,7 +864,7 @@ def test_real_backend_uses_same_interface_and_gates_shared_stack_after_drivers()
     assert _keyword(abort, "function").id == "_abort_real_sensor_gate"
 
 
-def test_real_sensor_gate_finishes_callback_without_shutting_down_executor():
+def test_sensor_contract_gate_finishes_callback_without_shutting_down_executor():
     finish = next(
         node for node in ast.walk(_tree(SENSOR_GATE))
         if isinstance(node, ast.FunctionDef) and node.name == "_finish"
@@ -876,7 +877,7 @@ def test_real_sensor_gate_finishes_callback_without_shutting_down_executor():
     )
 
 
-def test_real_sensor_gate_main_spins_only_until_result_is_finished():
+def test_sensor_contract_gate_main_spins_only_until_result_is_finished():
     main = _function(_tree(SENSOR_GATE), "main")
     loops = [node for node in ast.walk(main) if isinstance(node, ast.While)]
     assert len(loops) == 1
@@ -897,6 +898,12 @@ def test_real_sensor_gate_main_spins_only_until_result_is_finished():
     ).body[0].value
     assert len(spins) == 1
     assert ast.dump(spins[0]) == ast.dump(expected_spin)
+
+
+def test_sensor_contract_gate_replaces_the_legacy_console_entry_point():
+    source = SETUP.read_text(encoding="utf-8")
+    assert "sensor_contract_gate = system_bringup.sensor_gate_node:main" in source
+    assert "real_sensor_ready_gate" not in source
 
 
 def test_real_branch_resolves_vanjee_config_only_after_platform_selection():

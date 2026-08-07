@@ -8,9 +8,38 @@ from system_bringup.sensor_gate_logic import SensorGateState
 
 class SensorGateNode(Node):
     def __init__(self):
-        super().__init__("real_sensor_ready_gate")
-        self.state = SensorGateState()
+        super().__init__("sensor_contract_gate")
+        expected_points_per_scan = int(
+            self.declare_parameter("expected_points_per_scan", 38400).value
+        )
+        expected_point_hz = float(
+            self.declare_parameter("expected_point_hz", 10.0).value
+        )
+        expected_imu_hz = float(
+            self.declare_parameter("expected_imu_hz", 200.0).value
+        )
+        minimum_point_rate_ratio = float(
+            self.declare_parameter("minimum_point_rate_ratio", 0.8).value
+        )
+        minimum_imu_rate_ratio = float(
+            self.declare_parameter("minimum_imu_rate_ratio", 0.75).value
+        )
+        max_stamp_age = float(
+            self.declare_parameter("max_stamp_age", 0.5).value
+        )
+        rate_window = float(self.declare_parameter("rate_window", 2.0).value)
+        stable_duration = float(
+            self.declare_parameter("stable_duration", 2.0).value
+        )
         self.timeout = float(self.declare_parameter("timeout", 300.0).value)
+        self.state = SensorGateState(
+            expected_points_per_scan=expected_points_per_scan,
+            minimum_point_hz=expected_point_hz * minimum_point_rate_ratio,
+            minimum_imu_hz=expected_imu_hz * minimum_imu_rate_ratio,
+            max_stamp_age=max_stamp_age,
+            rate_window=rate_window,
+            stable_duration=stable_duration,
+        )
         self.started_at = self._now_seconds()
         self.last_report_at = self.started_at
         self.exit_code = 1
@@ -52,14 +81,14 @@ class SensorGateNode(Node):
         if ready:
             self._finish(
                 0,
-                "real sensor contract ready "
+                "sensor contract ready "
                 f"(point={self.state.point_rate.hz(now):.1f} Hz, "
                 f"imu={self.state.imu_rate.hz(now):.1f} Hz)",
             )
         elif now - self.started_at >= self.timeout:
-            self._finish(1, f"real sensor contract timed out: {reason}")
+            self._finish(1, f"sensor contract timed out: {reason}")
         elif now - self.last_report_at >= 5.0:
-            self.get_logger().info(f"real sensor contract waiting: {reason}")
+            self.get_logger().info(f"sensor contract waiting: {reason}")
             self.last_report_at = now
 
     def _now_seconds(self):
