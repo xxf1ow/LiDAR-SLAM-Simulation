@@ -41,6 +41,13 @@ def _pair(config_path):
     }
 
 
+def _set_pair_value(pair, platform, path, value):
+    target = pair[platform][1]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+
+
 def test_load_bringup_context_returns_source_config_and_selection(tmp_path):
     config = _selection(tmp_path, "sim")
 
@@ -201,6 +208,73 @@ def test_missing_or_extra_schema_key_fails(tmp_path, mutation, expected):
 def test_allowed_null_fields_pass_schema_validation(tmp_path):
     pair = _pair(_selection(tmp_path))
     pc.validate_profile_pair(pair)
+
+
+@pytest.mark.parametrize(
+    "platform,path,value,expected",
+    [
+        ("sim", ("hardware", "lidar", "backend"), "vanjee", "gazebo/gpu_lidar"),
+        ("sim", ("hardware", "lidar", "model"), "vanjee_722", "gazebo/gpu_lidar"),
+        ("real", ("hardware", "lidar", "backend"), "gazebo", "vanjee/vanjee_722"),
+        ("real", ("hardware", "lidar", "model"), "gpu_lidar", "vanjee/vanjee_722"),
+        ("sim", ("hardware", "lidar", "host_address"), "192.168.2.88", "must be null"),
+        ("sim", ("hardware", "lidar", "device_address"), "192.168.2.86", "must be null"),
+        ("sim", ("hardware", "lidar", "host_msop_port"), 3001, "must be null"),
+        ("sim", ("hardware", "lidar", "device_msop_port"), 3333, "must be null"),
+        ("real", ("hardware", "lidar", "host_address"), "not-an-ip", "IPv4"),
+        ("real", ("hardware", "lidar", "device_address"), "::1", "IPv4"),
+        ("real", ("hardware", "lidar", "host_address"), None, "IPv4"),
+        ("real", ("hardware", "lidar", "host_msop_port"), 0, "1..65535"),
+        ("real", ("hardware", "lidar", "device_msop_port"), 65536, "1..65535"),
+        ("real", ("hardware", "lidar", "device_msop_port"), None, "1..65535"),
+        ("sim", ("sensors", "lidar", "point_time_field"), "t", "time/seconds/scan_start"),
+        ("real", ("sensors", "lidar", "point_time_unit"), "milliseconds", "time/seconds/scan_start"),
+        ("real", ("sensors", "lidar", "point_time_reference"), "scan_end", "time/seconds/scan_start"),
+    ],
+)
+def test_sensor_platform_contract_rejects_unsupported_values(
+    tmp_path, platform, path, value, expected
+):
+    pair = _pair(_selection(tmp_path))
+    _set_pair_value(pair, platform, path, value)
+
+    with pytest.raises(ValueError, match=expected):
+        pc.validate_profile_pair(pair)
+
+
+@pytest.mark.parametrize(
+    "path,value,expected",
+    [
+        (("sensors", "imu", "rate_hz"), 0.0, "rate_hz"),
+        (("sensors", "lidar", "min_range"), -0.1, "min_range"),
+        (("sensors", "lidar", "max_range"), 0.05, "max_range"),
+        (("sensors", "lidar", "horizontal_end_angle"), 0.0, "horizontal"),
+        (("sensors", "lidar", "horizontal_end_angle"), 7.0, r"2\*pi"),
+    ],
+)
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_sensor_numeric_semantics_are_strict(
+    tmp_path, platform, path, value, expected
+):
+    pair = _pair(_selection(tmp_path))
+    if path[-1] == "max_range":
+        _set_pair_value(
+            pair,
+            platform,
+            ("sensors", "lidar", "min_range"),
+            0.05,
+        )
+    if path[-1] == "horizontal_end_angle" and value == 0.0:
+        _set_pair_value(
+            pair,
+            platform,
+            ("sensors", "lidar", "horizontal_start_angle"),
+            0.0,
+        )
+    _set_pair_value(pair, platform, path, value)
+
+    with pytest.raises(ValueError, match=expected):
+        pc.validate_profile_pair(pair)
 
 
 @pytest.mark.parametrize(

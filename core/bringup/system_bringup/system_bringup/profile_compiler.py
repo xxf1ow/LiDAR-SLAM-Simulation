@@ -1,5 +1,6 @@
 import argparse
 import copy
+from ipaddress import ip_address
 import math
 import sys
 import tempfile
@@ -23,6 +24,18 @@ _MOUNT_SCHEMA = {
     "pitch": _NUMBER,
     "yaw": _NUMBER,
 }
+
+_SUPPORTED_LIDAR = {
+    "sim": ("gazebo", "gpu_lidar"),
+    "real": ("vanjee", "vanjee_722"),
+}
+_POINT_TIME_CONTRACT = ("time", "seconds", "scan_start")
+_NETWORK_KEYS = (
+    "host_address",
+    "device_address",
+    "host_msop_port",
+    "device_msop_port",
+)
 
 _PROFILE_SCHEMA = {
     "hardware": {
@@ -239,6 +252,71 @@ def _validate_semantics(profile, source):
         )
 
 
+def _validate_sensor_semantics(platform, profile, source):
+    hardware = profile["hardware"]["lidar"]
+    actual = (hardware["backend"], hardware["model"])
+    expected = _SUPPORTED_LIDAR[platform]
+    if actual != expected:
+        raise ValueError(
+            f"{source}: {platform} hardware.lidar must be "
+            f"{expected[0]}/{expected[1]}"
+        )
+
+    if platform == "sim":
+        for key in _NETWORK_KEYS:
+            if hardware[key] is not None:
+                raise ValueError(
+                    f"{source}: sim hardware.lidar.{key} must be null"
+                )
+    else:
+        for key in ("host_address", "device_address"):
+            try:
+                parsed = ip_address(hardware[key])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"{source}: real hardware.lidar.{key} must be an IPv4 literal"
+                ) from exc
+            if parsed.version != 4:
+                raise ValueError(
+                    f"{source}: real hardware.lidar.{key} must be an IPv4 literal"
+                )
+        for key in ("host_msop_port", "device_msop_port"):
+            value = hardware[key]
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, int)
+                or not 1 <= value <= 65535
+            ):
+                raise ValueError(
+                    f"{source}: real hardware.lidar.{key} must be in 1..65535"
+                )
+
+    lidar = profile["sensors"]["lidar"]
+    imu = profile["sensors"]["imu"]
+    if imu["rate_hz"] <= 0:
+        raise ValueError(f"{source}: sensors.imu.rate_hz must be > 0")
+    if lidar["min_range"] < 0:
+        raise ValueError(f"{source}: sensors.lidar.min_range must be >= 0")
+    if lidar["max_range"] <= lidar["min_range"]:
+        raise ValueError(
+            f"{source}: sensors.lidar.max_range must be greater than min_range"
+        )
+    span = lidar["horizontal_end_angle"] - lidar["horizontal_start_angle"]
+    if span <= 0 or span > math.tau:
+        raise ValueError(
+            f"{source}: sensors.lidar horizontal span must be in (0, 2*pi]"
+        )
+    point_time = (
+        lidar["point_time_field"],
+        lidar["point_time_unit"],
+        lidar["point_time_reference"],
+    )
+    if point_time != _POINT_TIME_CONTRACT:
+        raise ValueError(
+            f"{source}: sensors.lidar point time must be time/seconds/scan_start"
+        )
+
+
 def validate_profile_pair(profiles):
     if set(profiles) != {"sim", "real"}:
         raise ValueError("profile pair must contain exactly sim and real")
@@ -246,6 +324,7 @@ def validate_profile_pair(profiles):
         source, profile = profiles[name]
         _validate_node(profile, _PROFILE_SCHEMA, Path(source))
         _validate_semantics(profile, Path(source))
+        _validate_sensor_semantics(name, profile, Path(source))
     sim_paths = set(_leaf_paths(profiles["sim"][1]))
     real_paths = set(_leaf_paths(profiles["real"][1]))
     if sim_paths != real_paths:
