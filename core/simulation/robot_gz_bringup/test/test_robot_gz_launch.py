@@ -12,8 +12,14 @@ RUNTIME_ARGUMENTS = {
     "controllers_file",
     "base_length", "base_width", "base_height", "base_link_height",
     "wheel_radius", "wheel_width", "wheel_separation",
-    "sensor_x", "sensor_y", "sensor_z",
-    "sensor_roll", "sensor_pitch", "sensor_yaw",
+    "lidar_x", "lidar_y", "lidar_z",
+    "lidar_roll", "lidar_pitch", "lidar_yaw",
+    "imu_x", "imu_y", "imu_z",
+    "imu_roll", "imu_pitch", "imu_yaw",
+    "lidar_scan_lines", "lidar_columns_per_scan", "lidar_scan_rate_hz",
+    "lidar_min_range", "lidar_max_range",
+    "lidar_horizontal_start_angle", "lidar_horizontal_end_angle",
+    "imu_rate_hz",
     "use_sim_time",
 }
 
@@ -73,7 +79,11 @@ def test_manifest_owned_inputs_are_required_launch_arguments():
         if call.args
     }
 
-    assert RUNTIME_ARGUMENTS <= declarations.keys()
+    required = {
+        name for name, declaration in declarations.items()
+        if not any(keyword.arg == "default_value" for keyword in declaration.keywords)
+    }
+    assert required == RUNTIME_ARGUMENTS
     for name in RUNTIME_ARGUMENTS:
         assert not any(
             keyword.arg == "default_value" for keyword in declarations[name].keywords

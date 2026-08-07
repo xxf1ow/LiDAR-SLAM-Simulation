@@ -16,6 +16,18 @@ ROBOT = ROOT / "core/robot/robot_bringup/launch/robot.launch.py"
 REAL_CHASSIS = ROOT / "core/robot/robot_bringup/launch/real_chassis.launch.py"
 SENSOR_GATE = ROOT / "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
 MANIFEST = ROOT / "core/bringup/system_bringup/package.xml"
+ROBOT_GEOMETRY_ARGUMENTS = {
+    "base_length", "base_width", "base_height", "base_link_height",
+    "wheel_radius", "wheel_width", "wheel_separation",
+    "lidar_x", "lidar_y", "lidar_z",
+    "lidar_roll", "lidar_pitch", "lidar_yaw",
+    "imu_x", "imu_y", "imu_z",
+    "imu_roll", "imu_pitch", "imu_yaw",
+    "lidar_scan_lines", "lidar_columns_per_scan", "lidar_scan_rate_hz",
+    "lidar_min_range", "lidar_max_range",
+    "lidar_horizontal_start_angle", "lidar_horizontal_end_angle",
+    "imu_rate_hz",
+}
 
 
 def _tree(path):
@@ -270,14 +282,8 @@ def test_robot_launch_accepts_runtime_geometry_and_controller_file():
         for call in _calls(tree, "DeclareLaunchArgument")
         if call.args
     }
-    assert {
-        "controllers_file",
-        "base_length", "base_width", "base_height", "base_link_height",
-        "wheel_radius", "wheel_width", "wheel_separation",
-        "sensor_x", "sensor_y", "sensor_z",
-        "sensor_roll", "sensor_pitch", "sensor_yaw",
-        "use_sim_time",
-    } <= declared
+    assert ROBOT_GEOMETRY_ARGUMENTS <= declared
+    assert not any(name.startswith("sensor_") for name in declared)
 
     function = _function(tree, "generate_launch_description")
     control_node = _node_call(function, "controller_manager", "ros2_control_node")
@@ -311,15 +317,12 @@ def test_robot_launch_accepts_runtime_geometry_and_controller_file():
         if _string(command_parts.elts[index])
         and _string(command_parts.elts[index]).endswith(":=")
     }
-    for name in declared - {"gui", "controllers_file", "use_sim_time"}:
+    for name in ROBOT_GEOMETRY_ARGUMENTS:
         value = configured[name]
-        if name in {"use_mock_hardware", "prefix"}:
-            assert isinstance(value, ast.Name)
-        else:
-            assert isinstance(value, ast.Call)
-            assert isinstance(value.func, ast.Name)
-            assert value.func.id == "LaunchConfiguration"
-            assert _string(value.args[0]) == name
+        assert isinstance(value, ast.Call)
+        assert isinstance(value.func, ast.Name)
+        assert value.func.id == "LaunchConfiguration"
+        assert _string(value.args[0]) == name
 
 
 def test_real_chassis_passes_runtime_geometry_to_robot_launch():
@@ -329,14 +332,8 @@ def test_real_chassis_passes_runtime_geometry_to_robot_launch():
         for call in _calls(tree, "DeclareLaunchArgument")
         if call.args
     }
-    assert {
-        "controllers_file",
-        "base_length", "base_width", "base_height", "base_link_height",
-        "wheel_radius", "wheel_width", "wheel_separation",
-        "sensor_x", "sensor_y", "sensor_z",
-        "sensor_roll", "sensor_pitch", "sensor_yaw",
-        "use_sim_time",
-    } <= declared
+    assert {"controllers_file", "use_sim_time", *ROBOT_GEOMETRY_ARGUMENTS} <= declared
+    assert not any(name.startswith("sensor_") for name in declared)
 
     function = _function(tree, "generate_launch_description")
     geometry = _assigned_value(function, "geometry_arguments")
@@ -345,7 +342,7 @@ def test_real_chassis_passes_runtime_geometry_to_robot_launch():
         _string(item)
         for item in geometry.generators[0].iter.elts
     }
-    assert declared - {"gui"} == names
+    assert names == {"controllers_file", "use_sim_time", *ROBOT_GEOMETRY_ARGUMENTS}
     assert "use_mock_hardware" not in declared
 
     robot = _assigned_value(function, "robot")
@@ -363,14 +360,7 @@ def test_real_chassis_passes_runtime_geometry_to_robot_launch():
 
 def test_real_chassis_requires_authoritative_geometry_instead_of_sim_defaults():
     tree = _tree(REAL_CHASSIS)
-    for name in (
-        "controllers_file",
-        "base_length", "base_width", "base_height", "base_link_height",
-        "wheel_radius", "wheel_width", "wheel_separation",
-        "sensor_x", "sensor_y", "sensor_z",
-        "sensor_roll", "sensor_pitch", "sensor_yaw",
-        "use_sim_time",
-    ):
+    for name in {"controllers_file", "use_sim_time", *ROBOT_GEOMETRY_ARGUMENTS}:
         declaration = _declaration(tree, name)
         assert not any(keyword.arg == "default_value" for keyword in declaration.keywords)
 

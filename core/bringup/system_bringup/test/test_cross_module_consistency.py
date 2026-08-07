@@ -60,13 +60,16 @@ def test_xacro_args_keep_existing_sim_geometry_defaults():
     assert defaults["wheel_separation"] == 0.55
     assert defaults["base_width"] == 0.55
     assert defaults["base_height"] == 0.40
-    assert defaults["sensor_z"] == 0.236
+    assert defaults["lidar_z"] == 0.236
+    assert defaults["imu_z"] == 0.236
 
 
-def test_xacro_joint_origin_colocated():
+def test_xacro_joint_origins_consume_independent_mount_arguments():
     macro = cc._read(_root(), cc.F_MACRO)
     assert cc._xacro_joint_origin_xyz(macro, "velodyne_joint") == \
-        cc._xacro_joint_origin_xyz(macro, "imu_joint")
+        "${lidar_x} ${lidar_y} ${lidar_z}"
+    assert cc._xacro_joint_origin_xyz(macro, "imu_joint") == \
+        "${imu_x} ${imu_y} ${imu_z}"
 
 
 def test_fastlio_sim_patch_yaml_reconstructed_by_path():
@@ -118,7 +121,10 @@ def test_patch_added_file_rejects_modified_sim_liosam_params():
 
 
 def test_gazebo_lidar_block():
-    gz = cc._gazebo_lidar(cc._read(_root(), cc.F_GAZEBO))
+    gz = cc._gazebo_lidar(
+        cc._read(_root(), cc.F_GAZEBO),
+        cc._xacro_args(cc._read(_root(), cc.F_ROBOT_XACRO)),
+    )
     assert gz["v_samples"] == 16
     assert gz["h_samples"] == 1800
     assert gz["update_rate"] == 10
@@ -148,7 +154,13 @@ def test_sim_lidar_reads_only_sim_sources(monkeypatch):
     added_files = _guarded_added_file(monkeypatch, {cc.FASTLIO_CONFIG["real"]})
 
     assert cc.check_lidar(_root(), "sim") == []
-    assert set(reads) == {cc.F_FASTLIO_PATCH, cc.F_LIOSAM_PATCH, cc.F_GAZEBO, cc.F_GZ_LAUNCH}
+    assert set(reads) == {
+        cc.F_FASTLIO_PATCH,
+        cc.F_LIOSAM_PATCH,
+        cc.F_GAZEBO,
+        cc.F_ROBOT_XACRO,
+        cc.F_GZ_LAUNCH,
+    }
     assert added_files == [cc.FASTLIO_CONFIG["sim"]]
 
 

@@ -1,6 +1,6 @@
 <?xml version="1.0"?>
 <!-- 差速移动底盘本体(默认参数为仿真尺寸，真机由 system_bringup 覆盖；根=base_footprint(REP-105 地面投影帧)，其下 base_link 为车体)：盒身 + 左右驱动轮
-     + 前后球形万向轮(半径=驱动轮、同高) + 车顶中央共位的 velodyne / imu_link 挂载帧。
+     + 前后球形万向轮(半径=驱动轮、同高) + 独立的 velodyne / imu_link 挂载帧。
      碰撞用基本几何(box/cylinder/sphere)。Gz 传感器插件在 Phase 3 的 gazebo.xacro 加。
      注：base_footprint 无 inertial 作根，base_link(带 inertial)为其固定子，
          不再触发 kdl_parser root-inertia 告警。 -->
@@ -36,12 +36,18 @@
   <!-- 派生量 -->
   <xacro:property name="wheel_z"  value="${wheel_radius - base_link_height}"/>
   <xacro:property name="caster_x" value="${base_length/2 - caster_radius}"/>
-  <xacro:property name="sensor_x" value="$(arg sensor_x)"/>
-  <xacro:property name="sensor_y" value="$(arg sensor_y)"/>
-  <xacro:property name="sensor_z" value="$(arg sensor_z)"/>
-  <xacro:property name="sensor_roll" value="$(arg sensor_roll)"/>
-  <xacro:property name="sensor_pitch" value="$(arg sensor_pitch)"/>
-  <xacro:property name="sensor_yaw" value="$(arg sensor_yaw)"/>
+  <xacro:property name="lidar_x" value="$(arg lidar_x)"/>
+  <xacro:property name="lidar_y" value="$(arg lidar_y)"/>
+  <xacro:property name="lidar_z" value="$(arg lidar_z)"/>
+  <xacro:property name="lidar_roll" value="$(arg lidar_roll)"/>
+  <xacro:property name="lidar_pitch" value="$(arg lidar_pitch)"/>
+  <xacro:property name="lidar_yaw" value="$(arg lidar_yaw)"/>
+  <xacro:property name="imu_x" value="$(arg imu_x)"/>
+  <xacro:property name="imu_y" value="$(arg imu_y)"/>
+  <xacro:property name="imu_z" value="$(arg imu_z)"/>
+  <xacro:property name="imu_roll" value="$(arg imu_roll)"/>
+  <xacro:property name="imu_pitch" value="$(arg imu_pitch)"/>
+  <xacro:property name="imu_yaw" value="$(arg imu_yaw)"/>
 
   <!-- base_footprint：REP-105 地面投影根帧(无质量)。LIO-SAM baselinkFrame / Nav2 用。 -->
   <link name="${prefix}base_footprint"/>
@@ -187,11 +193,11 @@
     </inertial>
   </link>
 
-  <!-- 雷达挂载帧 velodyne：车顶中央、puck 底贴车顶、完全外露。Phase 3 在此挂 Gz gpu_lidar。 -->
+  <!-- 雷达挂载帧 velodyne：Phase 3 在此挂 Gz gpu_lidar。 -->
   <joint name="${prefix}velodyne_joint" type="fixed">
     <parent link="${prefix}base_link"/>
     <child  link="${prefix}velodyne"/>
-    <origin xyz="${sensor_x} ${sensor_y} ${sensor_z}" rpy="${sensor_roll} ${sensor_pitch} ${sensor_yaw}"/>
+    <origin xyz="${lidar_x} ${lidar_y} ${lidar_z}" rpy="${lidar_roll} ${lidar_pitch} ${lidar_yaw}"/>
   </joint>
 
   <link name="${prefix}velodyne">
@@ -214,11 +220,11 @@
     </inertial>
   </link>
 
-  <!-- IMU 挂载帧 imu_link：与 velodyne 同位置(外参归零)。Phase 3 在此挂 Gz imu。 -->
+  <!-- IMU 挂载帧 imu_link：Phase 3 在此挂 Gz imu。 -->
   <joint name="${prefix}imu_joint" type="fixed">
     <parent link="${prefix}base_link"/>
     <child  link="${prefix}imu_link"/>
-    <origin xyz="${sensor_x} ${sensor_y} ${sensor_z}" rpy="${sensor_roll} ${sensor_pitch} ${sensor_yaw}"/>
+    <origin xyz="${imu_x} ${imu_y} ${imu_z}" rpy="${imu_roll} ${imu_pitch} ${imu_yaw}"/>
   </joint>
 
   <link name="${prefix}imu_link">

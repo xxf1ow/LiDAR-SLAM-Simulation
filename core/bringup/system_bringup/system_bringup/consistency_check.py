@@ -894,13 +894,18 @@ def _patch_added_value(text, relative_path, key):
     return None
 
 
-def _gazebo_lidar(text):
+def _gazebo_lidar(text, arg_defaults):
     """gpu_lidar 传感器块 -> dict(h_samples,v_samples,update_rate,range_min)。"""
     blk = re.search(r'<sensor name="gpu_lidar".*?</sensor>', text, re.DOTALL).group(0)
-    h = re.search(r'<horizontal>.*?<samples>(\d+)</samples>', blk, re.DOTALL).group(1)
-    v = re.search(r'<vertical>.*?<samples>(\d+)</samples>', blk, re.DOTALL).group(1)
-    rate = re.search(r'<update_rate>(\d+)</update_rate>', blk).group(1)
-    rmin = re.search(r'<range>.*?<min>([\d.]+)</min>', blk, re.DOTALL).group(1)
+    def value(pattern):
+        raw = re.search(pattern, blk, re.DOTALL).group(1)
+        match = re.fullmatch(r'\$\{(\w+)\}', raw)
+        return arg_defaults[match.group(1)] if match else raw
+
+    h = value(r'<horizontal>.*?<samples>([^<]+)</samples>')
+    v = value(r'<vertical>.*?<samples>([^<]+)</samples>')
+    rate = value(r'<update_rate>([^<]+)</update_rate>')
+    rmin = value(r'<range>.*?<min>([^<]+)</min>')
     return {"h_samples": int(h), "v_samples": int(v),
             "update_rate": int(rate), "range_min": float(rmin)}
 
@@ -1070,18 +1075,14 @@ def check_geometry(repo_root, platform="sim"):
                 fails.append("[G3] navigation.launch.py %s=%.4f != 仿真 xacro %.4f。"
                              % (cname, lc[cname], xval))
 
-    # G4 共位 -> 外参零
-    vxyz = _xacro_joint_origin_xyz(macro, "velodyne_joint")
-    ixyz = _xacro_joint_origin_xyz(macro, "imu_joint")
-    if vxyz != ixyz:
-        fails.append("[G4] velodyne_joint/imu_joint origin 不同(应共位): '%s' vs '%s'。" % (vxyz, ixyz))
+    # G4 FAST-LIO 外参仍是第 5 节前的未迁移算法配置，不能从 URDF mount 推导。
     fastlio = _yaml(_patch_added_file(
         _read(repo_root, F_FASTLIO_PATCH),
         FASTLIO_CONFIG[platform],
     ))["/**"]["ros__parameters"]
     flm = fastlio["mapping"]
     if [float(v) for v in flm["extrinsic_T"]] != [0.0, 0.0, 0.0]:
-        fails.append("[G4] fast-lio extrinsic_T 非零: %s(velodyne/imu 共位应为 [0,0,0])。" % flm["extrinsic_T"])
+        fails.append("[G4] fast-lio extrinsic_T 非零: %s(第 5 节前基线应为 [0,0,0])。" % flm["extrinsic_T"])
     if [float(v) for v in flm["extrinsic_R"]] != [1, 0, 0, 0, 1, 0, 0, 0, 1]:
         fails.append("[G4] fast-lio extrinsic_R 非单位阵: %s。" % flm["extrinsic_R"])
 
@@ -1152,7 +1153,10 @@ def check_lidar(repo_root, platform="sim"):
                          % (lio_horizon_scan, lio["use_sim_time"]))
         return fails
 
-    gz = _gazebo_lidar(_read(repo_root, F_GAZEBO))
+    gz = _gazebo_lidar(
+        _read(repo_root, F_GAZEBO),
+        _xacro_args(_read(repo_root, F_ROBOT_XACRO)),
+    )
     fl_pre = fastlio["preprocess"]
     n_scan = int(_patch_added_value(
         _read(repo_root, F_LIOSAM_PATCH),
