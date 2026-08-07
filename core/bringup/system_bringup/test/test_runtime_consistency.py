@@ -111,7 +111,9 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     safe_load = cc.yaml.safe_load
     loads = []
     validations = []
+    sensor_validations = []
     validate_generated = rcc._validate_generated_configs
+    validate_sensors = rcc._validate_sensor_generated_configs
 
     def counted_load(stream):
         loads.append(stream)
@@ -120,6 +122,10 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     def counted_validation(*args):
         validations.append(args)
         return validate_generated(*args)
+
+    def counted_sensor_validation(*args):
+        sensor_validations.append(args)
+        return validate_sensors(*args)
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("runtime consistency must be read-only and manifest-only")
@@ -130,12 +136,16 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     monkeypatch.setattr(cc, "write_real_runtime_configs", forbidden)
     monkeypatch.setattr(rcc, "compile_runtime_configs", forbidden)
     monkeypatch.setattr(rcc, "_validate_generated_configs", counted_validation)
+    monkeypatch.setattr(
+        rcc, "_validate_sensor_generated_configs", counted_sensor_validation
+    )
     monkeypatch.setattr(Path, "write_text", forbidden)
     monkeypatch.setattr(Path, "write_bytes", forbidden)
 
     assert cc.run_runtime_consistency(repo_root, manifest) == []
-    assert len(loads) == 4
+    assert len(loads) == len(cc._runtime_artifacts(platform))
     assert len(validations) == 1
+    assert len(sensor_validations) == 1
 
 
 def test_missing_artifact_reports_manifest_key_and_path(runtime_factory):
@@ -146,6 +156,156 @@ def test_missing_artifact_reports_manifest_key_and_path(runtime_factory):
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
     assert any("nav2_path" in failure and str(missing) in failure for failure in failures)
+
+
+@pytest.mark.parametrize(
+    "platform,present,absent",
+    [
+        ("sim", "lidar_adapter_path", "vanjee_lidar_path"),
+        ("real", "vanjee_lidar_path", "lidar_adapter_path"),
+    ],
+)
+def test_consistency_requires_only_selected_sensor_artifacts(
+    runtime_factory, platform, present, absent
+):
+    repo_root, manifest = runtime_factory(platform=platform)
+
+    assert present in manifest
+    assert absent not in manifest
+    assert cc.run_runtime_consistency(repo_root, manifest) == []
+
+    missing = manifest[present]
+    missing.unlink()
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        present in failure and str(missing) in failure for failure in failures
+    )
+
+
+def test_sensor_artifact_path_must_stay_in_os_runtime_directory(
+    runtime_factory, tmp_path
+):
+    repo_root, manifest = runtime_factory("sim")
+    foreign = tmp_path / manifest["lidar_adapter_path"].name
+    shutil.copyfile(manifest["lidar_adapter_path"], foreign)
+    manifest["lidar_adapter_path"] = foreign
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "lidar_adapter_path" in failure and "temporary directory" in failure
+        for failure in failures
+    )
+
+
+def test_sensor_artifact_filename_is_fixed(runtime_factory):
+    repo_root, manifest = runtime_factory("real")
+    wrong = manifest["vanjee_lidar_path"].with_name("wrong.generated.yaml")
+    shutil.copyfile(manifest["vanjee_lidar_path"], wrong)
+    manifest["vanjee_lidar_path"] = wrong
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "vanjee_lidar_path" in failure and "unexpected artifact filename" in failure
+        for failure in failures
+    )
+
+
+def test_sensor_artifact_must_share_effective_runtime_directory(runtime_factory):
+    repo_root, manifest = runtime_factory("sim")
+    other_runtime = Path(tempfile.mkdtemp(prefix="system_bringup-runtime-"))
+    try:
+        other_gate = other_runtime / manifest["sensor_gate_path"].name
+        shutil.copyfile(manifest["sensor_gate_path"], other_gate)
+        manifest["sensor_gate_path"] = other_gate
+
+        failures = cc.run_runtime_consistency(repo_root, manifest)
+
+        assert any(
+            "sensor_gate_path" in failure and "same runtime directory" in failure
+            for failure in failures
+        )
+    finally:
+        shutil.rmtree(other_runtime, ignore_errors=True)
+
+
+def test_sensor_report_path_reference_drift_is_reported(runtime_factory):
+    repo_root, manifest = runtime_factory("sim")
+    _mutate_yaml(
+        manifest["effective_profile_path"],
+        ("generated_configs", "lidar_adapter"),
+        "/tmp/not-the-adapter.yaml",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "generated_configs.lidar_adapter" in failure for failure in failures
+    )
+
+
+@pytest.mark.parametrize(
+    "platform,manifest_key,dotted_path,value",
+    [
+        (
+            "sim",
+            "lidar_adapter_path",
+            ("lidar_pointcloud_adapter", "ros__parameters", "output_topic"),
+            "/wrong_points",
+        ),
+        (
+            "real",
+            "vanjee_lidar_path",
+            ("vanjee_lidar", "ros__parameters", "lidar_frame"),
+            "wrong_frame",
+        ),
+        (
+            "real",
+            "vanjee_lidar_path",
+            ("vanjee_lidar", "ros__parameters", "point_cloud_topic"),
+            "/wrong_points",
+        ),
+        (
+            "sim",
+            "sensor_gate_path",
+            (
+                "sensor_contract_gate",
+                "ros__parameters",
+                "expected_points_per_scan",
+            ),
+            1,
+        ),
+        (
+            "real",
+            "sensor_gate_path",
+            ("sensor_contract_gate", "ros__parameters", "expected_imu_hz"),
+            1.0,
+        ),
+        (
+            "sim",
+            "sensor_gate_path",
+            (
+                "sensor_contract_gate",
+                "ros__parameters",
+                "minimum_point_rate_ratio",
+            ),
+            0.0,
+        ),
+    ],
+)
+def test_sensor_generated_config_drift_is_reported(
+    runtime_factory, platform, manifest_key, dotted_path, value
+):
+    repo_root, manifest = runtime_factory(platform)
+    _mutate_yaml(manifest[manifest_key], dotted_path, value)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "generated runtime config mismatch" in failure for failure in failures
+    )
 
 
 def test_foreign_artifact_path_is_rejected(runtime_factory, tmp_path):

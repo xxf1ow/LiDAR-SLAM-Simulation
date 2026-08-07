@@ -49,11 +49,6 @@ SENSOR_OUTPUT_FILENAMES = {
     },
 }
 EFFECTIVE_PROFILE_FILENAME = "effective_profile.generated.yaml"
-# Kept for callers that only need the platform-independent output set.
-OUTPUT_FILENAMES = {
-    **COMMON_OUTPUT_FILENAMES,
-    "effective_profile": "effective_profile.generated.yaml",
-}
 CONTROLLER_TIME_PATHS = (
     ("controller_manager", "ros__parameters", "use_sim_time"),
     ("base_controller", "ros__parameters", "use_sim_time"),

@@ -1323,7 +1323,7 @@ def test_in_memory_validation_failure_creates_no_completion_marker(
     with pytest.raises(ValueError, match="in-memory drift"):
         rcc.compile_runtime_configs(runtime_tree.config, output)
 
-    assert not (output / rcc.OUTPUT_FILENAMES["effective_profile"]).exists()
+    assert not (output / rcc.EFFECTIVE_PROFILE_FILENAME).exists()
     assert not output.exists()
 
 
@@ -1364,7 +1364,7 @@ def test_staging_write_failure_cleans_every_temporary_file(
     with pytest.raises(OSError, match="staging write failed"):
         rcc.compile_runtime_configs(runtime_tree.config, output)
 
-    assert not (output / rcc.OUTPUT_FILENAMES["effective_profile"]).exists()
+    assert not (output / rcc.EFFECTIVE_PROFILE_FILENAME).exists()
     assert _temporary_files(output) == []
     assert list(output.iterdir()) == []
 
@@ -1450,8 +1450,8 @@ def test_mid_replace_failure_does_not_update_existing_completion_marker(
         rcc.compile_runtime_configs(runtime_tree.config, output)
 
     assert replaced == [
-        rcc.OUTPUT_FILENAMES["controllers"],
-        rcc.OUTPUT_FILENAMES["web_ui"],
+        rcc.COMMON_OUTPUT_FILENAMES["controllers"],
+        rcc.COMMON_OUTPUT_FILENAMES["web_ui"],
     ]
     assert marker.read_bytes() == marker_before
     assert _temporary_files(output) == []
@@ -1544,7 +1544,7 @@ def test_runtime_cli_prints_one_absolute_report_path(runtime_tree, tmp_path, cap
     assert result == 0
     assert captured.err == ""
     assert captured.out == (
-        f"{(output / rcc.OUTPUT_FILENAMES['effective_profile']).resolve()}\n"
+        f"{(output / rcc.EFFECTIVE_PROFILE_FILENAME).resolve()}\n"
     )
 
 

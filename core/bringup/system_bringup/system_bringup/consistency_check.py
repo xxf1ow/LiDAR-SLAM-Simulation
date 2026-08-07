@@ -180,12 +180,34 @@ def _yaml(text):
     return yaml.safe_load(text)
 
 
-_RUNTIME_ARTIFACTS = {
+_COMMON_RUNTIME_ARTIFACTS = {
     "controllers_path": "controllers",
     "web_ui_path": "web_ui",
     "nav2_path": "nav2",
-    "effective_profile_path": "effective_profile",
 }
+_SENSOR_RUNTIME_ARTIFACTS = {
+    "sim": {
+        "lidar_adapter_path": "lidar_adapter",
+        "sensor_gate_path": "sensor_gate",
+    },
+    "real": {
+        "vanjee_lidar_path": "vanjee_lidar",
+        "sensor_gate_path": "sensor_gate",
+    },
+}
+
+
+def _runtime_artifacts(platform):
+    sensor = (
+        _SENSOR_RUNTIME_ARTIFACTS.get(platform, {})
+        if isinstance(platform, str)
+        else {}
+    )
+    return {
+        **_COMMON_RUNTIME_ARTIFACTS,
+        **sensor,
+        "effective_profile_path": "effective_profile",
+    }
 _MISSING = object()
 _PATH_ERRORS = (OSError, TypeError, ValueError, RuntimeError)
 
@@ -230,14 +252,23 @@ def _same_path(left, right, left_label, right_label, failures):
     return left_path == right_path
 
 
-def _load_runtime_artifacts(manifest, failures, runtime_compiler):
+def _load_runtime_artifacts(manifest, failures, runtime_compiler, artifacts):
     paths = {}
     loaded = {}
+    try:
+        output_filenames = runtime_compiler._output_filenames(
+            manifest.get("platform")
+        )
+    except (TypeError, ValueError):
+        output_filenames = {
+            **runtime_compiler.COMMON_OUTPUT_FILENAMES,
+            "effective_profile": runtime_compiler.EFFECTIVE_PROFILE_FILENAME,
+        }
     temp_root = _normalize_path(
         tempfile.gettempdir(), "OS temporary directory", failures
     )
 
-    for manifest_key, artifact_name in _RUNTIME_ARTIFACTS.items():
+    for manifest_key, artifact_name in artifacts.items():
         raw_path = manifest.get(manifest_key, _MISSING)
         if raw_path is _MISSING:
             failures.append(f"manifest missing {manifest_key}")
@@ -251,7 +282,7 @@ def _load_runtime_artifacts(manifest, failures, runtime_compiler):
         if path is None:
             continue
         paths[manifest_key] = path
-        if path.name != runtime_compiler.OUTPUT_FILENAMES[artifact_name]:
+        if path.name != output_filenames[artifact_name]:
             failures.append(
                 f"manifest {manifest_key} has unexpected artifact filename: {path}"
             )
@@ -279,7 +310,7 @@ def _load_runtime_artifacts(manifest, failures, runtime_compiler):
                     f"as effective_profile_path: {path.parent} != {reference_dir}"
                 )
 
-    for manifest_key, artifact_name in _RUNTIME_ARTIFACTS.items():
+    for manifest_key, artifact_name in artifacts.items():
         path = paths.get(manifest_key)
         if path is None or not path.is_file():
             continue
@@ -610,7 +641,10 @@ def run_runtime_consistency(repo_root, manifest):
                         f"manifest bringup_config_path is outside repo_root: {source_path}"
                     )
 
-    paths, loaded = _load_runtime_artifacts(manifest, failures, rcc)
+    artifacts = _runtime_artifacts(platform)
+    paths, loaded = _load_runtime_artifacts(
+        manifest, failures, rcc, artifacts
+    )
     report = loaded.get("effective_profile")
     if report is not None:
         if report.get("platform", _MISSING) != platform:
@@ -670,7 +704,7 @@ def run_runtime_consistency(repo_root, manifest):
                     )
 
         generated_refs = report.get("generated_configs")
-        for manifest_key, artifact_name in _RUNTIME_ARTIFACTS.items():
+        for manifest_key, artifact_name in artifacts.items():
             if artifact_name == "effective_profile":
                 continue
             expected_path = paths.get(manifest_key)
@@ -746,13 +780,21 @@ def run_runtime_consistency(repo_root, manifest):
                     )
             _validate_report_metadata(report, expected_weld, rcc, failures)
 
-    if all(name in loaded for name in _RUNTIME_ARTIFACTS.values()):
+    if all(name in loaded for name in artifacts.values()):
         try:
             rcc._validate_generated_configs(
                 loaded["effective_profile"],
                 loaded["controllers"],
                 loaded["web_ui"],
                 loaded["nav2"],
+            )
+            rcc._validate_sensor_generated_configs(
+                platform,
+                loaded["effective_profile"],
+                {
+                    key: loaded[key]
+                    for key in rcc.SENSOR_OUTPUT_FILENAMES[platform]
+                },
             )
         except (KeyError, TypeError, ValueError) as exc:
             failures.append(f"generated runtime config mismatch: {exc}")
