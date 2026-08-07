@@ -229,9 +229,11 @@ def test_consistency_rejects_unselected_sensor_report_reference(
 
 
 def test_sensor_artifact_path_must_stay_in_os_runtime_directory(
-    runtime_factory, tmp_path
+    runtime_factory, tmp_path, monkeypatch
 ):
     repo_root, manifest = runtime_factory("sim")
+    runtime_dir = manifest["effective_profile_path"].parent
+    monkeypatch.setattr(cc.tempfile, "gettempdir", lambda: str(runtime_dir))
     foreign = tmp_path / manifest["lidar_adapter_path"].name
     shutil.copyfile(manifest["lidar_adapter_path"], foreign)
     manifest["lidar_adapter_path"] = foreign
