@@ -222,6 +222,8 @@ def _derive_robot_launch_arguments(effective):
         "imu_pitch": str(imu_mount["pitch"]),
         "imu_yaw": str(imu_mount["yaw"]),
         "lidar_scan_lines": str(lidar["scan_lines"]),
+        "lidar_columns_per_scan": str(lidar["columns_per_scan"]),
+        "lidar_scan_rate_hz": str(lidar["scan_rate_hz"]),
         "lidar_min_range": str(lidar["min_range"]),
         "lidar_max_range": str(lidar["max_range"]),
         "lidar_horizontal_start_angle": str(lidar["horizontal_start_angle"]),

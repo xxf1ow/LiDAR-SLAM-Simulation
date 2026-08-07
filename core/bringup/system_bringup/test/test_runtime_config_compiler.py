@@ -55,6 +55,8 @@ ROBOT_LAUNCH_ARGUMENT_KEYS = {
     "imu_pitch",
     "imu_yaw",
     "lidar_scan_lines",
+    "lidar_columns_per_scan",
+    "lidar_scan_rate_hz",
     "lidar_min_range",
     "lidar_max_range",
     "lidar_horizontal_start_angle",
@@ -810,6 +812,12 @@ def test_robot_launch_arguments_project_independent_effective_mounts_and_sensor_
     assert arguments["imu_x"] == str(mounts["imu"]["x"])
     assert arguments["lidar_scan_lines"] == str(
         effective["profile"]["sensors"]["lidar"]["scan_lines"]
+    )
+    assert arguments["lidar_columns_per_scan"] == str(
+        effective["profile"]["sensors"]["lidar"]["columns_per_scan"]
+    )
+    assert arguments["lidar_scan_rate_hz"] == str(
+        effective["profile"]["sensors"]["lidar"]["scan_rate_hz"]
     )
     assert arguments["lidar_min_range"] == str(
         effective["profile"]["sensors"]["lidar"]["min_range"]
