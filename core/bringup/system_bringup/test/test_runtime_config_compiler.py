@@ -1,8 +1,10 @@
 import shutil
 from copy import deepcopy
 import json
-from math import cos, sin, sqrt
+from math import cos, degrees, sin, sqrt
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 
 import pytest
@@ -1194,6 +1196,103 @@ def test_runtime_compile_writes_only_selected_sensor_artifacts(
     }
 
 
+def test_sim_and_real_sensor_generation_stays_platform_isolated(
+    runtime_tree, tmp_path
+):
+    core_dir = PACKAGE_ROOT.parents[1]
+    protected = {
+        *(TEMPLATE_DIR / filename for filename in rcc.TEMPLATE_FILENAMES.values()),
+        *(
+            TEMPLATE_DIR / filename
+            for filenames in rcc.SENSOR_TEMPLATE_FILENAMES.values()
+            for filename in filenames.values()
+        ),
+        core_dir
+        / "robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/config/vanjee_722.yaml",
+        core_dir / "simulation/robot_gz_bringup/config/bridge.yaml",
+        PACKAGE_ROOT / "launch/bringup.launch.py",
+    }
+    before = {path: path.read_bytes() for path in protected}
+
+    sim_manifest = rcc.compile_runtime_configs(
+        runtime_tree.config, tmp_path / "sim"
+    )
+    runtime_tree.set_bringup_value("platform", "real")
+    real_manifest = rcc.compile_runtime_configs(
+        runtime_tree.config, tmp_path / "real"
+    )
+
+    sim_outputs = {
+        path.name: _load_yaml(path) for path in (tmp_path / "sim").iterdir()
+    }
+    real_outputs = {
+        path.name: _load_yaml(path) for path in (tmp_path / "real").iterdir()
+    }
+    sim_report = sim_outputs[rcc.EFFECTIVE_PROFILE_FILENAME]
+    real_report = real_outputs[rcc.EFFECTIVE_PROFILE_FILENAME]
+    assert rcc.SENSOR_OUTPUT_FILENAMES["real"]["vanjee_lidar"] not in sim_outputs
+    assert "vanjee_lidar_path" not in sim_manifest
+    assert "vanjee_lidar" not in sim_report["generated_configs"]
+    assert rcc.SENSOR_OUTPUT_FILENAMES["sim"]["lidar_adapter"] not in real_outputs
+    assert "lidar_adapter_path" not in real_manifest
+    assert "lidar_adapter" not in real_report["generated_configs"]
+
+    def scalar_values(value):
+        if isinstance(value, dict):
+            for child in value.values():
+                yield from scalar_values(child)
+        elif isinstance(value, list):
+            for child in value:
+                yield from scalar_values(child)
+        else:
+            yield value
+
+    real_hardware = real_report["profile"]["hardware"]["lidar"]
+    sim_values = {
+        value for data in sim_outputs.values() for value in scalar_values(data)
+    }
+    assert real_hardware["host_address"] not in sim_values
+    assert real_hardware["device_address"] not in sim_values
+
+    real_lidar = real_report["profile"]["sensors"]["lidar"]
+    vanjee = real_outputs[
+        rcc.SENSOR_OUTPUT_FILENAMES["real"]["vanjee_lidar"]
+    ]["vanjee_lidar"]["ros__parameters"]
+    assert vanjee["host_address"] == real_hardware["host_address"]
+    assert vanjee["lidar_address"] == real_hardware["device_address"]
+    assert vanjee["host_msop_port"] == real_hardware["host_msop_port"]
+    assert vanjee["lidar_msop_port"] == real_hardware["device_msop_port"]
+    assert vanjee["min_distance"] == real_lidar["min_range"]
+    assert vanjee["max_distance"] == real_lidar["max_range"]
+    assert vanjee["start_angle"] == degrees(
+        real_lidar["horizontal_start_angle"]
+    )
+    assert vanjee["end_angle"] == degrees(real_lidar["horizontal_end_angle"])
+
+    for manifest, expected_points in (
+        (sim_manifest, 16 * 1800),
+        (real_manifest, 32 * 1200),
+    ):
+        gate = _load_yaml(manifest["sensor_gate_path"])[
+            "sensor_contract_gate"
+        ]["ros__parameters"]
+        assert gate["expected_points_per_scan"] == expected_points
+        assert "expected_height" not in gate
+        assert "expected_width" not in gate
+
+    adapter = sim_outputs[
+        rcc.SENSOR_OUTPUT_FILENAMES["sim"]["lidar_adapter"]
+    ]["lidar_pointcloud_adapter"]["ros__parameters"]
+    assert set(adapter) == {
+        "use_sim_time",
+        "input_topic",
+        "output_topic",
+        "output_frame",
+        "scan_period",
+    }
+    assert {path: path.read_bytes() for path in protected} == before
+
+
 def test_compile_runtime_configs_uses_integrated_renderer(
     runtime_tree, tmp_path, monkeypatch
 ):
@@ -1545,6 +1644,35 @@ def test_runtime_cli_prints_one_absolute_report_path(runtime_tree, tmp_path, cap
     assert captured.err == ""
     assert captured.out == (
         f"{(output / rcc.EFFECTIVE_PROFILE_FILENAME).resolve()}\n"
+    )
+
+
+def test_runtime_compiler_module_entrypoint_generates_configs(
+    runtime_tree, tmp_path
+):
+    output = tmp_path / "module-output"
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "system_bringup.runtime_config_compiler",
+            "--bringup-config",
+            str(runtime_tree.config.resolve()),
+            "--output-dir",
+            str(output.resolve()),
+        ],
+        cwd=PACKAGE_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert result.stderr == ""
+    assert result.stdout == f"{(output / rcc.EFFECTIVE_PROFILE_FILENAME).resolve()}\n"
+    assert {path.name for path in output.iterdir()} == set(
+        rcc._output_filenames("sim").values()
     )
 
 

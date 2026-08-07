@@ -779,3 +779,7 @@ def main(argv=None):
         parser.exit(2, f"compile_runtime_configs: {exc}\n")
     print(manifest["effective_profile_path"].resolve())
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
