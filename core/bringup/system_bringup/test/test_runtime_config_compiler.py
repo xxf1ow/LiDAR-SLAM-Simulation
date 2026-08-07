@@ -34,6 +34,33 @@ REAL_FOOTPRINT = [
     [-0.48, -0.305],
     [-0.48, 0.305],
 ]
+ROBOT_LAUNCH_ARGUMENT_KEYS = {
+    "base_length",
+    "base_width",
+    "base_height",
+    "base_link_height",
+    "wheel_radius",
+    "wheel_width",
+    "wheel_separation",
+    "lidar_x",
+    "lidar_y",
+    "lidar_z",
+    "lidar_roll",
+    "lidar_pitch",
+    "lidar_yaw",
+    "imu_x",
+    "imu_y",
+    "imu_z",
+    "imu_roll",
+    "imu_pitch",
+    "imu_yaw",
+    "lidar_scan_lines",
+    "lidar_min_range",
+    "lidar_max_range",
+    "lidar_horizontal_start_angle",
+    "lidar_horizontal_end_angle",
+    "imu_rate_hz",
+}
 
 
 def _load_yaml(path):
@@ -721,29 +748,85 @@ def test_public_runtime_compile_rejects_source_template_target_drift(
 
 
 @pytest.mark.parametrize("platform", ["sim", "real"])
-def test_robot_launch_arguments_map_effective_geometry_exactly(
-    runtime_tree, platform
+def test_robot_launch_arguments_project_independent_effective_mounts_and_sensor_facts(
+    runtime_tree, tmp_path, platform
 ):
     runtime_tree.set_bringup_value("platform", platform)
-    inputs = rcc._load_runtime_inputs(runtime_tree.config)
-    geometry = inputs["effective"]["derived"]["geometry"]
-    lidar_from_base_link = geometry["mounts_relative_to_base_link"]["lidar"]
+    for sensor, values in {
+        "lidar": {
+            "x": 0.31,
+            "y": -0.21,
+            "z": 0.91,
+            "roll": 0.17,
+            "pitch": -0.23,
+            "yaw": 0.39,
+        },
+        "imu": {
+            "x": -0.13,
+            "y": 0.27,
+            "z": 0.64,
+            "roll": -0.11,
+            "pitch": 0.29,
+            "yaw": -0.37,
+        },
+    }.items():
+        for key, value in values.items():
+            runtime_tree.set_profile_value(
+                platform, ("robot", "mounts", sensor, key), value
+            )
 
-    assert rcc._derive_robot_launch_arguments(inputs["effective"]) == {
+    manifest = rcc.compile_runtime_configs(runtime_tree.config, tmp_path / platform)
+    effective = _load_yaml(manifest["effective_profile_path"])
+    arguments = manifest["robot_launch_arguments"]
+    geometry = effective["derived"]["geometry"]
+    mounts = geometry["mounts_relative_to_base_link"]
+
+    assert set(arguments) == ROBOT_LAUNCH_ARGUMENT_KEYS
+    assert "sensor_x" not in arguments
+    assert {
+        "base_length": arguments["base_length"],
+        "base_width": arguments["base_width"],
+        "base_height": arguments["base_height"],
+        "base_link_height": arguments["base_link_height"],
+    } == {
         "base_length": str(geometry["body"]["length"]),
         "base_width": str(geometry["body"]["width"]),
         "base_height": str(geometry["body"]["height"]),
         "base_link_height": str(geometry["body"]["base_link_height"]),
+    }
+    assert {
+        "wheel_radius": arguments["wheel_radius"],
+        "wheel_width": arguments["wheel_width"],
+        "wheel_separation": arguments["wheel_separation"],
+    } == {
         "wheel_radius": str(geometry["drive"]["wheel_radius"]),
         "wheel_width": str(geometry["drive"]["wheel_width"]),
         "wheel_separation": str(geometry["drive"]["wheel_separation"]),
-        "sensor_x": str(lidar_from_base_link["x"]),
-        "sensor_y": str(lidar_from_base_link["y"]),
-        "sensor_z": str(lidar_from_base_link["z"]),
-        "sensor_roll": str(lidar_from_base_link["roll"]),
-        "sensor_pitch": str(lidar_from_base_link["pitch"]),
-        "sensor_yaw": str(lidar_from_base_link["yaw"]),
     }
+    for sensor in ("lidar", "imu"):
+        for axis in ("x", "y", "z", "roll", "pitch", "yaw"):
+            assert arguments[f"{sensor}_{axis}"] == str(mounts[sensor][axis])
+    assert arguments["lidar_x"] == str(mounts["lidar"]["x"])
+    assert arguments["imu_x"] == str(mounts["imu"]["x"])
+    assert arguments["lidar_scan_lines"] == str(
+        effective["profile"]["sensors"]["lidar"]["scan_lines"]
+    )
+    assert arguments["lidar_min_range"] == str(
+        effective["profile"]["sensors"]["lidar"]["min_range"]
+    )
+    assert arguments["lidar_max_range"] == str(
+        effective["profile"]["sensors"]["lidar"]["max_range"]
+    )
+    assert arguments["lidar_horizontal_start_angle"] == str(
+        effective["profile"]["sensors"]["lidar"]["horizontal_start_angle"]
+    )
+    assert arguments["lidar_horizontal_end_angle"] == str(
+        effective["profile"]["sensors"]["lidar"]["horizontal_end_angle"]
+    )
+    assert arguments["imu_rate_hz"] == str(
+        effective["profile"]["sensors"]["imu"]["rate_hz"]
+    )
+
     assert "wheel_width" not in _rendered(runtime_tree, platform)["controllers"][
         "base_controller"
     ]["ros__parameters"]
@@ -1228,21 +1311,7 @@ def test_runtime_compile_writes_only_selected_sensor_artifacts(
         if key != "effective_profile"
     }
     assert report["generated_configs"] == expected_refs
-    assert set(manifest["robot_launch_arguments"]) == {
-        "base_length",
-        "base_width",
-        "base_height",
-        "base_link_height",
-        "wheel_radius",
-        "wheel_width",
-        "wheel_separation",
-        "sensor_x",
-        "sensor_y",
-        "sensor_z",
-        "sensor_roll",
-        "sensor_pitch",
-        "sensor_yaw",
-    }
+    assert set(manifest["robot_launch_arguments"]) == ROBOT_LAUNCH_ARGUMENT_KEYS
 
 
 def test_sim_and_real_sensor_generation_stays_platform_isolated(

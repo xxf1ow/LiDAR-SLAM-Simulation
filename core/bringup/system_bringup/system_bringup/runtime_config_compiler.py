@@ -196,7 +196,11 @@ def _derive_robot_launch_arguments(effective):
     geometry = effective["derived"]["geometry"]
     body = geometry["body"]
     drive = geometry["drive"]
-    lidar = geometry["mounts_relative_to_base_link"]["lidar"]
+    mounts = geometry["mounts_relative_to_base_link"]
+    lidar_mount = mounts["lidar"]
+    imu_mount = mounts["imu"]
+    lidar = effective["profile"]["sensors"]["lidar"]
+    imu = effective["profile"]["sensors"]["imu"]
     return {
         "base_length": str(body["length"]),
         "base_width": str(body["width"]),
@@ -205,12 +209,24 @@ def _derive_robot_launch_arguments(effective):
         "wheel_radius": str(drive["wheel_radius"]),
         "wheel_width": str(drive["wheel_width"]),
         "wheel_separation": str(drive["wheel_separation"]),
-        "sensor_x": str(lidar["x"]),
-        "sensor_y": str(lidar["y"]),
-        "sensor_z": str(lidar["z"]),
-        "sensor_roll": str(lidar["roll"]),
-        "sensor_pitch": str(lidar["pitch"]),
-        "sensor_yaw": str(lidar["yaw"]),
+        "lidar_x": str(lidar_mount["x"]),
+        "lidar_y": str(lidar_mount["y"]),
+        "lidar_z": str(lidar_mount["z"]),
+        "lidar_roll": str(lidar_mount["roll"]),
+        "lidar_pitch": str(lidar_mount["pitch"]),
+        "lidar_yaw": str(lidar_mount["yaw"]),
+        "imu_x": str(imu_mount["x"]),
+        "imu_y": str(imu_mount["y"]),
+        "imu_z": str(imu_mount["z"]),
+        "imu_roll": str(imu_mount["roll"]),
+        "imu_pitch": str(imu_mount["pitch"]),
+        "imu_yaw": str(imu_mount["yaw"]),
+        "lidar_scan_lines": str(lidar["scan_lines"]),
+        "lidar_min_range": str(lidar["min_range"]),
+        "lidar_max_range": str(lidar["max_range"]),
+        "lidar_horizontal_start_angle": str(lidar["horizontal_start_angle"]),
+        "lidar_horizontal_end_angle": str(lidar["horizontal_end_angle"]),
+        "imu_rate_hz": str(imu["rate_hz"]),
     }
 
 

@@ -477,13 +477,13 @@ def test_generated_controller_web_ui_nav2_and_footprint_drift_is_reported(
     assert any(expected in failure for failure in failures)
 
 
-def test_manifest_geometry_drift_is_reported(runtime_factory):
+def test_manifest_robot_launch_arguments_drift_is_reported(runtime_factory):
     repo_root, manifest = runtime_factory()
-    manifest["robot_launch_arguments"]["base_length"] = "99.0"
+    manifest["robot_launch_arguments"]["lidar_scan_lines"] = "99"
 
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
-    assert any("robot_launch_arguments.base_length" in failure for failure in failures)
+    assert any("robot_launch_arguments.lidar_scan_lines" in failure for failure in failures)
 
 
 def test_manifest_weld_drift_is_reported(runtime_factory):
