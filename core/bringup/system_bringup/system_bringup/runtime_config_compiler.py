@@ -1,7 +1,7 @@
 import argparse
 from copy import deepcopy
 import json
-from math import cos, isfinite, sin, sqrt
+from math import cos, degrees, isfinite, sin, sqrt
 import os
 from pathlib import Path
 import tempfile
@@ -22,6 +22,16 @@ TEMPLATE_FILENAMES = {
     "controllers": "robot_controllers.yaml",
     "web_ui": "robot_web_ui.yaml",
     "nav2": "nav2.yaml",
+}
+SENSOR_TEMPLATE_FILENAMES = {
+    "sim": {
+        "lidar_adapter": "lidar_adapter.yaml",
+        "sensor_gate": "sensor_gate.yaml",
+    },
+    "real": {
+        "vanjee_lidar": "vanjee_lidar.yaml",
+        "sensor_gate": "sensor_gate.yaml",
+    },
 }
 OUTPUT_FILENAMES = {
     "controllers": "robot_controllers.generated.yaml",
@@ -92,6 +102,10 @@ def _load_runtime_inputs(bringup_config_path):
         name: _load_template(source.parent / "templates" / filename, name)[1]
         for name, filename in TEMPLATE_FILENAMES.items()
     }
+    sensor_templates = {
+        name: _load_template(source.parent / "templates" / filename, name)[1]
+        for name, filename in SENSOR_TEMPLATE_FILENAMES[platform].items()
+    }
     return {
         "source": source,
         "config": config,
@@ -102,6 +116,7 @@ def _load_runtime_inputs(bringup_config_path):
         "selected_profile": selected_profile,
         "effective": effective,
         "templates": templates,
+        "sensor_templates": sensor_templates,
     }
 
 
@@ -347,6 +362,195 @@ def _render_nav2(template, effective):
             "nav2", nav2, path, effective["derived"]["use_sim_time"], bool
         )
     return nav2
+
+
+def _render_lidar_adapter(template, effective):
+    adapter = deepcopy(template)
+    for key, value, expected_type in (
+        ("use_sim_time", effective["derived"]["use_sim_time"], bool),
+        (
+            "scan_period",
+            effective["derived"]["sensor_contract"]["scan_period"],
+            float,
+        ),
+    ):
+        _set_template_existing(
+            "lidar_adapter",
+            adapter,
+            ("lidar_pointcloud_adapter", "ros__parameters", key),
+            value,
+            expected_type,
+        )
+    return adapter
+
+
+def _render_vanjee_lidar(template, effective):
+    vanjee = deepcopy(template)
+    hardware = effective["profile"]["hardware"]["lidar"]
+    lidar = effective["profile"]["sensors"]["lidar"]
+    values = (
+        ("lidar_type", hardware["model"], str),
+        ("host_address", hardware["host_address"], str),
+        ("lidar_address", hardware["device_address"], str),
+        ("host_msop_port", hardware["host_msop_port"], int),
+        ("lidar_msop_port", hardware["device_msop_port"], int),
+        ("start_angle", degrees(lidar["horizontal_start_angle"]), float),
+        ("end_angle", degrees(lidar["horizontal_end_angle"]), float),
+        ("min_distance", lidar["min_range"], float),
+        ("max_distance", lidar["max_range"], float),
+    )
+    for key, value, expected_type in values:
+        _set_template_existing(
+            "vanjee_lidar",
+            vanjee,
+            ("vanjee_lidar", "ros__parameters", key),
+            value,
+            expected_type,
+        )
+    return vanjee
+
+
+def _render_sensor_gate(template, effective):
+    gate = deepcopy(template)
+    lidar = effective["profile"]["sensors"]["lidar"]
+    imu = effective["profile"]["sensors"]["imu"]
+    values = (
+        ("use_sim_time", effective["derived"]["use_sim_time"], bool),
+        (
+            "expected_points_per_scan",
+            effective["derived"]["sensor_contract"]["points_per_scan"],
+            int,
+        ),
+        ("expected_point_hz", lidar["scan_rate_hz"], float),
+        ("expected_imu_hz", imu["rate_hz"], float),
+    )
+    for key, value, expected_type in values:
+        _set_template_existing(
+            "sensor_gate",
+            gate,
+            ("sensor_contract_gate", "ros__parameters", key),
+            value,
+            expected_type,
+        )
+    return gate
+
+
+def _validate_sensor_generated_configs(platform, effective, generated):
+    expected_keys = set(SENSOR_TEMPLATE_FILENAMES[platform])
+    if set(generated) != expected_keys:
+        raise ValueError(
+            f"generated sensor configs mismatch: expected {sorted(expected_keys)}"
+        )
+
+    lidar = effective["profile"]["sensors"]["lidar"]
+    if platform == "sim":
+        adapter = generated["lidar_adapter"]
+        adapter_path = ("lidar_pointcloud_adapter", "ros__parameters")
+        expected_adapter = {
+            "use_sim_time": effective["derived"]["use_sim_time"],
+            "input_topic": "/lidar/points",
+            "output_topic": "/points_raw",
+            "output_frame": "velodyne",
+            "scan_period": effective["derived"]["sensor_contract"][
+                "scan_period"
+            ],
+        }
+        for key, expected in expected_adapter.items():
+            path = adapter_path + (key,)
+            if _get_existing(adapter, path) != expected:
+                raise ValueError(
+                    f"generated lidar_adapter mismatch: {'.'.join(path)}"
+                )
+    else:
+        hardware = effective["profile"]["hardware"]["lidar"]
+        vanjee = generated["vanjee_lidar"]
+        vanjee_path = ("vanjee_lidar", "ros__parameters")
+        expected_vanjee = {
+            "lidar_type": hardware["model"],
+            "host_address": hardware["host_address"],
+            "lidar_address": hardware["device_address"],
+            "host_msop_port": hardware["host_msop_port"],
+            "lidar_msop_port": hardware["device_msop_port"],
+            "start_angle": degrees(lidar["horizontal_start_angle"]),
+            "end_angle": degrees(lidar["horizontal_end_angle"]),
+            "min_distance": lidar["min_range"],
+            "max_distance": lidar["max_range"],
+            "lidar_frame": "velodyne",
+            "imu_frame": "imu_link",
+            "point_cloud_topic": "/points_raw",
+            "imu_topic": "/imu/data",
+        }
+        for key, expected in expected_vanjee.items():
+            path = vanjee_path + (key,)
+            if _get_existing(vanjee, path) != expected:
+                raise ValueError(
+                    f"generated vanjee_lidar mismatch: {'.'.join(path)}"
+                )
+
+    gate = generated["sensor_gate"]
+    gate_path = ("sensor_contract_gate", "ros__parameters")
+    expected_gate = {
+        "use_sim_time": effective["derived"]["use_sim_time"],
+        "expected_points_per_scan": effective["derived"]["sensor_contract"][
+            "points_per_scan"
+        ],
+        "expected_point_hz": lidar["scan_rate_hz"],
+        "expected_imu_hz": effective["profile"]["sensors"]["imu"]["rate_hz"],
+    }
+    for key, expected in expected_gate.items():
+        path = gate_path + (key,)
+        if _get_existing(gate, path) != expected:
+            raise ValueError(f"generated sensor_gate mismatch: {'.'.join(path)}")
+
+    for key in ("minimum_point_rate_ratio", "minimum_imu_rate_ratio"):
+        path = gate_path + (key,)
+        value = _get_existing(gate, path)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            or not 0 < value <= 1
+        ):
+            raise ValueError(
+                f"generated sensor_gate ratio must be in (0, 1]: {'.'.join(path)}"
+            )
+    for key in ("max_stamp_age", "rate_window", "stable_duration", "timeout"):
+        path = gate_path + (key,)
+        value = _get_existing(gate, path)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(
+                f"generated sensor_gate value must be > 0: {'.'.join(path)}"
+            )
+
+
+def _render_sensor_configs(inputs):
+    effective = inputs["effective"]
+    templates = inputs["sensor_templates"]
+    if inputs["platform"] == "sim":
+        generated = {
+            "lidar_adapter": _render_lidar_adapter(
+                templates["lidar_adapter"], effective
+            ),
+            "sensor_gate": _render_sensor_gate(
+                templates["sensor_gate"], effective
+            ),
+        }
+    else:
+        generated = {
+            "vanjee_lidar": _render_vanjee_lidar(
+                templates["vanjee_lidar"], effective
+            ),
+            "sensor_gate": _render_sensor_gate(
+                templates["sensor_gate"], effective
+            ),
+        }
+    _validate_sensor_generated_configs(inputs["platform"], effective, generated)
+    return generated
 
 
 def _validate_generated_configs(effective, controllers, web_ui, nav2):

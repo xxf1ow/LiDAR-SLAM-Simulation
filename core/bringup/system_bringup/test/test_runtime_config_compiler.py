@@ -15,6 +15,11 @@ from system_bringup import runtime_config_compiler as rcc
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = PACKAGE_ROOT / "config"
 TEMPLATE_DIR = CONFIG_DIR / "templates"
+SENSOR_TEMPLATE_NAMES = {
+    "lidar_adapter": "lidar_adapter.yaml",
+    "vanjee_lidar": "vanjee_lidar.yaml",
+    "sensor_gate": "sensor_gate.yaml",
+}
 SIM_FOOTPRINT = [
     [0.375, 0.275],
     [0.375, -0.275],
@@ -275,6 +280,197 @@ def test_nav2_template_preserves_complete_current_sim_baseline():
         "behavior_server",
         "bt_navigator",
     }
+
+
+def test_sensor_templates_are_complete_native_parameter_files():
+    adapter = _load_yaml(
+        TEMPLATE_DIR / SENSOR_TEMPLATE_NAMES["lidar_adapter"]
+    )
+    assert adapter["lidar_pointcloud_adapter"]["ros__parameters"] == {
+        "use_sim_time": True,
+        "input_topic": "/lidar/points",
+        "output_topic": "/points_raw",
+        "output_frame": "velodyne",
+        "scan_period": 0.1,
+    }
+
+    vanjee = _load_yaml(TEMPLATE_DIR / SENSOR_TEMPLATE_NAMES["vanjee_lidar"])
+    vanjee_params = vanjee["vanjee_lidar"]["ros__parameters"]
+    assert vanjee_params["point_cloud_topic"] == "/points_raw"
+    assert vanjee_params["imu_topic"] == "/imu/data"
+
+    gate = _load_yaml(TEMPLATE_DIR / SENSOR_TEMPLATE_NAMES["sensor_gate"])
+    gate_params = gate["sensor_contract_gate"]["ros__parameters"]
+    assert gate_params["minimum_point_rate_ratio"] == 0.8
+    assert gate_params["minimum_imu_rate_ratio"] == 0.75
+    assert gate_params["max_stamp_age"] == 0.5
+    assert gate_params["rate_window"] == 2.0
+    assert gate_params["stable_duration"] == 2.0
+    assert gate_params["timeout"] == 300.0
+
+
+@pytest.mark.parametrize(
+    "platform,expected_keys",
+    [
+        ("sim", {"lidar_adapter", "sensor_gate"}),
+        ("real", {"vanjee_lidar", "sensor_gate"}),
+    ],
+)
+def test_sensor_renderer_returns_only_selected_platform_configs(
+    runtime_tree, platform, expected_keys
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+
+    generated = rcc._render_sensor_configs(inputs)
+
+    assert set(generated) == expected_keys
+    assert set(inputs["sensor_templates"]) == expected_keys
+
+
+def test_sim_sensor_renderer_maps_only_scan_period_clock_and_fixed_interface(
+    runtime_tree,
+):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+
+    generated = rcc._render_sensor_configs(inputs)
+
+    params = generated["lidar_adapter"]["lidar_pointcloud_adapter"][
+        "ros__parameters"
+    ]
+    assert params == {
+        "use_sim_time": True,
+        "input_topic": "/lidar/points",
+        "output_topic": "/points_raw",
+        "output_frame": "velodyne",
+        "scan_period": 0.1,
+    }
+
+
+def test_real_sensor_renderer_maps_vanjee_profile_values(runtime_tree):
+    runtime_tree.set_bringup_value("platform", "real")
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+
+    generated = rcc._render_sensor_configs(inputs)
+
+    params = generated["vanjee_lidar"]["vanjee_lidar"]["ros__parameters"]
+    assert params["lidar_type"] == "vanjee_722"
+    assert params["host_address"] == "192.168.2.88"
+    assert params["lidar_address"] == "192.168.2.86"
+    assert params["host_msop_port"] == 3001
+    assert params["lidar_msop_port"] == 3333
+    assert params["start_angle"] == pytest.approx(0.0)
+    assert params["end_angle"] == pytest.approx(360.0)
+    assert params["min_distance"] == 0.05
+    assert params["max_distance"] == 70.0
+    assert params["lidar_frame"] == "velodyne"
+    assert params["imu_frame"] == "imu_link"
+    assert params["point_cloud_topic"] == "/points_raw"
+    assert params["imu_topic"] == "/imu/data"
+
+
+@pytest.mark.parametrize(
+    "platform,expected_points,expected_clock",
+    [("sim", 28800, True), ("real", 38400, False)],
+)
+def test_sensor_gate_renderer_maps_profile_facts_and_preserves_thresholds(
+    runtime_tree, platform, expected_points, expected_clock
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+
+    generated = rcc._render_sensor_configs(inputs)
+
+    params = generated["sensor_gate"]["sensor_contract_gate"][
+        "ros__parameters"
+    ]
+    assert params == {
+        "use_sim_time": expected_clock,
+        "expected_points_per_scan": expected_points,
+        "expected_point_hz": 10.0,
+        "expected_imu_hz": 200.0,
+        "minimum_point_rate_ratio": 0.8,
+        "minimum_imu_rate_ratio": 0.75,
+        "max_stamp_age": 0.5,
+        "rate_window": 2.0,
+        "stable_duration": 2.0,
+        "timeout": 300.0,
+    }
+
+
+@pytest.mark.parametrize(
+    "platform,config_name,path,value",
+    [
+        (
+            "sim",
+            "lidar_adapter",
+            ("lidar_pointcloud_adapter", "ros__parameters", "output_topic"),
+            "/wrong_points",
+        ),
+        (
+            "real",
+            "vanjee_lidar",
+            ("vanjee_lidar", "ros__parameters", "lidar_frame"),
+            "wrong_lidar",
+        ),
+        (
+            "real",
+            "vanjee_lidar",
+            ("vanjee_lidar", "ros__parameters", "imu_topic"),
+            "/wrong_imu",
+        ),
+        (
+            "sim",
+            "sensor_gate",
+            ("sensor_contract_gate", "ros__parameters", "expected_points_per_scan"),
+            1,
+        ),
+        (
+            "sim",
+            "sensor_gate",
+            ("sensor_contract_gate", "ros__parameters", "minimum_point_rate_ratio"),
+            0.0,
+        ),
+        (
+            "real",
+            "sensor_gate",
+            ("sensor_contract_gate", "ros__parameters", "minimum_imu_rate_ratio"),
+            1.1,
+        ),
+        (
+            "real",
+            "sensor_gate",
+            ("sensor_contract_gate", "ros__parameters", "rate_window"),
+            0.0,
+        ),
+    ],
+)
+def test_sensor_generated_validator_rejects_contract_drift(
+    runtime_tree, platform, config_name, path, value
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    generated = rcc._render_sensor_configs(inputs)
+    node = generated[config_name]
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+
+    with pytest.raises(ValueError, match="generated"):
+        rcc._validate_sensor_generated_configs(
+            platform,
+            inputs["effective"],
+            generated,
+        )
+
+
+def test_sensor_renderer_does_not_mutate_loaded_templates(runtime_tree):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    original = deepcopy(inputs["sensor_templates"])
+
+    rcc._render_sensor_configs(inputs)
+
+    assert inputs["sensor_templates"] == original
 
 
 def _rendered(runtime_tree, platform, mode="navigation"):
