@@ -16,9 +16,10 @@ FAST-LIO 源码 **clone 到本模块目录 `core/localization/FAST_LIO`**(被 `.
 
 - `fast-lio2.patch`:新增 `config/gazebo_velodyne.yaml` 与 `config/vanjee_722.yaml`，
   并将 FAST-LIO 的 IMU 订阅改为 `rclcpp::SensorDataQoS()`，以兼容 Vanjee
-  `/imu/data` 的 BEST_EFFORT 发布端；点云订阅不变。前者使用 `points_raw` / `/imu_plugin/out`、velodyne
-  `lidar_type:2`、`scan_line:16`、blind 1.0，且因**仿真模型**的 velodyne 与 imu_link
-  frame 共位而使用零外参 `extrinsic_T:[0,0,0]`。后者使用真机 `/points_raw` /
+  `/imu/data` 的 BEST_EFFORT 发布端；点云订阅不变。前者使用 `/points_raw` / `/imu/data`、
+  `lidar_type:2`、`scan_line:16`、blind 1.0。其零外参 `extrinsic_T:[0,0,0]` 是第 5 节前的
+  compatibility baseline，不由 Profile 中独立的 LiDAR/IMU mount 或 URDF TF 推导；4B 只统一
+  topic，不迁移 FAST-LIO/LIO-SAM 算法外参。后者使用真机 `/points_raw` /
   `/imu/data`、`scan_line:32`、blind 0.3；其单位平移/旋转外参仅是供静态集成使用的
   临时初值，不能推断物理共位。真实 LiDAR/IMU/车体六自由度外参尚未测量，待动态标定。
 
@@ -77,7 +78,8 @@ timeout 10 ros2 topic hz /base_controller/odom
 timeout 5 ros2 run tf2_ros tf2_echo map base_footprint
 ```
 
-静态通过条件是 Vanjee gate → FAST-LIO gate → GICP/base-odom gate → Nav2 的启动顺序，
+静态通过条件是 shared `sensor_contract_gate` → FAST-LIO gate → GICP/base-odom gate → Nav2
+的启动顺序，
 四个话题存在，且 `map → camera_init → body → base_footprint → base_link → velodyne/imu_link`
 连通、每条 TF 边只有一个发布者且没有额外 `base_footprint → velodyne`。真机手动启动
 FAST-LIO/GICP 已通过运行验收：`/Odometry`、`/cloud_registered` 均为 10 Hz，配准点云与
@@ -183,8 +185,9 @@ ros2 launch gicp_localization localization.launch.py
   `config_file:=gazebo_velodyne.yaml` 传对,且构建机重新 `git apply` + `colcon build fast_lio`。
 - 编译报 `livox_ros_driver2` 类型缺失 → 桩包未建:`--packages-up-to fast_lio` 会先建 `livox_ros_driver2`,
   确认它在 `core/localization/` 下且被 colcon 发现。
-- `/Odometry` 不发 / 节点静默 → 查 `points_raw`(经 lidar_pointcloud_adapter 补 ring/time)与
-  `/imu_plugin/out` 是否在发(`ros2 topic hz`),use_sim_time 是否 true(否则等不到 /clock)。
+- `/Odometry` 不发 / 节点静默 → 查 `/points_raw`（经 lidar_pointcloud_adapter 补
+  ring/time）与 `/imu/data` 是否在发（`ros2 topic hz`），use_sim_time 是否 true（否则等不到
+  `/clock`）。
 - 旋转拖影/发散 → FAST-LIO 对 Gz 快照云按 adapter 合成 time 去畸变所致;治本=让 lidar_pointcloud_adapter
   发常量 time(快照云无帧内畸变,令去畸变成恒等),而非改 FAST-LIO。
 - 车不动 → 见 mapping/README 同条(teleop 终端焦点 / 默认 stamped+sim_time)。

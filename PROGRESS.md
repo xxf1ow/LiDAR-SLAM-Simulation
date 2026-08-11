@@ -380,13 +380,45 @@ navigation/mapping 动态冒烟通过；real generated 配置、fake/mock hardwa
 用户在 Ubuntu/Humble 完成全工作区 `colcon build` 与 `colcon test`，均全部通过；无人看护
 real 动态运动仍不属于本节。第 3 节至此结束。
 
-### [ ] 4. 雷达、IMU 与传感器契约
+### [x] 4. 雷达、IMU 与传感器契约
 
 目的：统一雷达型号、线数、水平分辨率、频率、量程、视场角、时间语义和安装位姿；
 固定 topic/frame 契约由中央 templates 保持并由一致性检查验证。
 
 完成条件：驱动、仿真适配器、TF 和 gate 使用同一平台事实；厂商标定文件继续作为
 设备数据管理，不被模板生成。
+
+#### [x] 4A. 传感器 runtime 配置生成
+
+4A 在 `785aeb7..598dfc9` 完成：sim/real 从同一 Profile pair 生成当前平台所需的完整
+adapter 或 Vanjee YAML、共享 sensor gate YAML、既有 controller/Web UI/Nav2 YAML、
+effective report 和进程内 manifest。生成、reload、schema/cross-validation、事务替换及
+源码不回写均已验收；Ubuntu/Humble 全工作区为 `706 tests, 0 errors, 0 failures, 0 skipped`，
+其中 `system_bringup` 为 `515 passed`。
+
+#### [x] 4B. 正式消费与 shared sensor contract gate
+
+4B 提交范围为 `598dfc9..d6dc1a4`，最终 HEAD `d6dc1a4`。正式 sim adapter、real Vanjee
+和两平台共享的 `sensor_contract_gate` 各只加载 manifest 指定的一份完整 generated YAML；
+主动 topic 统一为 `/points_raw` 与 `/imu/data`。同一 `robot_launch_arguments` mapping 投影
+LiDAR/IMU 两组独立 mount 和 Gazebo sensor facts，URDF 分别发布两条固定 TF；gate 使用
+SensorData QoS 与唯一 `node.get_clock()`，`/clock` 冻结时预期保持等待。FAST-LIO/LIO-SAM
+仅同步 sim IMU topic，算法参数、算法外参和 3A compatibility weld 仍留给第 5 节。
+
+验收记录：Windows `system_bringup` 最终回归 `526 passed`。WSL 在 `cc483fa` 的 24 文件
+cutover 实现态逐一匹配 Windows HEAD 后完成 16-package 全工作区 build；4B 与 real
+fake/mock targeted 为
+`600 tests, 0 errors, 0 failures, 0 skipped`，全工作区为
+`717 tests, 0 errors, 0 failures, 11 skipped`。这 11 项均为缺少 Node.js 的无关
+`robot_web_ui` 浏览器场景，已由用户接受为环境例外。最终 freshness 修复同步后又完成
+`system_bringup` 单包 build（无 warning）及 `526 tests, 0 errors, 0 failures, 0 skipped`，
+五个关键安装模块均与源码逐字节一致。
+
+轻量生成验收对 sim/real 各实际编译并解析 6 份 `.generated.yaml`，内建 reload/schema/
+cross-validation 及内容检查均为 `YAML_VALIDATION_PASS`，源码 `bringup.yaml` 未改变。
+sim navigation/mapping 动态冒烟、运行时 topic 观察、低 RTF/暂停恢复和冻结时钟现场观察均为
+`USER_BOUNDARY_NOT_RUN`，不记为通过；无人看护真机运动也未执行。整个 4B 未创建 Git
+worktree，未执行 push 或其他 remote-changing action。用户已接受上述边界，第 4 节完成。
 
 ### [ ] 5. FAST-LIO 配置迁移
 
@@ -466,6 +498,5 @@ controller clamp 掩盖 behavior server 或规划器的语义冲突。
 
 ## 下一步
 
-第 2 节已完成并补齐实施后审查发现的 hardening。下一步进入 3A，只实现 runtime 配置
-生成和静态验收；3A 验收后再进入 3B 正式 bringup 切换，不提前迁移第 4 节及以后模块
-参数。
+第 4 节已完成。下一步按执行规则先讨论第 5 节 FAST-LIO 配置迁移的边界和验收条件；
+本次文档收尾不迁移算法参数、算法外参或 compatibility weld。

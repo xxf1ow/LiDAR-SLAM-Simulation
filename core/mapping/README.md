@@ -5,7 +5,7 @@
 
 ## 集成方式:clone + patch,落在本模块名下(core 自成一体)
 LIO-SAM 的源码 **clone 到本模块目录 `core/mapping/LIO-SAM`**(被 `.gitignore` 排除、不入库),再 `git apply` 本模块跟踪的 **`core/mapping/lio-sam.patch`**。**不放在 src 下**——core 是自成一体的完整 colcon 工作区,`colcon build` 从 `core/` 跑即可发现 `lio_sam` 包,无需 src。该补丁含全部 sim 适配:
-- `config/params.yaml`:话题 `points_raw` / `/imu_plugin/out`、帧 `lidarFrame=velodyne`、`baselinkFrame=base_footprint`、外参归零(雷达/IMU 共位)、VLP-16 16/1800、indoor leaf、`savePCD:true` + `savePCDDirectory:/result/loam/`(存盘前 rm -r 此目录,故用专门子目录,勿改 /result/)。
+- `config/params.yaml`:话题 `/points_raw` / `/imu/data`、帧 `lidarFrame=velodyne`、`baselinkFrame=base_footprint`、第 5 节前的零算法外参 compatibility baseline、VLP-16 16/1800、indoor leaf、`savePCD:true` + `savePCDDirectory:/result/loam/`(存盘前 rm -r 此目录,故用专门子目录,勿改 /result/)。该算法外参不由 Profile 中独立的 LiDAR/IMU mount 或 URDF TF 推导；4B 只统一 IMU topic。
 - `config/params_real.yaml`:Vanjee 722 真机话题 `/points_raw` / `/imu/data`、32×1200、厂商 IMU/特征参数、主机时钟；IMU→LiDAR 外参暂用厂商单位阵，待实测。
 - `launch/run.launch.py`:发 `map→odom` 静态 TF、禁用 LIO-SAM 自带 robot_state_publisher(TF 由外部提供)、起 4 个 lio_sam 节点 + RViz；RViz 与节点读取同一个 `params_file`。
 - `src/mapOptmization.cpp`:存图/行为微调。
@@ -60,7 +60,8 @@ bash mapping/save_map.sh
 cd core && source install/setup.bash
 ros2 launch system_bringup bringup.launch.py
 ```
-链路:一致性闸门 → robot_gz → ready_gate[/points_raw, /joint_states] → lio_sam(4 节点 + 自带 RViz)。
+链路：一致性闸门 → robot_gz → `/joint_states` discovery + settling → shared
+`sensor_contract_gate[/points_raw, /imu/data]` → lio_sam（4 节点 + 自带 RViz）。
 
 - 手机访问 `http://<机器人或仿真主机IP>:8080`
 - mapping：点击“人工接管”后按住方向按钮驾驶
@@ -70,14 +71,18 @@ ros2 launch system_bringup bringup.launch.py
 模式时，0.5 秒源超时会停车。**建够后先跑 `bash mapping/save_map.sh`**
 (此时 lio_sam 仍在跑、service 在线)存盘+转换,完成后再 Ctrl+C 停栈。
 
-- ready_gate 把"手动判断起 lio_sam 的时机"换成"等 /points_raw + /joint_states 出现 + settling",其余等价于手动分步。
+- graph-only ready gate 只等待 `/joint_states` 并完成 settling；shared sensor contract gate 再按
+  当前 Profile 检查 `/points_raw` 与 `/imu/data` 的固定 frame/fields、总点数、频率和新鲜度。
+  两段功能等待都使用各自节点的 ROS 时钟；仿真 `/clock` 冻结时保持等待，恢复后继续。
 - **use_sim_time**:lio_sam 与 RViz 都从所选参数文件读取；默认 `params.yaml` 使用仿真时钟，真机显式选择 `params_real.yaml` 使用主机时钟。
 - **存盘**:bringup 不含存盘/转换——靠 `save_map.sh` 完成(service 存 ~/result/loam + cp + 转 occupancy)。service 要 lio_sam 在线,**必须在 Ctrl+C 停栈前跑**(见上一行)。
 
 ## Vanjee 722 真机分步启动
 
-本阶段只提供 LIO-SAM 真机入口，不接入 `system_bringup`。先确保驱动已持续发布
-`/points_raw`、`/imu/data`，并由外部提供 `base_footprint↔velodyne` TF，然后启动：
+正式真机 mapping 已接入 `system_bringup`：real runtime manifest 分别指向完整 generated
+Vanjee YAML 和 shared sensor gate YAML，二者不叠加旧配置或 launch 参数。以下分步启动只用于
+LIO-SAM 诊断；先确保驱动已持续发布 `/points_raw`、`/imu/data`，并由
+`robot_state_publisher` 提供 Profile 独立 LiDAR/IMU mount 对应的 TF，然后启动：
 
 ```bash
 cd core && source install/setup.bash

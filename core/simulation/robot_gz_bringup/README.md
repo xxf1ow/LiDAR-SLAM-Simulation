@@ -2,6 +2,24 @@
 
 **目的:** 坐实"同一份 xacro 三态切换 + Gz Harmonic 里差速机器人能被 /cmd_vel 驱动"。
 
+## 当前正式传感器入口（Profile 4B）
+
+当前完整仿真入口是 `ros2 launch system_bringup bringup.launch.py`。runtime compiler 为 sim
+一次生成 6 份 YAML，并由进程内 manifest 传递绝对路径；其中
+`lidar_adapter.generated.yaml` 是 adapter 的唯一参数源，
+`sensor_gate.generated.yaml` 是 shared `sensor_contract_gate` 的唯一参数源，均不叠加 launch
+参数。`robot_gz.launch.py` 是正式入口的内部 include，需要 manifest 投影的 controller 路径、
+adapter 路径、LiDAR/IMU 两组独立 mount 和 Gazebo sensor facts，不再是零参数完整栈入口。
+
+主动 ROS 传感器契约为 `/points_raw`、`/imu/data`、`velodyne`、`imu_link` 和点字段
+`x/y/z/intensity/ring/time`。URDF 分别发布 `base_link → velodyne` 与
+`base_link → imu_link`；当前 sim Profile 数值相同不代表两组 mount 共用。正式顺序为
+`/joint_states` discovery + settling → shared sensor gate → SLAM。settling 与 gate 的功能计时
+各自只使用节点 ROS clock；低 RTF、暂停或 `/clock` 冻结时保持等待，恢复后继续。
+
+下方 Phase 1–4 是既有分阶段验收记录；其中旧 topic、共位假设和零参数分步命令仅用于还原
+当时阶段，不代表当前正式 4B 契约。
+
 **前置:** 构建机 Ubuntu 22.04 + ROS 2 Humble + Gazebo Harmonic + `ros-humble-ros-gz` + `ros-humble-ros2-control` + `ros-humble-ros2-controllers`,且 **`gz_ros2_control` 已按下方「0.」源码编译并 source**(apt 版 `ros-humble-gz-ros2-control` 与 Harmonic 不兼容、装不上)；`core/` 已拷到工作区(colcon 工作区根)。
 
 ## 0. gz_ros2_control 源码编译(一次性)
