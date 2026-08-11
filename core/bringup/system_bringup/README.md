@@ -120,11 +120,19 @@ sim/real 都使用同一个 `sensor_contract_gate`。sim 在 `/joint_states` dis
 始终未出现，topic 出现后的 settling 和 sensor gate 都只使用各自的节点时钟。因此暂停仿真、
 低 RTF 或 `/clock` 冻结时保持等待，时钟恢复后继续累计。
 
-独立检查 gate 时必须加载本次 compiler 生成的完整参数文件；不要用 launch 参数覆盖：
+独立检查 gate 时必须为本次运行新建随机 runtime 目录，并加载 compiler 刚生成的完整参数
+文件；不要硬编码目录、跨次复用生成物或用 launch 参数覆盖：
 
 ```bash
+cd core
+runtime_dir="$(mktemp -d /tmp/system_bringup-runtime-XXXXXX)"
+trap 'rm -rf -- "$runtime_dir"' EXIT
+
+ros2 run system_bringup compile_runtime_configs \
+  --bringup-config "$PWD/bringup/system_bringup/config/bringup.yaml" \
+  --output-dir "$runtime_dir"
 ros2 run system_bringup sensor_contract_gate \
-  --ros-args --params-file /tmp/system_bringup-runtime-XXXXXX/sensor_gate.generated.yaml
+  --ros-args --params-file "$runtime_dir/sensor_gate.generated.yaml"
 echo $?
 ```
 
