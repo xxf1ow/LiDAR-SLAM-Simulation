@@ -8,8 +8,8 @@
 #          避免默认 RELIABLE 订阅与发布端不兼容。
 #          去畸变:lidar_pointcloud_adapter 已给点云补(合成)time,FAST-LIO 自动 given_offset_time=true
 #          并据此去畸变,无需额外补丁。Gz 是瞬时快照云,若旋转拖影,治本在 adapter 发常量 time。
-#          外参 [0,0,0]:新机器人 velodyne 与 imu_link 同位置(robot_macro.urdf.xacro,均挂 base_link
-#          的 xyz="0 0 sensor_z"),雷达-IMU 外参恒等;与 mapping(LIO-SAM)的 extrinsicTrans:[0,0,0] 一致。
+#          FAST-LIO [0,0,0] 算法外参是第5节迁移前的兼容基线，不从当前独立LiDAR/IMU Profile mount
+#          或 URDF TF 推导；4B只统一sensor contract，不提前修改FAST-LIO/LIO-SAM算法外参。
 #
 diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp
 index e5d9950..4337f0f 100644
