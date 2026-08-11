@@ -49,6 +49,104 @@ def _set_pair_value(pair, platform, path, value):
     target[path[-1]] = value
 
 
+def _effective_with_mounts(tmp_path, lidar_mount, imu_mount):
+    config = _selection(tmp_path, "real")
+    profile_path = tmp_path / "profiles" / "real.yaml"
+    profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+    profile["robot"]["mounts"]["lidar"].update(lidar_mount)
+    profile["robot"]["mounts"]["imu"].update(imu_mount)
+    profile_path.write_text(
+        yaml.safe_dump(profile, sort_keys=False), encoding="utf-8"
+    )
+    output = pc.compile_profile(config, tmp_path / "effective")
+    return yaml.safe_load(output.read_text(encoding="utf-8"))["derived"][
+        "geometry"
+    ]["relative_transforms"]
+
+
+@pytest.mark.parametrize(
+    "platform,expected_bridge",
+    [
+        ("sim", [0.0, 0.0, -0.556]),
+        ("real", [-0.443, 0.0, -0.905]),
+    ],
+)
+def test_current_profiles_derive_identity_lidar_to_imu_and_full_imu_bridge(
+    tmp_path, platform, expected_bridge
+):
+    path = pc.compile_profile(_selection(tmp_path, platform), tmp_path / "out")
+    transforms = yaml.safe_load(path.read_text(encoding="utf-8"))["derived"][
+        "geometry"
+    ]["relative_transforms"]
+    assert transforms["imu_from_lidar"] == {
+        "translation": [0.0, 0.0, 0.0],
+        "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+    }
+    assert transforms["imu_from_base_footprint"]["translation"] == pytest.approx(
+        expected_bridge, abs=1e-12
+    )
+    assert transforms["imu_from_base_footprint"]["rotation_xyzw"] == pytest.approx(
+        [0.0, 0.0, 0.0, 1.0], abs=1e-12
+    )
+
+
+def test_relative_transform_applies_inverse_then_compose_in_correct_order(tmp_path):
+    transforms = _effective_with_mounts(
+        tmp_path,
+        {"x": 1.0, "y": 3.0, "z": 0.0, "roll": 0.0,
+         "pitch": 0.0, "yaw": math.pi},
+        {"x": 1.0, "y": 2.0, "z": 0.0, "roll": 0.0,
+         "pitch": 0.0, "yaw": math.pi / 2.0},
+    )
+    assert transforms["imu_from_lidar"]["translation"] == pytest.approx(
+        [1.0, 0.0, 0.0], abs=1e-12
+    )
+    assert transforms["imu_from_lidar"]["rotation_xyzw"] == pytest.approx(
+        [0.0, 0.0, math.sin(math.pi / 4.0), math.cos(math.pi / 4.0)],
+        abs=1e-12,
+    )
+    assert transforms["imu_from_base_footprint"]["translation"] == pytest.approx(
+        [-2.0, 1.0, 0.0], abs=1e-12
+    )
+    assert transforms["imu_from_base_footprint"]["rotation_xyzw"] == pytest.approx(
+        [0.0, 0.0, -math.sin(math.pi / 4.0), math.cos(math.pi / 4.0)],
+        abs=1e-12,
+    )
+    assert sum(
+        value * value
+        for value in transforms["imu_from_lidar"]["rotation_xyzw"]
+    ) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_relative_transform_handles_pure_translation(tmp_path):
+    transforms = _effective_with_mounts(
+        tmp_path,
+        {"x": 4.0, "y": 5.0, "z": 6.0, "roll": 0.0,
+         "pitch": 0.0, "yaw": 0.0},
+        {"x": 1.0, "y": 2.0, "z": 3.0, "roll": 0.0,
+         "pitch": 0.0, "yaw": 0.0},
+    )
+    assert transforms["imu_from_lidar"]["translation"] == pytest.approx(
+        [3.0, 3.0, 3.0], abs=1e-12
+    )
+    assert transforms["imu_from_lidar"]["rotation_xyzw"] == [0.0, 0.0, 0.0, 1.0]
+
+
+def test_relative_transform_handles_pure_rotation(tmp_path):
+    transforms = _effective_with_mounts(
+        tmp_path,
+        {"x": 0.0, "y": 0.0, "z": 0.0, "roll": math.pi / 2.0,
+         "pitch": 0.0, "yaw": 0.0},
+        {"x": 0.0, "y": 0.0, "z": 0.0, "roll": 0.0,
+         "pitch": 0.0, "yaw": 0.0},
+    )
+    assert transforms["imu_from_lidar"]["translation"] == [0.0, 0.0, 0.0]
+    assert transforms["imu_from_lidar"]["rotation_xyzw"] == pytest.approx(
+        [math.sin(math.pi / 4.0), 0.0, 0.0, math.cos(math.pi / 4.0)],
+        abs=1e-12,
+    )
+
+
 def test_load_bringup_context_returns_source_config_and_selection(tmp_path):
     config = _selection(tmp_path, "sim")
 

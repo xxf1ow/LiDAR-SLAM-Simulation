@@ -338,6 +338,99 @@ def validate_profile_pair(profiles):
         raise ValueError("sim and real profiles must have identical leaf paths")
 
 
+def _stable_float(value):
+    return 0.0 if abs(value) < 1e-15 else float(value)
+
+
+def _normalize_quaternion(values):
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(value)
+        for value in values
+    ):
+        raise ValueError("derived transform quaternion must contain finite numbers")
+    norm = math.sqrt(sum(value * value for value in values))
+    if not math.isfinite(norm) or norm <= 0.0:
+        raise ValueError("derived transform quaternion norm must be positive")
+    return tuple(_stable_float(value / norm) for value in values)
+
+
+def _quaternion_from_rpy(roll, pitch, yaw):
+    cr, sr = math.cos(roll / 2.0), math.sin(roll / 2.0)
+    cp, sp = math.cos(pitch / 2.0), math.sin(pitch / 2.0)
+    cy, sy = math.cos(yaw / 2.0), math.sin(yaw / 2.0)
+    return _normalize_quaternion((
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    ))
+
+
+def _quaternion_multiply(left, right):
+    lx, ly, lz, lw = left
+    rx, ry, rz, rw = right
+    return _normalize_quaternion((
+        lw * rx + lx * rw + ly * rz - lz * ry,
+        lw * ry - lx * rz + ly * rw + lz * rx,
+        lw * rz + lx * ry - ly * rx + lz * rw,
+        lw * rw - lx * rx - ly * ry - lz * rz,
+    ))
+
+
+def _rotate_vector(rotation, vector):
+    qx, qy, qz, qw = rotation
+    matrix = (
+        (1.0 - 2.0 * (qy*qy + qz*qz), 2.0 * (qx*qy - qz*qw),
+         2.0 * (qx*qz + qy*qw)),
+        (2.0 * (qx*qy + qz*qw), 1.0 - 2.0 * (qx*qx + qz*qz),
+         2.0 * (qy*qz - qx*qw)),
+        (2.0 * (qx*qz - qy*qw), 2.0 * (qy*qz + qx*qw),
+         1.0 - 2.0 * (qx*qx + qy*qy)),
+    )
+    return tuple(
+        _stable_float(sum(matrix[row][column] * vector[column]
+                          for column in range(3)))
+        for row in range(3)
+    )
+
+
+def _transform_from_mount(mount):
+    return (
+        (float(mount["x"]), float(mount["y"]), float(mount["z"])),
+        _quaternion_from_rpy(mount["roll"], mount["pitch"], mount["yaw"]),
+    )
+
+
+def _invert_transform(transform):
+    translation, rotation = transform
+    qx, qy, qz, qw = rotation
+    inverse_rotation = (-qx, -qy, -qz, qw)
+    inverse_translation = _rotate_vector(
+        inverse_rotation, tuple(-value for value in translation)
+    )
+    return inverse_translation, inverse_rotation
+
+
+def _compose_transforms(left, right):
+    left_translation, left_rotation = left
+    right_translation, right_rotation = right
+    rotated = _rotate_vector(left_rotation, right_translation)
+    return (
+        tuple(_stable_float(a + b) for a, b in zip(left_translation, rotated)),
+        _quaternion_multiply(left_rotation, right_rotation),
+    )
+
+
+def _transform_report(transform):
+    translation, rotation = transform
+    return {
+        "translation": list(translation),
+        "rotation_xyzw": list(_normalize_quaternion(rotation)),
+    }
+
+
 def _mount_relative_to_base_link(mount, base_link_height):
     result = copy.deepcopy(mount)
     result["z"] = mount["z"] - base_link_height
@@ -356,6 +449,9 @@ def derive_effective_profile(platform, source_path, profile):
     right = body["right_extent"]
     base_link_height = body["ground_clearance"] + body["height"] / 2.0
 
+    base_from_lidar = _transform_from_mount(mounts["lidar"])
+    base_from_imu = _transform_from_mount(mounts["imu"])
+    imu_from_base = _invert_transform(base_from_imu)
     geometry = {
         "body": {
             "length": front + rear,
@@ -375,6 +471,12 @@ def derive_effective_profile(platform, source_path, profile):
         "mounts_relative_to_base_link": {
             name: _mount_relative_to_base_link(mount, base_link_height)
             for name, mount in mounts.items()
+        },
+        "relative_transforms": {
+            "imu_from_lidar": _transform_report(
+                _compose_transforms(imu_from_base, base_from_lidar)
+            ),
+            "imu_from_base_footprint": _transform_report(imu_from_base),
         },
     }
     return {
