@@ -372,13 +372,6 @@ def _validate_unmigrated_runtime_config(config, platform, failures):
             failures,
             "a boolean",
         )
-        _require_runtime_value(
-            config,
-            ("vanjee_lidar", "config"),
-            nonempty_string,
-            failures,
-            "a non-empty string",
-        )
 
 
 _ACTIVE_RUNTIME_FILES = {
@@ -390,6 +383,21 @@ _ACTIVE_RUNTIME_FILES = {
     "navigation": "core/navigation/robot_navigation/launch/navigation.launch.py",
     "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
     "web_ui": "core/bringup/robot_web_ui/robot_web_ui/web_ui_node.py",
+    "profile_compiler": (
+        "core/bringup/system_bringup/system_bringup/profile_compiler.py"
+    ),
+    "runtime_config_compiler": (
+        "core/bringup/system_bringup/system_bringup/runtime_config_compiler.py"
+    ),
+    "consistency_check": (
+        "core/bringup/system_bringup/system_bringup/consistency_check.py"
+    ),
+    "sensor_gate_logic": (
+        "core/bringup/system_bringup/system_bringup/sensor_gate_logic.py"
+    ),
+    "sensor_gate_node": (
+        "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
+    ),
 }
 
 
@@ -404,6 +412,11 @@ _INSTALLED_RUNTIME_SHARES = {
 _INSTALLED_RUNTIME_MODULES = {
     "cmd_gate": "cmd_vel_gate.gate_node",
     "web_ui": "robot_web_ui.web_ui_node",
+    "profile_compiler": "system_bringup.profile_compiler",
+    "runtime_config_compiler": "system_bringup.runtime_config_compiler",
+    "consistency_check": "system_bringup.consistency_check",
+    "sensor_gate_logic": "system_bringup.sensor_gate_logic",
+    "sensor_gate_node": "system_bringup.sensor_gate_node",
 }
 
 

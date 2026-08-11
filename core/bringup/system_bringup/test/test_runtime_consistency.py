@@ -22,6 +22,21 @@ ACTIVE_RUNTIME_FILES = {
     "navigation": "core/navigation/robot_navigation/launch/navigation.launch.py",
     "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
     "web_ui": "core/bringup/robot_web_ui/robot_web_ui/web_ui_node.py",
+    "profile_compiler": (
+        "core/bringup/system_bringup/system_bringup/profile_compiler.py"
+    ),
+    "runtime_config_compiler": (
+        "core/bringup/system_bringup/system_bringup/runtime_config_compiler.py"
+    ),
+    "consistency_check": (
+        "core/bringup/system_bringup/system_bringup/consistency_check.py"
+    ),
+    "sensor_gate_logic": (
+        "core/bringup/system_bringup/system_bringup/sensor_gate_logic.py"
+    ),
+    "sensor_gate_node": (
+        "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
+    ),
 }
 
 
@@ -697,8 +712,12 @@ def test_forced_same_path_resolution_error_is_aggregated(
     )
 
 
+@pytest.mark.parametrize(
+    "stale_label",
+    ["formal", "runtime_config_compiler", "sensor_gate_node"],
+)
 def test_installed_freshness_rejects_source_install_mismatch(
-    runtime_factory, tmp_path, monkeypatch
+    runtime_factory, tmp_path, monkeypatch, stale_label
 ):
     repo_root, manifest = runtime_factory()
     installed_root = tmp_path / "installed"
@@ -709,8 +728,8 @@ def test_installed_freshness_rejects_source_install_mismatch(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
         installed_paths[label] = destination
-    installed_paths["formal"].write_text(
-        installed_paths["formal"].read_text(encoding="utf-8")
+    installed_paths[stale_label].write_text(
+        installed_paths[stale_label].read_text(encoding="utf-8")
         + "\nSTALE_INSTALLED_COPY = True\n",
         encoding="utf-8",
     )
@@ -731,6 +750,7 @@ def test_installed_freshness_rejects_source_install_mismatch(
         "installed" in failure
         and "reviewed source" in failure
         and "rebuild" in failure
+        and str(installed_paths[stale_label]) in failure
         for failure in failures
     )
 
@@ -835,7 +855,6 @@ def test_report_source_profile_must_match_selected_manifest_profile(runtime_fact
         ("sim", ("robot_gz", "world"), "robot_gz.world"),
         ("real", ("slam_stack", "real", "lio_sam", "config"), "slam_stack.real.lio_sam.config"),
         ("real", ("robot_bringup", "use_mock_hardware"), "robot_bringup.use_mock_hardware"),
-        ("real", ("vanjee_lidar", "config"), "vanjee_lidar.config"),
     ],
 )
 def test_unmigrated_downstream_config_shape_is_validated(
@@ -850,3 +869,10 @@ def test_unmigrated_downstream_config_shape_is_validated(
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
     assert any(expected in failure for failure in failures)
+
+
+def test_real_manifest_remains_valid_without_legacy_vanjee_section(runtime_factory):
+    repo_root, manifest = runtime_factory("real")
+    del manifest["bringup_config"]["vanjee_lidar"]
+
+    assert cc.run_runtime_consistency(repo_root, manifest) == []
