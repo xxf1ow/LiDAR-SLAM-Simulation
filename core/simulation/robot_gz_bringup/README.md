@@ -6,23 +6,35 @@
 正式入口是 `system_bringup`。`robot_gz.launch.py` 需要 runtime compiler 传入 controller、
 adapter、几何、传感器和时钟参数，是内部 include，不是零参数完整栈入口。
 
-## 依赖
+## 当前 WSL 边界
 
-Ubuntu 22.04、ROS 2 Humble、Gazebo Sim Harmonic，以及：
+当前 `slam` WSL 只负责 CPU build/test，不安装 Gazebo、`ros_gz` 或 `gz_ros2_control`，也不
+复制工厂模型和启动仿真。这里的 `robot_gz_bringup` 测试是 launch/config/xacro 静态测试；
+通过这些测试不等于完成动态仿真验收。
+
+## 仿真运行主机依赖
+
+以下只适用于将来具备足够 CPU/GPU 资源的仿真运行主机，不在当前 WSL 执行。Ubuntu 22.04、
+ROS 2 Humble 与 Gazebo Sim Harmonic 的非默认组合应按 Gazebo 官方 Humble + Harmonic
+安装说明配置，使用 Harmonic 专用包，而不是 Humble 默认的 Fortress `ros-gz`：
 
 ```bash
 sudo apt install \
-  ros-humble-ros-gz ros-humble-ros2-control ros-humble-ros2-controllers \
-  ros-humble-xacro
+  gz-harmonic ros-humble-ros-gzharmonic ros-humble-ros-gzharmonic-bridge \
+  ros-humble-ros2-control ros-humble-ros2-controllers ros-humble-xacro
 ```
 
 Humble 的 `gz_ros2_control` apt 包与当前 Harmonic 组合不匹配。本项目使用源码构建的
-Humble 分支：
+Humble 分支，并显式选择 Harmonic：
 
 ```bash
-mkdir -p ~/res2_ws
-cd ~/res2_ws
+mkdir -p ~/res2_ws/src
+cd ~/res2_ws/src
 git clone -b humble https://github.com/ros-controls/gz_ros2_control.git
+export GZ_VERSION=harmonic
+rosdep install -r --from-paths . --ignore-src --rosdistro humble -y \
+  --skip-keys="ros_gz_bridge ros_gz_sim"
+cd ~/res2_ws
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -45,10 +57,11 @@ source install/setup.bash
 
 ## 构建与测试
 
+当前 CPU-only WSL 使用以下静态验证命令，不需要 `res2_ws`：
+
 ```bash
 cd core
 source /opt/ros/humble/setup.bash
-source ~/res2_ws/install/setup.bash
 colcon build --packages-up-to robot_gz_bringup system_bringup
 source install/setup.bash
 colcon test --packages-select \
@@ -57,6 +70,8 @@ colcon test-result --all --verbose
 ```
 
 ## 启动
+
+以下步骤只在另行准备的 GPU-capable 仿真运行主机执行，不在当前 WSL 执行。
 
 把 `core/bringup/system_bringup/config/bringup.yaml` 设置为：
 

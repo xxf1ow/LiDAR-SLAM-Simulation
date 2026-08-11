@@ -4,10 +4,12 @@ Repository guidance for coding agents and maintainers.
 
 ## Current execution environment
 
-- The Git checkout is edited on Windows. ROS build, test, and runtime verification happen in the
-  WSL2 Ubuntu 22.04 distribution named `slam`.
-- The current WSL validation copy is `/home/lxx/xxsim/core`. It is not itself a Git checkout, so
-  confirm it matches the Windows HEAD before treating WSL results as evidence for new changes.
+- The authoritative Git checkout is edited on Windows. The WSL2 Ubuntu 22.04 distribution named
+  `slam` is a CPU-only build/test executor; do not install or launch Gazebo there and do not treat it
+  as a full runtime-verification host.
+- `/home/lxx/xxsim` is a Git checkout whose local `windows` remote points to the Windows repository.
+  Before accepting WSL evidence, require a clean WSL worktree, fetch `windows`, fast-forward the
+  current branch, and verify that both checkouts resolve to the same commit.
 - ROS 2 Humble is installed under `/opt/ros/humble`; source it explicitly in non-interactive shells.
 - The colcon workspace root is `core/`, not the repository root and not a nested `src/` directory.
 - Python is the system `/usr/bin/python3` (3.10). Do not introduce a repository `.venv` or make CMake
@@ -16,9 +18,13 @@ Repository guidance for coding agents and maintainers.
 Typical WSL command prefix:
 
 ```bash
+cd /home/lxx/xxsim
+git status --short                 # must be empty
+git fetch windows
+git merge --ff-only '@{u}'
+
 cd /home/lxx/xxsim/core
 source /opt/ros/humble/setup.bash
-source ~/res2_ws/install/setup.bash
 source install/setup.bash
 ```
 
@@ -27,16 +33,24 @@ source install/setup.bash
 ```bash
 cd core
 source /opt/ros/humble/setup.bash
-source ~/res2_ws/install/setup.bash
-colcon build --symlink-install
+colcon build
 source install/setup.bash
 colcon test
 colcon test-result --all --verbose
 ```
 
 `colcon_defaults.yaml` skips vendor/upstream packages during the default test run. Test them
-explicitly only on a compatible platform. The latest verified WSL baseline is 717 tests with zero
-errors and failures and 11 skips.
+explicitly only on a compatible platform; these package exclusions are not skipped test cases. The
+latest verified WSL baseline is 719 tests with zero errors, failures, and skips.
+
+The Web asset tests require a `node` executable. This machine currently exposes Node 22.21.0 to WSL
+through `/home/lxx/.local/bin/node`, linked to the existing Windows Node installation. Verify
+`command -v node` and `node --version` before accepting a run; missing Node is an environment failure,
+not an allowed reason to skip those tests.
+
+This workspace uses the existing copy-install build tree. Do not switch it to `--symlink-install`
+without deliberately recreating the build/install trees; mixing modes leaves incompatible
+`ament_cmake_python` directories and symlinks.
 
 `xacro` is a runtime/test dependency. A successful build does not prove it is installed; verify
 `command -v xacro` when robot description or launch tests fail before inspecting source code.
@@ -46,6 +60,9 @@ expected warning in the current test environment, not a repository defect, when 
 tests otherwise pass.
 
 ## Runtime entry and configuration ownership
+
+The following describes a deployment or GPU-capable runtime host. It is not an instruction to launch
+the full stack in the current CPU-only WSL build/test environment.
 
 The formal entry is:
 
