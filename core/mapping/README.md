@@ -1,108 +1,105 @@
-# core/mapping — LIO-SAM 建图(先验图制作)
+# Mapping：LIO-SAM 先验图制作
 
-本模块负责用 **LIO-SAM** 在仿真或真实 Vanjee 722 数据上建图、保存先验地图
-`GlobalMap.pcd`(供 localization 阶段的 GICP 用)。
+本模块使用 LIO-SAM 消费 `/points_raw` 和 `/imu/data`，生成供 GICP 使用的
+`~/result/GlobalMap.pcd`，并通过 `save_map.sh` 转换出 Nav2 二维占据地图。
 
-## 集成方式:clone + patch,落在本模块名下(core 自成一体)
-LIO-SAM 的源码 **clone 到本模块目录 `core/mapping/LIO-SAM`**(被 `.gitignore` 排除、不入库),再 `git apply` 本模块跟踪的 **`core/mapping/lio-sam.patch`**。**不放在 src 下**——core 是自成一体的完整 colcon 工作区,`colcon build` 从 `core/` 跑即可发现 `lio_sam` 包,无需 src。该补丁含全部 sim 适配:
-- `config/params.yaml`:话题 `/points_raw` / `/imu/data`、帧 `lidarFrame=velodyne`、`baselinkFrame=base_footprint`、第 5 节前的零算法外参 compatibility baseline、VLP-16 16/1800、indoor leaf、`savePCD:true` + `savePCDDirectory:/result/loam/`(存盘前 rm -r 此目录,故用专门子目录,勿改 /result/)。该算法外参不由 Profile 中独立的 LiDAR/IMU mount 或 URDF TF 推导；4B 只统一 IMU topic。
-- `config/params_real.yaml`:Vanjee 722 真机话题 `/points_raw` / `/imu/data`、32×1200、厂商 IMU/特征参数、主机时钟；IMU→LiDAR 外参暂用厂商单位阵，待实测。
-- `launch/run.launch.py`:发 `map→odom` 静态 TF、禁用 LIO-SAM 自带 robot_state_publisher(TF 由外部提供)、起 4 个 lio_sam 节点 + RViz；RViz 与节点读取同一个 `params_file`。
-- `src/mapOptmization.cpp`:存图/行为微调。
+## 上游集成
 
-clone 命令(pinned SHA 见主文档,clone 到本模块):
+LIO-SAM 源码克隆到 `core/mapping/LIO-SAM`，该目录被 Git 忽略。项目修改只通过
+`core/mapping/lio-sam.patch` 交付。
+
 ```bash
-git clone <LIO-SAM upstream> core/mapping/LIO-SAM && cd core/mapping/LIO-SAM && git checkout <pinned SHA>
+git clone <LIO-SAM upstream> core/mapping/LIO-SAM
+cd core/mapping/LIO-SAM
+git checkout <pinned SHA>
 git apply ../lio-sam.patch
 ```
 
-**改 LIO-SAM 配置的正确姿势**:改 `core/mapping/LIO-SAM` working tree → `cd core/mapping/LIO-SAM && git diff > ../lio-sam.patch` 重生成 → 提交 `core/mapping/lio-sam.patch`。构建机重新 `git apply`(或 clone 重置后再 apply)。
+补丁维护两份原生配置：
 
-## TF 约定(REP-105)
-```
-map ─(run.launch.py 静态)→ odom ─(LIO-SAM 激光里程计,独占)→ base_footprint
-    ─(URDF 固定)→ base_link ─(robot_state_publisher)→ velodyne / imu_link / 轮
-```
-轮式里程计 TF 已在 `robot_controllers.yaml` 关闭(`enable_odom_tf:false`),`odom→base_footprint` 由 LIO-SAM 独占,避免被轮式抖动污染。
+- `params.yaml`：Gazebo 16×1800 点云和仿真时钟。
+- `params_real.yaml`：Vanjee 722 32×1200 点云和系统时钟。
 
-## 构建机:建图流程
-前置:**构建根 = `core/`**(从 core 跑 colcon,build/install 落 core);`core/mapping/LIO-SAM` 已 clone + apply 最新 `lio-sam.patch`;Phase 4 的 `models/factory_model` + `GZ_SIM_RESOURCE_PATH` 就位。
+FAST-LIO/LIO-SAM 算法外参尚未迁入中央 Profile；当前配置中的兼容值不是由 URDF mount
+自动推导。修改上游配置后，从 clone 工作树重新生成补丁并提交补丁文件，不提交 clone。
+
+## TF 与接口
+
+```text
+map ── static ──> odom ── LIO-SAM ──> base_footprint ── URDF ──> base_link
+```
+
+轮式里程计的 `enable_odom_tf` 为 false，因此 mapping 模式由 LIO-SAM 独占
+`odom -> base_footprint`。输入契约为 `/points_raw`、`/imu/data`、`velodyne` 和
+`imu_link`。
+
+## 正式建图
+
+将 `core/bringup/system_bringup/config/bringup.yaml` 设置为：
+
+```yaml
+platform: sim       # 真机使用 real
+mode: mapping
+```
 
 ```bash
-# 构建(从 core 工作区根,一次建全:本仓库包 + lio_sam clone)
-cd core && colcon build --packages-up-to lio_sam robot_gz_bringup
+cd core
+source /opt/ros/humble/setup.bash
+source ~/res2_ws/install/setup.bash
 source install/setup.bash
+ros2 launch system_bringup bringup.launch.py
+```
 
-# 终端 1：起仿真(工厂世界 + 机器人 + 传感器)
-cd core && source install/setup.bash
-ros2 launch robot_gz_bringup robot_gz.launch.py
-#（factory_models_path 默认 ~/LiDAR-SLAM-Simulation/models/factory_model,路径不同才传该 arg；
-#  必要时 spawn_x:=/spawn_y:= 调到空旷过道；默认不起看模型的 RViz——建图看终端 2 LIO-SAM 自带 RViz 即可）
+启动顺序为底层平台、关节状态 settling、shared sensor contract gate、LIO-SAM。sim 使用
+adapter generated YAML，real 使用 Vanjee generated YAML；LIO-SAM 参数文件由
+`bringup.yaml` 的平台分支选择。
 
-# 终端 2：起 LIO-SAM 建图
-cd core && source install/setup.bash
-ros2 launch lio_sam run.launch.py
+手机访问 `http://<主机IP>:8080`，进入“人工接管”后驾驶建图。完整 bringup 中不要直接
+发布 `/cmd_vel`。
 
-# 分步启动只用于底层诊断；可持续发布低速 TwistStamped 验证控制器，Ctrl+C 即停止
-ros2 topic pub -r 10 /cmd_vel geometry_msgs/msg/TwistStamped \
-  '{header: {frame_id: base_link}, twist: {linear: {x: 0.15}, angular: {z: 0.2}}}'
+## 保存地图
 
-# 建够后存图 + 转 2D 栅格(一键脚本)
-#   注意:LIO-SAM 存盘前 rm -r 目标目录重建(mapOptmization.cpp:188/414),故脚本存到专门子目录
-#   ~/result/loam/ 再 cp 到 ~/result/。勿手写 destination:'/result'(会删 ~/result/ 主级地图!)
+LIO-SAM 仍在运行时执行：
+
+```bash
+cd core
 bash mapping/save_map.sh
 ```
 
-## 通过 bringup 启动 mapping(替代上面手动分步)
+脚本调用 `save_map` 服务，把中间结果保存在 `~/result/loam/`，复制生成
+`~/result/GlobalMap.pcd`，并生成 Nav2 占据栅格。LIO-SAM 保存实现会先删除并重建目标目录，
+禁止把目标直接设为 `/result` 或其他包含重要文件的父目录。
 
-把 `core/bringup/system_bringup/config/bringup.yaml` 的 `mode: navigation` 改为 `mode: mapping`(`platform: sim` 保持),不用 rebuild,然后:
+## 独立诊断
+
+只有在排查 LIO-SAM 自身时才绕过正式入口。先确保平台驱动、TF、`/points_raw` 和
+`/imu/data` 已就绪，再执行：
+
 ```bash
-cd core && source install/setup.bash
-ros2 launch system_bringup bringup.launch.py
+cd core
+source install/setup.bash
+ros2 launch lio_sam run.launch.py
 ```
-链路：一致性闸门 → robot_gz → `/joint_states` discovery + settling → shared
-`sensor_contract_gate[/points_raw, /imu/data]` → lio_sam（4 节点 + 自带 RViz）。
 
-- 手机访问 `http://<机器人或仿真主机IP>:8080`
-- mapping：点击“人工接管”后按住方向按钮驾驶
-- navigation：默认自动；点击“人工接管”屏蔽 Nav2，点击“恢复自动导航”恢复
-
-完整 bringup 中只有 `cmd_vel_gate` 发布 `/cmd_vel`。浏览器断连且仍处于 manual
-模式时，0.5 秒源超时会停车。**建够后先跑 `bash mapping/save_map.sh`**
-(此时 lio_sam 仍在跑、service 在线)存盘+转换,完成后再 Ctrl+C 停栈。
-
-- graph-only ready gate 只等待 `/joint_states` 并完成 settling；shared sensor contract gate 再按
-  当前 Profile 检查 `/points_raw` 与 `/imu/data` 的固定 frame/fields、总点数、频率和新鲜度。
-  两段功能等待都使用各自节点的 ROS 时钟；仿真 `/clock` 冻结时保持等待，恢复后继续。
-- **use_sim_time**:lio_sam 与 RViz 都从所选参数文件读取；默认 `params.yaml` 使用仿真时钟，真机显式选择 `params_real.yaml` 使用主机时钟。
-- **存盘**:bringup 不含存盘/转换——靠 `save_map.sh` 完成(service 存 ~/result/loam + cp + 转 occupancy)。service 要 lio_sam 在线,**必须在 Ctrl+C 停栈前跑**(见上一行)。
-
-## Vanjee 722 真机分步启动
-
-正式真机 mapping 已接入 `system_bringup`：real runtime manifest 分别指向完整 generated
-Vanjee YAML 和 shared sensor gate YAML，二者不叠加旧配置或 launch 参数。以下分步启动只用于
-LIO-SAM 诊断；先确保驱动已持续发布 `/points_raw`、`/imu/data`，并由
-`robot_state_publisher` 提供 Profile 独立 LiDAR/IMU mount 对应的 TF，然后启动：
+真机诊断显式选择安装态 real 配置：
 
 ```bash
-cd core && source install/setup.bash
 REAL_PARAMS="$(ros2 pkg prefix lio_sam)/share/lio_sam/config/params_real.yaml"
 ros2 launch lio_sam run.launch.py params_file:="$REAL_PARAMS"
 ```
 
-初始配置按实测点云采用 32×1200；厂商参考中的 IMU 噪声和特征参数原样采用。
-当前单位外参只是首轮联调值，待实测 IMU 轴向和安装位姿后再调整。地图仍用
-`mapping/save_map.sh` 保存到现有的 `~/result/loam/` 和 `~/result/GlobalMap.pcd`。
+## 验收
 
-## 验收判据(PASS → 进 5c 定位)
-18. 终端 2 起 LIO-SAM 后无 TF/参数报错;`ros2 topic hz /lio_sam/mapping/odometry` 持续发布。
-19. RViz 里 LIO-SAM 累积的点云地图**勾勒出工厂结构**(墙/货架/集装箱清晰、不重影不发散);行驶中 `map→odom→base_footprint` TF 链完整(`ros2 run tf2_ros tf2_echo map base_footprint` 有输出且随车动)。
-20. 回环闭合后地图一致(绕工厂一圈回到起点,地图不分裂/不错层)。
-21. `save_map` 在 `~/result/` 生成 `GlobalMap.pcd`(及 cornerMap/surfMap);`pcl_viewer` 或 RViz 加载该 PCD 能看出完整工厂、尺度合理(与 35×18m 量级相符)。
+- `/lio_sam/mapping/odometry` 持续发布。
+- `map -> odom -> base_footprint` 连通且没有 TF 竞争。
+- RViz 累积地图结构清晰，无持续重影、分裂或尺度异常。
+- 回环后地图保持一致。
+- `save_map.sh` 生成可加载的 `GlobalMap.pcd` 和二维地图文件。
 
-## FAIL 排查
-- LIO-SAM 起来即报 `extrinsic`/`frame` 或点云方向错乱 → 确认补丁已是最新(`lidarFrame:velodyne`、`extrinsicTrans:[0,0,0]`),且构建机重新 apply 并 `colcon build lio_sam`。
-- `map→base_footprint` TF 断 → 查 `base_footprint` 是否在 URDF(5a)、`robot_state_publisher` 是否在跑、轮式 TF 是否已关(否则与 LIO-SAM 抢 odom→base)。
-- 地图发散/重影 → 多为驱动太快或转太急(雷达 10Hz、RTF<1),少按几下 `i`/`j`/`l` 降速、多用 `s` 回正;或工厂特征不足处(空旷区)正常,回到特征区会收敛。
-- 车不动 → 完整 bringup 确认网页已点击“人工接管”且仍在按住方向按钮；
-  分步底层诊断确认持续发布的是 `TwistStamped` 而不是 `Twist`。
+## 排错
+
+- 参数、frame 或点云方向错误：确认 clone 位于正确提交、最新补丁已 apply，并重新构建。
+- sensor gate 不放行：检查点云字段/形状/频率、IMU 频率和消息时间戳，不要绕过 gate。
+- TF 断链或跳变：确认轮式 odom TF 已关闭，LIO-SAM 是 mapping 模式唯一 odom TF 发布者。
+- 地图发散：先降低车速和转速，再检查逐点时间、IMU 方向、外参和场景特征。
+- 保存失败：确认 LIO-SAM 仍在线、服务存在且目标目录是专用子目录。

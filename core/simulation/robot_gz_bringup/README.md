@@ -1,188 +1,128 @@
-# Phase 1 — 差速骨架 + Gz/mock/real 切换 构建机验收协议
+# Gazebo Harmonic 仿真模块
 
-**目的:** 坐实"同一份 xacro 三态切换 + Gz Harmonic 里差速机器人能被 /cmd_vel 驱动"。
+`robot_gz_bringup` 负责加载工厂世界、生成机器人描述、spawn 机器人、启动
+`gz_ros2_control`、桥接 `/clock`/LiDAR/IMU，并运行 `lidar_pointcloud_adapter`。
 
-## 当前正式传感器入口（Profile 4B）
+正式入口是 `system_bringup`。`robot_gz.launch.py` 需要 runtime compiler 传入 controller、
+adapter、几何、传感器和时钟参数，是内部 include，不是零参数完整栈入口。
 
-当前完整仿真入口是 `ros2 launch system_bringup bringup.launch.py`。runtime compiler 为 sim
-一次生成 6 份 YAML，并由进程内 manifest 传递绝对路径；其中
-`lidar_adapter.generated.yaml` 是 adapter 的唯一参数源，
-`sensor_gate.generated.yaml` 是 shared `sensor_contract_gate` 的唯一参数源，均不叠加 launch
-参数。`robot_gz.launch.py` 是正式入口的内部 include，需要 manifest 投影的 controller 路径、
-adapter 路径、LiDAR/IMU 两组独立 mount 和 Gazebo sensor facts，不再是零参数完整栈入口。
+## 依赖
 
-主动 ROS 传感器契约为 `/points_raw`、`/imu/data`、`velodyne`、`imu_link` 和点字段
-`x/y/z/intensity/ring/time`。URDF 分别发布 `base_link → velodyne` 与
-`base_link → imu_link`；当前 sim Profile 数值相同不代表两组 mount 共用。正式顺序为
-`/joint_states` discovery + settling → shared sensor gate → SLAM。settling 与 gate 的功能计时
-各自只使用节点 ROS clock；低 RTF、暂停或 `/clock` 冻结时保持等待，恢复后继续。
-
-下方 Phase 1–4 是既有分阶段验收记录；其中旧 topic、共位假设和零参数分步命令仅用于还原
-当时阶段，不代表当前正式 4B 契约。
-
-**前置:** 构建机 Ubuntu 22.04 + ROS 2 Humble + Gazebo Harmonic + `ros-humble-ros-gz` + `ros-humble-ros2-control` + `ros-humble-ros2-controllers`,且 **`gz_ros2_control` 已按下方「0.」源码编译并 source**(apt 版 `ros-humble-gz-ros2-control` 与 Harmonic 不兼容、装不上)；`core/` 已拷到工作区(colcon 工作区根)。
-
-## 0. gz_ros2_control 源码编译(一次性)
-
-`ros-humble-gz-ros2-control` 的 apt 版与 Gazebo Harmonic 版本不匹配、本机装不上,改用源码编译 `ros-controls/gz_ros2_control` 的 **humble 分支**到独立工作区 `~/res2_ws`。它不是本项目的包(是 ros2_control 的 Gz 桥接库),故不入 `core/`;编译产物经 `.bashrc` 全局 source,所有 shell 均可发现其插件。
+Ubuntu 22.04、ROS 2 Humble、Gazebo Sim Harmonic，以及：
 
 ```bash
-# 前提:Gazebo Harmonic + ros-humble-ros2-control + ros-humble-ros2-controllers 已 apt 装好
-mkdir -p ~/res2_ws && cd ~/res2_ws
+sudo apt install \
+  ros-humble-ros-gz ros-humble-ros2-control ros-humble-ros2-controllers \
+  ros-humble-xacro
+```
+
+Humble 的 `gz_ros2_control` apt 包与当前 Harmonic 组合不匹配。本项目使用源码构建的
+Humble 分支：
+
+```bash
+mkdir -p ~/res2_ws
+cd ~/res2_ws
 git clone -b humble https://github.com/ros-controls/gz_ros2_control.git
 colcon build --symlink-install
-# 每个新 shell 都 source(URDF 的 gz_ros2_control 插件靠它发现 libgz_ros2_control-system.so):
-echo 'source ~/res2_ws/install/setup.bash' >> ~/.bashrc
+source install/setup.bash
+```
+
+在每个运行终端 source `~/res2_ws/install/setup.bash`。该工作区提供
+`libgz_ros2_control-system.so` 和仿真内的 controller manager；删除它会使仿真控制器
+无法加载。
+
+## 工厂资产
+
+`worlds/factory.sdf` 是已经完成 Classic 到 Harmonic 转换和性能优化的最终文件，不需要
+再次生成。其 `model://` 视觉资源位于仓库外，默认路径为：
+
+```text
+~/LiDAR-SLAM-Simulation/models/factory_model
+```
+
+路径不同时修改 `bringup.yaml` 的仿真资源配置。运行时会把模型目录及纹理目录追加到
+`GZ_SIM_RESOURCE_PATH`。
+
+## 构建与测试
+
+```bash
+cd core
+source /opt/ros/humble/setup.bash
 source ~/res2_ws/install/setup.bash
-```
-
-> 产物 `libgz_ros2_control-system.so` 即 URDF `<plugin filename="gz_ros2_control-system">` 加载的库,提供仿真里的 `controller_manager`(无独立 ros2_control_node)。**不可删 `~/res2_ws`**,否则整个 sim 栈起不来。
-
-## 1. 构建全部包
-```bash
-colcon build --packages-select robot_hardware robot_description robot_bringup robot_gz_bringup
+colcon build --packages-up-to robot_gz_bringup system_bringup
 source install/setup.bash
-colcon test --packages-select robot_description && colcon test-result --verbose   # xacro 三态解析全 PASS
+colcon test --packages-select \
+  robot_description lidar_pointcloud_adapter robot_gz_bringup system_bringup
+colcon test-result --all --verbose
 ```
 
-## 2. RViz 看模型(无控制)
-```bash
-ros2 launch robot_description view_robot.launch.py
-```
-预期:RViz 里看到盒身 + 两轮 + 两万向轮;joint_state_publisher_gui 拖动轮关节模型随动。
+## 启动
 
-## 3. mock 硬件驱动(无 Gz)
-```bash
-ros2 launch robot_bringup robot.launch.py use_mock_hardware:=true gui:=false
-# 另一终端：
-ros2 control list_controllers      # base_controller、joint_state_broadcaster = active
-# Humble 的 diff_drive_controller 默认收 TwistStamped(发 Twist 会被忽略、车不动)
-ros2 topic pub /cmd_vel geometry_msgs/msg/TwistStamped \
-  '{header: {frame_id: base_link}, twist: {linear: {x: 0.2}}}' -r 10
-ros2 run tf2_ros tf2_echo odom base_link     # odom->base_link 随命令前进
+把 `core/bringup/system_bringup/config/bringup.yaml` 设置为：
+
+```yaml
+platform: sim
+mode: navigation  # 或 mapping
 ```
 
-## 4. Gz Harmonic 仿真驱动(核心)
+然后：
+
 ```bash
-ros2 launch robot_gz_bringup robot_gz.launch.py
-# 另一终端：
-ros2 control list_controllers      # 两控制器 active(controller_manager 由 gz 插件提供)
-# Humble 的 diff_drive_controller 默认收 TwistStamped(发 Twist 会被忽略、车不动)
-ros2 topic pub /cmd_vel geometry_msgs/msg/TwistStamped \
-  '{header: {frame_id: base_link}, twist: {linear: {x: 0.3}, angular: {z: 0.4}}}' -r 10
-```
-预期:Gz GUI 3D 窗口里机器人沿弧线前进;`ros2 topic echo /base_controller/odom --field pose.pose.position` 数值变化。
-> RViz 的 Fixed Frame 默认是 `base_link`(跟车),看不出平移;要在 RViz 看运动把 Fixed Frame 改成 `odom`。
-
-上面的 `ros2 topic pub /cmd_vel ...` 只用于独立启动仿真底层时诊断控制器。
-完整栈改用 `ros2 launch system_bringup bringup.launch.py`，此时只有
-`cmd_vel_gate` 发布 `/cmd_vel`，不要再直接向该话题发布：
-
-- 手机访问 `http://<机器人或仿真主机IP>:8080`
-- mapping：点击“人工接管”后按住方向按钮驾驶
-- navigation：默认自动；点击“人工接管”屏蔽 Nav2，点击“恢复自动导航”恢复
-
-Web 在仿真和真机都走相同的 `/cmd_vel_manual → cmd_vel_gate → /cmd_vel`
-控制器路径，不直接操作或失能硬件，也不能替代物理急停。
-
-## 5. 裁决
-
-**PASS(Phase 1 完成、进 Phase 2)需全部满足:**
-1. 四个包 `colcon build` 全绿;`robot_description` 三态 xacro 测试全 PASS。
-2. `view_robot` 在 RViz 里模型正确显示。
-3. mock 模式:两控制器 active,发 `/cmd_vel` 后 `odom->base_link` 变换随动。
-4. **Gz 模式:机器人在 Gazebo Harmonic 里被 `/cmd_vel` 驱动移动(直线 + 转向),控制器 active,里程计/ TF 输出正常。**
-5. 同一 `robot.urdf.xacro` 仅靠 arg 完成 gz/mock/real 三态切换(real 分支编译且插件登记,真机通信留作后续)。
-
-**FAIL(回流程，按 systematic-debugging):**
-- Gz 模式机器人不动:**先确认发的是 `TwistStamped` 不是 `Twist`**(Humble 默认,发错类型会被静默忽略);再查 `/cmd_vel` 是否到 `base_controller`(remap 是否生效)、Gz 是否暂停(左下 RTF>0)、轮子是否打滑(empty.sdf 地面摩擦)、关节命令接口是否 velocity。记录 `ros2 topic info /cmd_vel -v`、`ros2 control list_hardware_interfaces` 回报。
-- 控制器起不来:查 controller_manager 是否由 gz 插件起(`ros2 node list` 应有 `/controller_manager`)、`gz_controllers_file` 路径是否注入正确(看展开后的 URDF `<parameters>` 是否绝对路径)。
-- xacro 测试 FAIL:看 `colcon test-result --verbose` 的断言与 check_urdf 报错。
-
-### Phase 2 追加判据(参数化真车尺寸)
-跑 `ros2 launch robot_description view_robot.launch.py` 或 `robot_gz_bringup robot_gz.launch.py`,确认:
-6. 车体可见尺寸 ≈ 0.75(长)×0.55(宽)×0.40(高) m;两驱动轮在两侧、前后两万向球触地,车落在地面不下陷/不弹飞。
-7. **雷达 puck(黑色圆柱)完整露在车顶中央之上,未埋进车体**。
-8. TF:`ros2 run tf2_ros tf2_echo base_link velodyne` 与 `base_link imu_link` 的平移**完全相同**(共位,xyz=0 0 0.236)。
-9. 里程计:发 TwistStamped 后 `ros2 topic echo /base_controller/odom` 的 `child_frame_id` = `base_link`(本阶段未加 base_footprint);提速后(linear 可达 1.5 m/s)行驶不再"痛苦地慢"。
-10. 已知:`kdl_parser: root link base_link has an inertia` 警告**仍在**(根仍是 base_link,符合示例;base_footprint 留 Phase 5)——无害,勿误判为回归。
-
-### Phase 3 验收(Gz 原生传感器 + 桥接 + ring/time)
-构建(adapter 需一起):
-```bash
-colcon build --packages-select lidar_pointcloud_adapter robot_description robot_bringup robot_gz_bringup
+cd core
+source /opt/ros/humble/setup.bash
+source ~/res2_ws/install/setup.bash
 source install/setup.bash
-ros2 launch robot_gz_bringup robot_gz.launch.py
+ros2 launch system_bringup bringup.launch.py
 ```
-另一终端核验:
+
+runtime compiler 会生成 controller、LiDAR adapter 和 sensor gate 配置，并把 sim Profile
+中的车体、车轮、LiDAR、IMU 和传感器扫描事实传给本模块。
+
+## 传感器与控制契约
+
+- Gazebo 原始点云：`/lidar/points`。
+- 适配后点云：`/points_raw`，frame=`velodyne`，字段
+  `x/y/z/intensity/ring/time`。
+- IMU：`/imu/data`，frame=`imu_link`。
+- LiDAR 与 IMU mount 分别来自 Profile；数值相同也不表示共用一份外参。
+- 控制器输入：`/cmd_vel`，消息类型为 `TwistStamped`。
+- controller manager 由 URDF 中的 `gz_ros2_control` 插件提供，不启动独立
+  `ros2_control_node`。
+
+完整 bringup 的顺序是关节状态 discovery/settling、shared sensor contract gate、SLAM。
+这些功能等待使用 ROS 时钟；仿真暂停或低 RTF 时会等待，时钟恢复后继续。
+
+## 验收
+
 ```bash
-gz topic -l | grep -E "lidar|imu"          # 确认 Gz 侧实际话题名(预期 /lidar/points、/imu)
-ros2 topic list | grep -E "points_raw|imu_plugin|lidar"
-ros2 topic echo /lidar/points --once --field height   # 16(组织化)
-ros2 topic echo /lidar/points --once --field width    # ~1800
-ros2 topic echo /points_raw --once --field fields      # 含 x y z intensity ring time
-ros2 topic hz /points_raw                              # ~10 Hz(sim 时钟下显示约一半正常)
-ros2 topic hz /imu_plugin/out                          # ~200 Hz
-ros2 run tf2_ros tf2_echo base_link velodyne           # 平移 0 0 0.236(preserveFixedJoint 保住了帧)
-```
-喂 FAST-LIO:
-```bash
-ros2 launch fast_lio mapping.launch.py config_file:=gazebo_velodyne.yaml use_sim_time:=true
-ros2 topic hz /Odometry                                # 持续发布、不崩
-ros2 topic list | grep -E "Odometry|cloud_registered"
-```
-开车看跟踪:发 TwistStamped 驱动,RViz 里 /cloud_registered 随运动累积、/Odometry 跟随。
-
-**PASS(进 Phase 4)需:**
-11. `gz topic -l` 能看到 lidar/imu 话题;`/points_raw` 字段含 `ring`+`time`、稳定 ~10 Hz;`/imu_plugin/out` ~200 Hz。
-12. `base_link→velodyne`/`imu_link` TF 在(preserveFixedJoint 生效,帧未被并掉)。
-13. FAST-LIO 无 preprocess 崩溃,持续发 `/Odometry`;开车时位姿跟随、`/cloud_registered` 合理累积。
-
-**FAIL 排查:**
-- `gz topic -l` 无 lidar 点云 / `/points_raw` 不发:查 Gz 实际 sensor 话题名是否被加了模型作用域前缀(spawn 模型可能)——若是,改 `config/bridge.yaml` 的 `gz_topic_name` 与 launch 里 adapter 的 `input_topic` 为实际名(**不改算法**)。
-- 点云 `height!=16`:查 gpu_lidar 的 vertical samples;`fields` 无 `ring` 时 adapter 仍按 ring=i//width 重算。
-- TF 无 `base_link→velodyne`:preserveFixedJoint 未生效 → 查展开 URDF 是否含该 `<gazebo reference="velodyne_joint">` 段、版本是否支持。
-- 传感器无数据但话题在:多半世界缺 `gz-sim-sensors-system`/`ogre2`(headless 要 `--headless-rendering`)。
-
-## 已知注意
-- Phase 1 用参考 DiffBot 的微小尺寸(轮距 0.10 m),Gz 里机器人很小、移动距离小,看 odom 数值确认即可;真车尺寸在 Phase 2。
-- Gz 模式 RTF 可能 <1,`/cmd_vel` 用持续发布(`-r 10`)而非 `--once`。
-- 若 Gz 里轮子打滑导致直线跑偏,记为 Phase 2 摩擦/惯量调参项,不在 Phase 1 阻塞判据(只要能被驱动移动即 PASS)。
-
-## Phase 4 — 工厂世界(Classic → Harmonic 迁移)
-
-### 资产前置(构建机)
-`factory.sdf` 的 mesh 视觉引用 Classic 模型库(ARIAC/gazebo_models)资产,按依赖惯例 **不入库**(`.gitignore: models/*`)。构建机需备好 `models/factory_model/`(整套 `model.config`+`model.sdf`+meshes,~30MB)。launch 的 `factory_models_path` **默认就是 `~/LiDAR-SLAM-Simulation/models/factory_model`**(按构建机仓库布局,用 `$HOME` 不写死用户名),会自动展开各 `materials/textures` 进 `GZ_SIM_RESOURCE_PATH` —— 资产放在该默认位置时**无需任何额外操作**。仓库/资产不在此处再传 `factory_models_path:=/abs/path/...` 覆盖,或置空 `factory_models_path:=""` 改为依赖手动 `export GZ_SIM_RESOURCE_PATH`。
-
-### 关于 `worlds/factory.sdf`
-`worlds/factory.sdf` 是**一次性**由老 Classic 工厂世界转换 + 手工优化后入库的**最终成品**,不再由脚本生成(原转换器 `convert_classic_world.py` 及其 Classic 源 `lio_world.classic.model` 已删除——一次转换后不会再跑)。它在 Classic→Harmonic 转换基础上做了仿真性能优化(实测 RTF 大幅提升,且不影响点云/IMU):
-- 全部世界道具置为 `<static>`(机器人/动态障碍由 launch 在运行时 spawn,不在世界文件内);
-- mesh 碰撞体 → 简单几何盒(**gpu_lidar 渲染的是 visual,点云/SLAM/costmap 不受影响**;碰撞盒仅用于机器人物理撞击);
-- 关阴影(`<shadows>0</shadows>` + 各灯 `cast_shadows=0`);
-- 显式 `<physics type="dart">`:`max_step_size=0.005` / `real_time_update_rate=200`(目标 RTF=1.0,IMU 上限 200Hz 够 LIO-SAM 用)。
-> mesh **视觉**仍引用 `model://` 资产,故下面的「资产前置」仍然必需。要改世界直接编辑 `factory.sdf`。
-
-### 构建 & 启动
-```bash
-# 构建根 = core/(core 自成一体;build/install 落 core)
-cd core && colcon build --packages-select lidar_pointcloud_adapter robot_description robot_bringup robot_gz_bringup
-source install/setup.bash
-# factory 世界 + 资产路径都已是默认值,通常直接起即可:
-ros2 launch robot_gz_bringup robot_gz.launch.py
-# 资产不在默认位置才传:factory_models_path:=/abs/path/to/models/factory_model
-# 回退冒烟:world:=test_world.sdf
-# 机器人 spawn 默认 x=4,y=0,z=0.05(Phase 5a 根改 base_footprint 在地面);若落在结构里,调 spawn_x:= / spawn_y:=
+ros2 topic hz /clock
+ros2 topic hz /joint_states
+ros2 topic hz /points_raw
+ros2 topic hz /imu/data
+ros2 control list_controllers
+ros2 run tf2_ros tf2_echo base_link velodyne
+ros2 run tf2_ros tf2_echo base_link imu_link
 ```
 
-### PASS(进 Phase 5)需:
-14. Gz GUI 里**工厂完整加载**:墙体/workcell/集装箱/货架/托盘/管材等就位,布局与老 Classic 工厂一致(90° 伪对称在);控制台无 "unable to find model"(资产路径正确)、无致命解析错。
-15. 机器人 spawn 在空旷过道、不与结构重叠、落地不下陷/弹飞(必要时调 `spawn_x/spawn_y`)。
-16. 传感器照常:`/points_raw` ~10Hz 含 ring+time、`/imu_plugin/out` ~200Hz;点云在 RViz 里勾勒出工厂结构(不是空场)。
-17. 开车跑一段:FAST-LIO `/Odometry` 持续、`/cloud_registered` 合理累积出工厂特征。
+应满足：
 
-### FAIL 排查:
-- "unable to find model [workcell]..." → `GZ_SIM_RESOURCE_PATH` 没指到 `models/factory_model`(父目录),或资产没拷到构建机。
-- 模型变灰/无纹理 → 基本体盒子的 Ogre1 script 已被中和成灰色(预期,对 LiDAR 无影响);带纹理 mesh(workcell/dumpster/集装箱等)仍应有色。
-- 世界加载极慢/卡 → workcell mesh 较大属正常;若超时先 `world:=test_world.sdf` 验证管线再排查。
-- spawn 进了某模型里 → 调 `spawn_x:= / spawn_y:=` 到 GUI 中可见的空地。
-- 机器人穿地坠落 → 确认 factory.sdf 末尾含 `<model name="ground">`(下沉 1cm 防 z-fighting)。
+- `joint_state_broadcaster` 和 `base_controller` 为 active。
+- `/points_raw`、`/imu/data` 通过当前 Profile 的 sensor gate。
+- TF 中 LiDAR 与 IMU 各有唯一父边。
+- navigation 模式最终启动 FAST-LIO、GICP 和 Nav2；mapping 模式启动 LIO-SAM。
+- 完整 bringup 中只有 `cmd_vel_gate` 发布 `/cmd_vel`。
+
+## 排错
+
+- `xacro not found`：安装 `ros-humble-xacro`，并确认 source ROS 环境。
+- 找不到 `gz_ros2_control-system`：source `~/res2_ws/install/setup.bash`，确认源码工作区
+  与当前 ROS/Gazebo 版本一致。
+- `model://...` 无法解析：检查 `factory_model` 路径、模型目录和纹理文件。
+- 控制器存在但车不动：确认 controller active，且完整栈通过 Web/Nav2 进入
+  `cmd_vel_gate`；独立底层诊断必须持续发送 `TwistStamped`。
+- 传感器 gate 不放行：检查点云 frame/fields/形状/频率以及 IMU frame/频率，不要通过
+  放宽 launch 参数绕过 Profile 契约。
+- RTF 很低：确认 WSLg/GPU 加速可用，关闭重复 Gazebo/RViz 实例并清理孤儿进程。
+- WSL 报 FIFO 实时调度权限警告：当前测试环境允许；真实部署需配置实时权限。
+
+`core/simulation/spike/` 保留底层诊断资产，但不属于当前正式运行或验收路径。

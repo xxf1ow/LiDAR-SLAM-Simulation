@@ -12,6 +12,8 @@
 - 主机 MSOP：`3001`
 - 雷达端口：`3333`
 
+以下命令只用于驱动独立诊断；正式运行由 `system_bringup` 生成完整 Vanjee 参数并启动：
+
 ```bash
 cd core
 colcon build --packages-select vanjee_lidar_ros
@@ -27,3 +29,6 @@ SDK/msg 只存在于仓库根目录被忽略的 `.vanjee_lidar_sdk/`、
 在线查询得到的角度和 IMU 标定文件按雷达 IP、型号保存到
 `~/result/lidar_calibration/<lidar_address>/`。该目录与 LIO-SAM 地图同属
 `~/result/`，但独立于保存地图时会被删除重建的 `~/result/loam/`。
+
+完整栈的上行契约由 shared sensor gate 检查：点云 frame、字段、32×1200 总点数、频率、
+IMU frame/频率和消息新鲜度必须与所选 real Profile 一致。

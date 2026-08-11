@@ -31,20 +31,22 @@
   时钟；shared sensor gate 的频率、新鲜度、稳定窗口和功能 timeout 也只使用同一节点时钟。
   仿真暂停、低 RTF 或 `/clock` 冻结时保持等待，时钟恢复后继续。
 
-## 本机自查(无需 ROS/构建)
+## 快速 Python 回归
 ```bash
-pip install pyyaml
-python -m pytest core/bringup/system_bringup/test -q
+python3 -m pytest core/bringup/system_bringup/test -q
 ```
 
-## 本机:构建 + 测试 + 运行
+## WSL 构建、测试与运行
 前提:`core/` 在工作区;各下游包可建(robot_gz_bringup/fast_lio/gicp_localization/robot_navigation/lio_sam);先验图在 `~/result/GlobalMap.pcd`、2D 图在 `~/result/factory_map.yaml`(`pcd_to_occupancy` 生成)。
 
 ```bash
 cd core
+source /opt/ros/humble/setup.bash
+source ~/res2_ws/install/setup.bash
 colcon build --packages-select system_bringup
 source install/setup.bash
-colcon test --packages-select system_bringup && colcon test-result --verbose   # 一致性全过
+colcon test --packages-select system_bringup
+colcon test-result --all --verbose
 
 # 全栈启动。切 platform/mode 改源码 config/bringup.yaml 顶层两行，不用 rebuild。不带 arg:=
 ros2 launch system_bringup bringup.launch.py
@@ -151,11 +153,11 @@ echo $?
 ```bash
 mkdir -p ~/result/rosbag
 ros2 bag record \
-  -o ~/result/rosbag/vanjee_722_static_2026-07-31 \
+  -o ~/result/rosbag/vanjee_722_static_latest \
   /points_raw /imu/data /tf /tf_static
 
 # 约 30 秒后 Ctrl-C
-ros2 bag info ~/result/rosbag/vanjee_722_static_2026-07-31
+ros2 bag info ~/result/rosbag/vanjee_722_static_latest
 ```
 
 预期约 300 条 `/points_raw`、约 6000 条 `/imu/data`（以 `ros2 bag info` 实际值为准）。
@@ -183,7 +185,7 @@ bag 保留在 `~/result/rosbag/`，不提交 `.db3` 或 metadata；可用 `ros2 
   **`config/templates/*.yaml`**。共享模块由 sim/real 共用 template；adapter/Vanjee 按当前
   backend 选择，Profile 字段只覆盖编译器明确负责的值。
 - 尚未迁移的 FAST-LIO、GICP、LIO-SAM 参数仍在各自模块 YAML，由 `bringup.yaml` 选择；
-  后续章节再按既定边界迁移，不在第 3 节顺带调参。
+  后续迁移仍按既定所有权边界进行，不在运行说明中维护第二份参数。
 - 雷达设备协议和厂家标定仍归驱动/设备配置；Profile 维护跨模块需要共享的平台事实。
 
 > `bringup.yaml` 与 Profiles 是运行时源码事实，不复制到 install；launch 从已安装 package share
