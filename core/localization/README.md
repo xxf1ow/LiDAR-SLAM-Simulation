@@ -121,7 +121,9 @@ ros2 run tf2_ros tf2_echo camera_init body
 
 ## 排错
 
-- FAST-LIO 配置或类型缺失：确认补丁已 apply，使用 `--packages-up-to fast_lio` 构建依赖。
+- FAST-LIO 配置缺失：检查 runtime compiler 是否完成、manifest 的 `fast_lio_path`、
+  `fast_lio.generated.yaml` 是否存在，以及 source/install freshness；陈旧时重建相应包。
+- IMU QoS 异常：确认 `fast-lio2.patch` 已 apply，再使用 `--packages-up-to fast_lio` 构建依赖。
 - 没有里程计：检查 `/points_raw`、`/imu/data`、QoS、时钟和 frame。
 - small_gicp 找不到：确认 clone 路径、固定提交和 `libomp-dev`。
 - 先验图加载失败：确认 `~/result/GlobalMap.pcd` 存在且当前用户可读。

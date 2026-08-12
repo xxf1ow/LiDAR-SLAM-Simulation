@@ -83,7 +83,7 @@ launch/YAML 或下游包时，仍须先构建对应包。
 ### 真机几何参数
 
 真机尺寸只维护 `config/profiles/real.yaml`。启动 real Profile 时会在系统临时目录生成
-controller、Web UI、Nav2、Vanjee、sensor gate 和 effective report，并把同一 manifest 的
+controller、Web UI、Nav2、`fast_lio.generated.yaml`、Vanjee、sensor gate 和 effective report，并把同一 manifest 的
 几何传给 URDF 和由 `slam_stack` 发布的 `body → base_footprint` bridge；不会修改源码或
 install。以后复测尺寸只改该 Profile。
 
