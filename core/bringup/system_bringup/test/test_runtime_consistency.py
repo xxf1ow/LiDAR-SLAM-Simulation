@@ -222,6 +222,28 @@ def test_fast_lio_content_drift_is_reported(runtime_factory):
     assert any("fast_lio" in item and "scan_line" in item for item in failures)
 
 
+@pytest.mark.parametrize("value", [True, 16.0, 0, -1])
+def test_fast_lio_invalid_scan_lines_are_rejected_when_report_and_artifact_match(
+    runtime_factory, value
+):
+    repo_root, manifest = runtime_factory("real")
+    _mutate_yaml(
+        manifest["effective_profile_path"],
+        ("profile", "sensors", "lidar", "scan_lines"),
+        value,
+    )
+    _mutate_yaml(
+        manifest["fast_lio_path"],
+        ("/**", "ros__parameters", "preprocess", "scan_line"),
+        value,
+    )
+    manifest["robot_launch_arguments"]["lidar_scan_lines"] = str(value)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("scan_lines must be a positive integer" in item for item in failures)
+
+
 def test_fast_lio_body_bridge_drift_is_reported(runtime_factory):
     repo_root, manifest = runtime_factory("real")
     manifest["fast_lio_body_bridge_arguments"]["z"] = "0.0"

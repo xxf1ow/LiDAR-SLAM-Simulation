@@ -798,6 +798,19 @@ def test_fast_lio_renderer_rejects_invalid_effective_values(
         rcc._render_fast_lio(inputs["templates"]["fast_lio"], inputs["effective"])
 
 
+@pytest.mark.parametrize("value", [True, 16.0, 0, -1])
+def test_fast_lio_renderer_rejects_non_positive_strict_integer_scan_lines(
+    runtime_tree, value
+):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    _set_nested(
+        inputs["effective"], ("profile", "sensors", "lidar", "scan_lines"), value
+    )
+
+    with pytest.raises(ValueError, match="scan_lines must be a positive integer"):
+        rcc._render_fast_lio(inputs["templates"]["fast_lio"], inputs["effective"])
+
+
 def test_fast_lio_renderer_converts_xyzw_to_row_major_rotation(runtime_tree):
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
     relative = inputs["effective"]["derived"]["geometry"]["relative_transforms"][
@@ -1932,6 +1945,38 @@ def test_sensor_staged_reload_failure_precedes_all_replacements(
     monkeypatch.setattr(rcc.os, "replace", record_replace)
 
     with pytest.raises(ValueError, match="sensor staged drift"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert replaced == []
+    assert marker.read_bytes() == marker_before
+    assert _temporary_files(output) == []
+
+
+def test_fast_lio_staged_reload_failure_precedes_all_replacements(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    original_load = rcc._load_staged_yaml
+    original_replace = rcc.os.replace
+    replaced = []
+
+    def corrupt_fast_lio_load(path, label):
+        loaded = original_load(path, label)
+        if label == "fast_lio":
+            loaded["/**"]["ros__parameters"]["preprocess"]["scan_line"] = 0
+        return loaded
+
+    def record_replace(source, destination):
+        replaced.append(Path(destination).name)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(rcc, "_load_staged_yaml", corrupt_fast_lio_load)
+    monkeypatch.setattr(rcc.os, "replace", record_replace)
+
+    with pytest.raises(ValueError, match="generated fast_lio mismatch"):
         rcc.compile_runtime_configs(runtime_tree.config, output)
 
     assert replaced == []

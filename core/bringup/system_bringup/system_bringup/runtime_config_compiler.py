@@ -248,6 +248,13 @@ def _fast_lio_scan_rate(lidar):
     return int(value)
 
 
+def _fast_lio_scan_lines(lidar):
+    value = lidar["scan_lines"]
+    if type(value) is not int or value <= 0:
+        raise ValueError("FAST-LIO scan_lines must be a positive integer")
+    return value
+
+
 def _format_footprint(footprint):
     return json.dumps(footprint, ensure_ascii=False, separators=(", ", ": "))
 
@@ -495,7 +502,7 @@ def _render_fast_lio(template, effective):
         "imu_from_lidar"
     ]
     values = (
-        (("preprocess", "scan_line"), lidar["scan_lines"], int),
+        (("preprocess", "scan_line"), _fast_lio_scan_lines(lidar), int),
         (("preprocess", "scan_rate"), _fast_lio_scan_rate(lidar), int),
         (("preprocess", "timestamp_unit"), 0, int),
         (("mapping", "extrinsic_T"),
@@ -520,7 +527,7 @@ def _validate_fast_lio_generated(effective, fast_lio):
         "imu_from_lidar"
     ]
     expected = {
-        ("preprocess", "scan_line"): lidar["scan_lines"],
+        ("preprocess", "scan_line"): _fast_lio_scan_lines(lidar),
         ("preprocess", "scan_rate"): _fast_lio_scan_rate(lidar),
         ("preprocess", "timestamp_unit"): 0,
         ("mapping", "extrinsic_T"): _finite_float_list(
@@ -929,6 +936,9 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
             reloaded["controllers"],
             reloaded["web_ui"],
             reloaded["nav2"],
+        )
+        _validate_fast_lio_generated(
+            reloaded["effective_profile"], reloaded["fast_lio"]
         )
         _validate_sensor_generated_configs(
             inputs["platform"],

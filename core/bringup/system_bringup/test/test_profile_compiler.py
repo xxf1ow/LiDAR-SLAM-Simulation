@@ -147,6 +147,39 @@ def test_relative_transform_handles_pure_rotation(tmp_path):
     )
 
 
+def test_relative_transform_noncommuting_mount_rotations_have_expected_pose_and_matrix(
+    tmp_path,
+):
+    transforms = _effective_with_mounts(
+        tmp_path,
+        {"x": 1.0, "y": 2.0, "z": 3.0, "roll": 0.0,
+         "pitch": 0.0, "yaw": math.pi / 2.0},
+        {"x": 4.0, "y": 6.0, "z": 8.0, "roll": math.pi / 2.0,
+         "pitch": 0.0, "yaw": 0.0},
+    )
+    quaternion = transforms["imu_from_lidar"]["rotation_xyzw"]
+    qx, qy, qz, qw = quaternion
+    row_major_matrix = [
+        1.0 - 2.0 * (qy * qy + qz * qz),
+        2.0 * (qx * qy - qz * qw),
+        2.0 * (qx * qz + qy * qw),
+        2.0 * (qx * qy + qz * qw),
+        1.0 - 2.0 * (qx * qx + qz * qz),
+        2.0 * (qy * qz - qx * qw),
+        2.0 * (qx * qz - qy * qw),
+        2.0 * (qy * qz + qx * qw),
+        1.0 - 2.0 * (qx * qx + qy * qy),
+    ]
+
+    assert quaternion == pytest.approx([-0.5, 0.5, 0.5, 0.5], abs=1e-12)
+    assert transforms["imu_from_lidar"]["translation"] == pytest.approx(
+        [-3.0, -5.0, 4.0], abs=1e-12
+    )
+    assert row_major_matrix == pytest.approx(
+        [0.0, -1.0, 0.0, 0.0, 0.0, 1.0, -1.0, 0.0, 0.0], abs=1e-12
+    )
+
+
 def test_load_bringup_context_returns_source_config_and_selection(tmp_path):
     config = _selection(tmp_path, "sim")
 
