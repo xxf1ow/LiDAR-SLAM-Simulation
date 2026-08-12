@@ -114,6 +114,13 @@ def _node_call(function, package, executable):
     )
 
 
+def _assert_clock_parameter(call, variable):
+    parameters = _keyword(call, "parameters")
+    assert isinstance(parameters, ast.List) and len(parameters.elts) == 1
+    clock = _dict_value(parameters.elts[0], "use_sim_time")
+    assert isinstance(clock, ast.Name) and clock.id == variable
+
+
 def _include_arguments(function, package, launch_file):
     include = next(
         call
@@ -135,6 +142,18 @@ def _platform_branch(function, platform):
         and isinstance(node.test.left, ast.Name)
         and node.test.left.id == "platform"
         and any(_string(comparator) == platform for comparator in node.test.comparators)
+    )
+
+
+def _mode_branch(function, mode):
+    return next(
+        node
+        for node in function.body
+        if isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "mode"
+        and any(_string(comparator) == mode for comparator in node.test.comparators)
     )
 
 
@@ -201,70 +220,110 @@ def test_navigation_map_server_uses_generated_params_with_only_map_override():
     assert isinstance(map_yaml, ast.Name) and map_yaml.id == "map_yaml"
 
 
-def test_navigation_accepts_complete_body_weld_transform():
-    tree = _tree(NAVIGATION)
-    assert {
-        _string(call.args[0])
-        for call in _calls(tree, "DeclareLaunchArgument")
-        if call.args
-        and _string(call.args[0]).startswith("weld_")
-    } == {
-        "weld_x", "weld_y", "weld_z",
-        "weld_qx", "weld_qy", "weld_qz", "weld_qw",
-    }
+def test_slam_stack_splits_generated_fast_lio_path_for_upstream_launch():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    navigation = _mode_branch(function, "navigation")
+    config_path = _assigned_value(function, "fast_lio_config_path")
+    config_file = _assigned_value(function, "fast_lio_config_file")
+    assert ast.unparse(config_path) == "os.path.dirname(fast_lio_params_file)"
+    assert ast.unparse(config_file) == "os.path.basename(fast_lio_params_file)"
+    validation = next(
+        node
+        for node in navigation.body
+        if isinstance(node, ast.If)
+        and "os.path.isabs" in ast.unparse(node.test)
+    )
+    assert ast.unparse(validation.test) == (
+        "not os.path.isabs(fast_lio_params_file) or not fast_lio_config_file"
+    )
+    error = next(node for node in validation.body if isinstance(node, ast.Raise))
+    assert _string(error.exc.args[0]) == (
+        "fast_lio_params_file must be an absolute generated YAML path"
+    )
+    arguments = _include_arguments(function, "fast_lio", "launch/mapping.launch.py")
+    assert isinstance(_dict_value(arguments, "config_path"), ast.Name)
+    assert _dict_value(arguments, "config_path").id == "fast_lio_config_path"
+    assert isinstance(_dict_value(arguments, "config_file"), ast.Name)
+    assert _dict_value(arguments, "config_file").id == "fast_lio_config_file"
+    assert isinstance(_dict_value(arguments, "use_sim_time"), ast.Name)
+    assert _dict_value(arguments, "use_sim_time").id == "use_sim"
+    assert _string(_dict_value(arguments, "rviz")) == "false"
 
-    function = _function(tree, "generate_launch_description")
-    publisher = _node_call(function, "tf2_ros", "static_transform_publisher")
+
+def test_slam_stack_navigation_owns_one_manifest_driven_body_bridge():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    navigation = _mode_branch(function, "navigation")
+    publishers = [
+        call
+        for call in _calls(navigation, "Node")
+        if _string(_keyword(call, "package")) == "tf2_ros"
+        and _string(_keyword(call, "executable")) == "static_transform_publisher"
+    ]
+    assert len(publishers) == 1
+    publisher = publishers[0]
+    assert _string(_keyword(publisher, "name")) == (
+        "fast_lio_body_to_base_footprint"
+    )
     arguments = _keyword(publisher, "arguments")
-    assert isinstance(arguments, ast.List)
+    assert {_string(item) for item in arguments.elts if _string(item)} >= {
+        "--x", "--y", "--z", "--qx", "--qy", "--qz", "--qw",
+        "--frame-id", "body", "--child-frame-id", "base_footprint",
+    }
     values = {
         _string(arguments.elts[index]): arguments.elts[index + 1]
         for index in range(0, 14, 2)
     }
-    for option, variable in (
-        ("--x", "weld_x"), ("--y", "weld_y"), ("--z", "weld_z"),
-        ("--qx", "weld_qx"), ("--qy", "weld_qy"),
-        ("--qz", "weld_qz"), ("--qw", "weld_qw"),
+    for option, name in (
+        ("--x", "x"), ("--y", "y"), ("--z", "z"),
+        ("--qx", "qx"), ("--qy", "qy"), ("--qz", "qz"), ("--qw", "qw"),
     ):
-        assert isinstance(values[option], ast.Name)
-        assert values[option].id == variable
+        assert _subscript_path(values[option]) == ("bridge", (name,))
+    _assert_clock_parameter(publisher, "use_sim")
+    result = next(
+        node.value for node in navigation.body if isinstance(node, ast.Return)
+    )
+    first_term = _add_terms(result)[0]
+    assert isinstance(first_term, ast.List)
+    assert isinstance(first_term.elts[1], ast.Name)
+    assert first_term.elts[1].id == "body_bridge"
+    assert isinstance(first_term.elts[2], ast.Name)
+    assert first_term.elts[2].id == "fast_lio"
 
 
-def test_slam_stack_forwards_only_quaternion_body_weld_arguments():
+def test_slam_stack_mapping_has_no_body_bridge():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    mapping = _mode_branch(function, "mapping")
+    assert not any(
+        _string(_keyword(call, "package")) == "tf2_ros"
+        for call in _calls(mapping, "Node")
+    )
+
+
+def test_slam_stack_declares_only_generated_fast_lio_body_bridge_interface():
     tree = _tree(SLAM_STACK)
-    declared_weld = {
+    declared = {
         _string(call.args[0])
         for call in _calls(tree, "DeclareLaunchArgument")
         if call.args
-        and _string(call.args[0]).startswith("weld_")
     }
-    assert declared_weld == {
-        "weld_x", "weld_y", "weld_z",
-        "weld_qx", "weld_qy", "weld_qz", "weld_qw",
+    fast_lio_arguments = {
+        name
+        for name in declared
+        if name == "fast_lio_params_file"
+        or (name and name.startswith("fast_lio_body_bridge_"))
     }
-    assert {
-        name: _declaration_default(tree, name)
-        for name in declared_weld
-    } == {
-        "weld_x": "0.0", "weld_y": "0.0", "weld_z": "-0.5560",
-        "weld_qx": "0.0", "weld_qy": "0.0", "weld_qz": "0.0", "weld_qw": "1.0",
+    assert fast_lio_arguments == {
+        "fast_lio_params_file",
+        *{
+            f"fast_lio_body_bridge_{name}"
+            for name in ("x", "y", "z", "qx", "qy", "qz", "qw")
+        },
     }
-
-    function = _function(tree, "_stack")
-    weld = _assigned_value(function, "weld")
-    assert isinstance(weld, ast.DictComp)
-    assert {
-        _string(item)
-        for item in weld.generators[0].iter.elts
-    } == declared_weld
-
-    navigation = _include_arguments(
-        function, "robot_navigation", "launch/navigation.launch.py"
-    )
-    assert any(
-        key is None and isinstance(value, ast.Name) and value.id == "weld"
-        for key, value in zip(navigation.keys, navigation.values)
-    )
+    assert "fast_lio_config" not in declared
+    assert not any(name and name.startswith("weld_") for name in declared)
+    for name in fast_lio_arguments:
+        declaration = _declaration(tree, name)
+        assert not any(keyword.arg == "default_value" for keyword in declaration.keywords)
 
 
 def test_robot_launch_accepts_runtime_geometry_and_controller_file():
@@ -633,7 +692,6 @@ def test_formal_bringup_failures_construct_no_actions(
     ("mode", "package", "filename", "component"),
     (
         ("mapping", "lio_sam", "params.yaml", "LIO-SAM"),
-        ("navigation", "fast_lio", "gazebo_velodyne.yaml", "FAST-LIO"),
     ),
 )
 def test_missing_selected_slam_config_fails_before_action_construction(
@@ -693,6 +751,19 @@ def test_missing_selected_slam_config_fails_before_action_construction(
     assert actions == []
 
 
+def test_navigation_generated_fast_lio_skips_package_config_preflight():
+    function = _function(_tree(BRINGUP), "_bringup")
+    mapping = _mode_branch(function, "mapping")
+    preflight_calls = _calls(function, "require_runtime_config_file")
+    assert len(preflight_calls) == 1
+    assert preflight_calls == _calls(mapping, "require_runtime_config_file")
+    assert not any(
+        _string(call.args[0]) == "fast_lio"
+        for call in _calls(function, "_pkg_config")
+        if call.args
+    )
+
+
 def test_bringup_constructs_one_shared_control_and_slam_layer_before_branching():
     function = _function(_tree(BRINGUP), "_bringup")
     sim = _platform_branch(function, "sim")
@@ -741,11 +812,17 @@ def test_shared_control_consumes_only_manifest_clock_and_web_ui_file():
     assert _subscript_path(config_path.args[0]) == ("manifest", ("web_ui_path",))
 
 
-def test_shared_slam_consumes_manifest_paths_clock_profile_and_quaternion_weld():
+def test_formal_bringup_passes_only_manifest_fast_lio_interfaces():
     function = _function(_tree(BRINGUP), "_bringup")
+    assert _subscript_path(_assigned_value(function, "bridge")) == (
+        "manifest", ("fast_lio_body_bridge_arguments",)
+    )
     arguments = _include_arguments(
         function, "system_bringup", "launch/slam_stack.launch.py"
     )
+    params = _dict_value(arguments, "fast_lio_params_file")
+    assert isinstance(params, ast.Call) and params.func.id == "str"
+    assert _subscript_path(params.args[0]) == ("manifest", ("fast_lio_path",))
     assert _string(_dict_value(arguments, "cmd_vel_output_topic")) == "/cmd_vel_auto"
     assert _subscript_path(_dict_value(arguments, "mode")) == ("manifest", ("mode",))
     nav2 = _dict_value(arguments, "nav2_params_file")
@@ -759,13 +836,27 @@ def test_shared_slam_consumes_manifest_paths_clock_profile_and_quaternion_weld()
         assert isinstance(value, ast.Call) and value.func.id == "_pkg_config"
         assert _string(value.args[0]) == package
         assert _subscript_path(value.args[1]) == ("profile", (component, "config"))
-    assert _subscript_path(_dict_value(arguments, "fast_lio_config")) == (
-        "profile", ("fast_lio", "config")
+    bridge_arguments = next(
+        value
+        for key, value in zip(arguments.keys, arguments.values)
+        if key is None and isinstance(value, ast.DictComp)
     )
-    for name in ("x", "y", "z", "qx", "qy", "qz", "qw"):
-        assert _subscript_path(_dict_value(arguments, f"weld_{name}")) == (
-            "weld", (name,)
-        )
+    assert ast.unparse(bridge_arguments.key) == "f'fast_lio_body_bridge_{name}'"
+    assert _subscript_path(bridge_arguments.value) == ("bridge", ("name",))
+    assert {
+        _string(item) for item in bridge_arguments.generators[0].iter.elts
+    } == {"x", "y", "z", "qx", "qy", "qz", "qw"}
+    assert not any(
+        _string(key) in {
+            "fast_lio_config",
+            *{
+                f"weld_{name}"
+                for name in ("x", "y", "z", "qx", "qy", "qz", "qw")
+            },
+        }
+        for key in arguments.keys
+        if key is not None
+    )
 
 
 def _assert_manifest_robot_interface(arguments):
@@ -951,10 +1042,11 @@ def test_real_branch_does_not_publish_duplicate_lidar_static_tf():
     )
 
 
-def test_manifest_exec_depends_on_control_packages():
+def test_manifest_exec_depends_on_control_packages_and_body_bridge():
     manifest = ET.parse(MANIFEST)
     dependencies = {
         element.text for element in manifest.getroot().findall("exec_depend")
     }
     assert {"cmd_vel_gate", "robot_web_ui"} <= dependencies
     assert {"robot_bringup", "vanjee_lidar_ros", "rclpy", "sensor_msgs"} <= dependencies
+    assert "tf2_ros" in dependencies

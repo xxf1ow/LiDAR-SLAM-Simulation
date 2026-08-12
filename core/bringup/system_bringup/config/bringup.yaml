@@ -57,8 +57,6 @@ slam_stack:
   sim:
     lio_sam:
       config: params.yaml
-    fast_lio:
-      config: gazebo_velodyne.yaml
     gicp_localization:
       config: gicp_localization.yaml
       prior_map_path: ~/result/GlobalMap.pcd     # 先验图(save_map.sh 落 ~/result)
@@ -68,8 +66,6 @@ slam_stack:
   real:
     lio_sam:
       config: params_real.yaml
-    fast_lio:
-      config: vanjee_722.yaml
     gicp_localization:
       config: gicp_localization_real.yaml
       prior_map_path: ~/result/GlobalMap.pcd

@@ -1,8 +1,12 @@
 import ast
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 
 LAUNCH = Path(__file__).resolve().parents[1] / "launch" / "navigation.launch.py"
+ROOT = Path(__file__).resolve().parents[4]
+SYSTEM_MANIFEST = ROOT / "core/bringup/system_bringup/package.xml"
+NAVIGATION_MANIFEST = ROOT / "core/navigation/robot_navigation/package.xml"
 TEMPLATE_PACKAGES = {
     "nav2_map_server",
     "nav2_planner",
@@ -61,15 +65,6 @@ def _node(function, package):
     return next(call for call in _node_calls(function) if _node_package(call) == package)
 
 
-def _declaration_default(tree, name):
-    declaration = next(
-        call
-        for call in _calls(tree, "DeclareLaunchArgument")
-        if call.args and _string(call.args[0]) == name
-    )
-    return _keyword(declaration, "default_value")
-
-
 def _assert_clock_parameter(call):
     parameters = _keyword(call, "parameters")
     assert isinstance(parameters, ast.List)
@@ -81,40 +76,32 @@ def _assert_clock_parameter(call):
     assert clock.id == "use_sim_time"
 
 
-def test_navigation_exposes_only_quaternion_weld_arguments():
+def test_navigation_has_no_fast_lio_frame_contract():
     tree = _tree()
     declared = {
         _string(call.args[0])
         for call in _calls(tree, "DeclareLaunchArgument")
-        if call.args and _string(call.args[0]).startswith("weld_")
+        if call.args
     }
-    assert declared == {
-        "weld_x", "weld_y", "weld_z",
-        "weld_qx", "weld_qy", "weld_qz", "weld_qw",
-    }
-    for name, expected in {
-        "weld_x": "0.0", "weld_y": "0.0",
-        "weld_qx": "0.0", "weld_qy": "0.0", "weld_qz": "0.0", "weld_qw": "1.0",
-    }.items():
-        assert _string(_declaration_default(tree, name)) == expected
-    assert ast.unparse(_declaration_default(tree, "weld_z")) == "f'{_WELD_Z:.4f}'"
-
+    assert not any(name and name.startswith("weld_") for name in declared)
     function = _function(tree, "generate_launch_description")
-    publisher = _node(function, "tf2_ros")
-    arguments = _keyword(publisher, "arguments")
-    assert isinstance(arguments, ast.List)
-    transform = {
-        _string(arguments.elts[index]): arguments.elts[index + 1]
-        for index in range(0, 14, 2)
+    assert not any(
+        _node_package(call) == "tf2_ros"
+        for call in _node_calls(function)
+    )
+
+
+def test_frame_contract_dependency_belongs_only_to_system_bringup():
+    system_dependencies = {
+        element.text
+        for element in ET.parse(SYSTEM_MANIFEST).getroot().findall("exec_depend")
     }
-    assert set(transform) == {"--x", "--y", "--z", "--qx", "--qy", "--qz", "--qw"}
-    for option, variable in (
-        ("--x", "weld_x"), ("--y", "weld_y"), ("--z", "weld_z"),
-        ("--qx", "weld_qx"), ("--qy", "weld_qy"),
-        ("--qz", "weld_qz"), ("--qw", "weld_qw"),
-    ):
-        assert isinstance(transform[option], ast.Name)
-        assert transform[option].id == variable
+    navigation_dependencies = {
+        element.text
+        for element in ET.parse(NAVIGATION_MANIFEST).getroot().findall("exec_depend")
+    }
+    assert "tf2_ros" in system_dependencies
+    assert "tf2_ros" not in navigation_dependencies
 
 
 def test_nav2_template_nodes_load_only_generated_params_file():
@@ -145,7 +132,7 @@ def test_nav2_template_nodes_load_only_generated_params_file():
 
 def test_non_template_nodes_share_launch_clock_and_command_route():
     function = _function(_tree(), "generate_launch_description")
-    for package in ("tf2_ros", "robot_navigation", "nav2_lifecycle_manager", "rviz2"):
+    for package in ("robot_navigation", "nav2_lifecycle_manager", "rviz2"):
         _assert_clock_parameter(_node(function, package))
 
     stamper_parameters = _keyword(_node(function, "robot_navigation"), "parameters").elts[0]

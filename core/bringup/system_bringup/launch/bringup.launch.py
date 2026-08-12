@@ -119,13 +119,8 @@ def _bringup(context, *args, **kwargs):
             _pkg_config("lio_sam", profile["lio_sam"]["config"]),
             "LIO-SAM",
         )
-    else:
-        require_runtime_config_file(
-            _pkg_config("fast_lio", profile["fast_lio"]["config"]),
-            "FAST-LIO",
-        )
     geometry = manifest["robot_launch_arguments"]
-    weld = manifest["compatibility_body_weld_arguments"]
+    bridge = manifest["fast_lio_body_bridge_arguments"]
     use_sim = "true" if use_sim_time else "false"
     settling = stack_cfg["settling"]
     flow = lambda message: LogInfo(
@@ -155,7 +150,7 @@ def _bringup(context, *args, **kwargs):
             "lio_sam_params_file": _pkg_config(
                 "lio_sam", profile["lio_sam"]["config"]
             ),
-            "fast_lio_config": profile["fast_lio"]["config"],
+            "fast_lio_params_file": str(manifest["fast_lio_path"]),
             "gicp_config_file": _pkg_config(
                 "gicp_localization", profile["gicp_localization"]["config"]
             ),
@@ -164,13 +159,10 @@ def _bringup(context, *args, **kwargs):
             "nav_map": profile["robot_navigation"]["map"],
             "cmd_vel_output_topic": "/cmd_vel_auto",
             "settling": str(settling),
-            "weld_x": weld["x"],
-            "weld_y": weld["y"],
-            "weld_z": weld["z"],
-            "weld_qx": weld["qx"],
-            "weld_qy": weld["qy"],
-            "weld_qz": weld["qz"],
-            "weld_qw": weld["qw"],
+            **{
+                f"fast_lio_body_bridge_{name}": bridge[name]
+                for name in ("x", "y", "z", "qx", "qy", "qz", "qw")
+            },
         },
     )
 
