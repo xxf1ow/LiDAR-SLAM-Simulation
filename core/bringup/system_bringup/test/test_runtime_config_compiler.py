@@ -1,6 +1,7 @@
 import shutil
 from copy import deepcopy
 import json
+import math
 from math import cos, degrees, sin, sqrt
 from pathlib import Path
 import subprocess
@@ -260,10 +261,54 @@ def test_runtime_inputs_return_validated_template_mappings(runtime_tree):
 
 
 def test_shared_templates_are_complete_mappings():
-    for name in ("robot_controllers.yaml", "robot_web_ui.yaml", "nav2.yaml"):
+    for name in (
+        "robot_controllers.yaml",
+        "robot_web_ui.yaml",
+        "nav2.yaml",
+        "fast_lio.yaml",
+    ):
         data = _load_yaml(TEMPLATE_DIR / name)
         assert isinstance(data, dict)
         assert data
+
+
+def test_fast_lio_template_is_complete_and_preserves_confirmed_policy():
+    params = _load_yaml(TEMPLATE_DIR / "fast_lio.yaml")["/**"]["ros__parameters"]
+    assert set(params) == {
+        "feature_extract_enable", "point_filter_num", "max_iteration",
+        "filter_size_corner", "filter_size_surf", "filter_size_map",
+        "cube_side_length", "runtime_pos_log_enable", "map_file_path",
+        "common", "preprocess", "mapping", "publish", "pcd_save",
+    }
+    assert params["common"] == {
+        "lid_topic": "/points_raw", "imu_topic": "/imu/data",
+        "time_sync_en": False, "time_offset_lidar_to_imu": 0.0,
+    }
+    assert params["preprocess"] == {
+        "lidar_type": 2, "scan_line": 16, "scan_rate": 10,
+        "timestamp_unit": 0, "blind": 0.3,
+    }
+    assert params["mapping"] == {
+        "acc_cov": 0.1, "gyr_cov": 0.1, "b_acc_cov": 0.0001,
+        "b_gyr_cov": 0.0001, "fov_degree": 360.0, "det_range": 100.0,
+        "extrinsic_est_en": True, "extrinsic_T": [0.0, 0.0, 0.0],
+        "extrinsic_R": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+    }
+    assert params["publish"] == {
+        "path_en": False, "effect_map_en": False, "map_en": False,
+        "scan_publish_en": True, "dense_publish_en": True,
+        "scan_bodyframe_pub_en": True,
+    }
+    assert params["pcd_save"] == {"pcd_save_en": False, "interval": -1}
+    assert params["feature_extract_enable"] is False
+    assert params["point_filter_num"] == 4
+    assert params["max_iteration"] == 3
+    assert params["filter_size_corner"] == 0.5
+    assert params["filter_size_surf"] == 0.5
+    assert params["filter_size_map"] == 0.5
+    assert params["cube_side_length"] == 1000.0
+    assert params["runtime_pos_log_enable"] is False
+    assert params["map_file_path"] == ""
 
 
 def test_controller_template_contains_all_owned_target_leaves():
@@ -655,6 +700,139 @@ def test_renderer_does_not_mutate_loaded_templates(runtime_tree):
     rcc._render_runtime_configs(inputs)
 
     assert inputs["templates"] == original_templates
+
+
+@pytest.mark.parametrize(
+    "platform,scan_line",
+    [("sim", 16), ("real", 32)],
+)
+def test_fast_lio_renderer_maps_platform_scan_and_time_contract(
+    runtime_tree, platform, scan_line
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    params = rcc._render_fast_lio(
+        inputs["templates"]["fast_lio"], inputs["effective"]
+    )["/**"]["ros__parameters"]
+    assert params["preprocess"] == {
+        "lidar_type": 2, "scan_line": scan_line, "scan_rate": 10,
+        "timestamp_unit": 0, "blind": 0.3,
+    }
+    assert params["mapping"]["extrinsic_T"] == [0.0, 0.0, 0.0]
+    assert params["mapping"]["extrinsic_R"] == [
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+    ]
+    assert "use_sim_time" not in params
+    assert "min_range" not in params and "max_range" not in params
+    assert params["mapping"]["det_range"] == 100.0
+
+
+def test_fast_lio_renderer_changes_only_the_five_whitelisted_leaves(runtime_tree):
+    runtime_tree.set_bringup_value("platform", "real")
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    source = inputs["templates"]["fast_lio"]
+    before = deepcopy(source)
+    rendered = rcc._render_fast_lio(source, inputs["effective"])
+    expected = deepcopy(before)
+    expected_params = expected["/**"]["ros__parameters"]
+    actual_params = rendered["/**"]["ros__parameters"]
+    for section, key in (
+        ("preprocess", "scan_line"),
+        ("preprocess", "scan_rate"),
+        ("preprocess", "timestamp_unit"),
+        ("mapping", "extrinsic_T"),
+        ("mapping", "extrinsic_R"),
+    ):
+        expected_params[section][key] = actual_params[section][key]
+    assert rendered == expected
+    assert source == before
+
+
+FAST_LIO_RENDER_PATHS = (
+    ("/**", "ros__parameters", "preprocess", "scan_line"),
+    ("/**", "ros__parameters", "preprocess", "scan_rate"),
+    ("/**", "ros__parameters", "preprocess", "timestamp_unit"),
+    ("/**", "ros__parameters", "mapping", "extrinsic_T"),
+    ("/**", "ros__parameters", "mapping", "extrinsic_R"),
+)
+
+
+@pytest.mark.parametrize("path", FAST_LIO_RENDER_PATHS)
+@pytest.mark.parametrize("mutation", ["missing_parent", "missing_leaf", "wrong_type"])
+def test_fast_lio_renderer_rejects_template_target_drift(
+    runtime_tree, path, mutation
+):
+    runtime_tree.mutate_template("fast_lio", path, mutation)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    with pytest.raises(ValueError, match="fast_lio template"):
+        rcc._render_fast_lio(inputs["templates"]["fast_lio"], inputs["effective"])
+
+
+def _set_nested(mapping, path, value):
+    node = mapping
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+
+
+@pytest.mark.parametrize(
+    "path,value,error",
+    [
+        (("profile", "sensors", "lidar", "scan_rate_hz"), 10.5, "integer"),
+        (("profile", "sensors", "lidar", "point_time_unit"),
+         "milliseconds", "seconds"),
+        (("derived", "geometry", "relative_transforms", "imu_from_lidar",
+          "translation"), [True, 0.0, 0.0], "finite"),
+        (("derived", "geometry", "relative_transforms", "imu_from_lidar",
+          "translation"), [float("nan"), 0.0, 0.0], "finite"),
+        (("derived", "geometry", "relative_transforms", "imu_from_lidar",
+          "rotation_xyzw"), [0.0, 0.0, 0.0, 2.0], "normalized"),
+    ],
+)
+def test_fast_lio_renderer_rejects_invalid_effective_values(
+    runtime_tree, path, value, error
+):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    _set_nested(inputs["effective"], path, value)
+    with pytest.raises(ValueError, match=error):
+        rcc._render_fast_lio(inputs["templates"]["fast_lio"], inputs["effective"])
+
+
+def test_fast_lio_renderer_converts_xyzw_to_row_major_rotation(runtime_tree):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    relative = inputs["effective"]["derived"]["geometry"]["relative_transforms"][
+        "imu_from_lidar"
+    ]
+    relative["translation"] = [1.0, 2.0, 3.0]
+    relative["rotation_xyzw"] = [
+        0.0, 0.0, math.sin(math.pi / 4.0), math.cos(math.pi / 4.0)
+    ]
+    params = rcc._render_fast_lio(
+        inputs["templates"]["fast_lio"], inputs["effective"]
+    )["/**"]["ros__parameters"]
+    assert params["mapping"]["extrinsic_T"] == [1.0, 2.0, 3.0]
+    assert params["mapping"]["extrinsic_R"] == pytest.approx(
+        [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0], abs=1e-12
+    )
+
+
+@pytest.mark.parametrize(
+    "matrix,error",
+    [
+        ([2.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], "orthonormal"),
+        ([-1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0], "determinant"),
+    ],
+)
+def test_fast_lio_validator_rejects_invalid_rotation_matrix(
+    runtime_tree, matrix, error
+):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    rendered = rcc._render_fast_lio(
+        inputs["templates"]["fast_lio"], inputs["effective"]
+    )
+    rendered["/**"]["ros__parameters"]["mapping"]["extrinsic_R"] = matrix
+    with pytest.raises(ValueError, match=error):
+        rcc._validate_fast_lio_generated(inputs["effective"], rendered)
 
 
 @pytest.mark.parametrize(

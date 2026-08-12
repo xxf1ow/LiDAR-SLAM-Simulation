@@ -22,7 +22,9 @@ TEMPLATE_FILENAMES = {
     "controllers": "robot_controllers.yaml",
     "web_ui": "robot_web_ui.yaml",
     "nav2": "nav2.yaml",
+    "fast_lio": "fast_lio.yaml",
 }
+FAST_LIO_ROOT = ("/**", "ros__parameters")
 SENSOR_TEMPLATE_FILENAMES = {
     "sim": {
         "lidar_adapter": "lidar_adapter.yaml",
@@ -156,12 +158,10 @@ def _set_existing(mapping, path, value, expected_type):
     if not isinstance(node, dict) or leaf not in node:
         raise ValueError(f"template target missing: {dotted}")
     current = node[leaf]
-    if expected_type is bool:
-        valid = isinstance(current, bool)
-    elif expected_type is str:
-        valid = isinstance(current, str)
+    if expected_type is float:
+        valid = type(current) is float
     else:
-        valid = isinstance(current, (int, float)) and not isinstance(current, bool)
+        valid = type(current) is expected_type
     if not valid:
         raise ValueError(f"template target has wrong type: {dotted}")
     node[leaf] = value
@@ -186,6 +186,65 @@ def _get_existing(mapping, path):
 
 def _same_typed_value(actual, expected):
     return type(actual) is type(expected) and actual == expected
+
+
+def _finite_float_list(value, length, label):
+    if not isinstance(value, list) or len(value) != length:
+        raise ValueError(f"{label} must be a {length}-element list")
+    if any(
+        isinstance(item, bool)
+        or not isinstance(item, (int, float))
+        or not isfinite(item)
+        for item in value
+    ):
+        raise ValueError(f"{label} must contain finite numbers")
+    return [float(item) for item in value]
+
+
+def _rotation_matrix_from_xyzw(value):
+    qx, qy, qz, qw = _finite_float_list(value, 4, "imu_from_lidar.rotation_xyzw")
+    norm_squared = qx*qx + qy*qy + qz*qz + qw*qw
+    if abs(norm_squared - 1.0) > 1e-9:
+        raise ValueError("imu_from_lidar.rotation_xyzw must be normalized")
+    return [
+        1.0 - 2.0*(qy*qy + qz*qz), 2.0*(qx*qy - qz*qw),
+        2.0*(qx*qz + qy*qw), 2.0*(qx*qy + qz*qw),
+        1.0 - 2.0*(qx*qx + qz*qz), 2.0*(qy*qz - qx*qw),
+        2.0*(qx*qz - qy*qw), 2.0*(qy*qz + qx*qw),
+        1.0 - 2.0*(qx*qx + qy*qy),
+    ]
+
+
+def _validate_rotation_matrix(values):
+    values = _finite_float_list(values, 9, "generated fast_lio extrinsic_R")
+    matrix = [values[0:3], values[3:6], values[6:9]]
+    for row in range(3):
+        for column in range(3):
+            dot = sum(matrix[index][row] * matrix[index][column]
+                      for index in range(3))
+            expected = 1.0 if row == column else 0.0
+            if abs(dot - expected) > 1e-9:
+                raise ValueError("generated fast_lio extrinsic_R is not orthonormal")
+    determinant = (
+        matrix[0][0] * (matrix[1][1]*matrix[2][2] - matrix[1][2]*matrix[2][1])
+        - matrix[0][1] * (matrix[1][0]*matrix[2][2] - matrix[1][2]*matrix[2][0])
+        + matrix[0][2] * (matrix[1][0]*matrix[2][1] - matrix[1][1]*matrix[2][0])
+    )
+    if abs(determinant - 1.0) > 1e-9:
+        raise ValueError("generated fast_lio extrinsic_R determinant must be 1")
+
+
+def _fast_lio_scan_rate(lidar):
+    value = lidar["scan_rate_hz"]
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not isfinite(value)
+        or value <= 0
+        or not float(value).is_integer()
+    ):
+        raise ValueError("FAST-LIO scan_rate_hz must be a finite positive integer value")
+    return int(value)
 
 
 def _format_footprint(footprint):
@@ -404,6 +463,75 @@ def _render_nav2(template, effective):
             "nav2", nav2, path, effective["derived"]["use_sim_time"], bool
         )
     return nav2
+
+
+def _render_fast_lio(template, effective):
+    fast_lio = deepcopy(template)
+    lidar = effective["profile"]["sensors"]["lidar"]
+    if lidar["point_time_unit"] != "seconds":
+        raise ValueError("FAST-LIO supports only point_time_unit seconds")
+
+    relative = effective["derived"]["geometry"]["relative_transforms"][
+        "imu_from_lidar"
+    ]
+    values = (
+        (("preprocess", "scan_line"), lidar["scan_lines"], int),
+        (("preprocess", "scan_rate"), _fast_lio_scan_rate(lidar), int),
+        (("preprocess", "timestamp_unit"), 0, int),
+        (("mapping", "extrinsic_T"),
+         _finite_float_list(relative["translation"], 3, "imu_from_lidar.translation"),
+         list),
+        (("mapping", "extrinsic_R"),
+         _rotation_matrix_from_xyzw(relative["rotation_xyzw"]), list),
+    )
+    for suffix, value, expected_type in values:
+        _set_template_existing(
+            "fast_lio", fast_lio, FAST_LIO_ROOT + suffix, value, expected_type
+        )
+    _validate_fast_lio_generated(effective, fast_lio)
+    return fast_lio
+
+
+def _validate_fast_lio_generated(effective, fast_lio):
+    lidar = effective["profile"]["sensors"]["lidar"]
+    if lidar["point_time_unit"] != "seconds":
+        raise ValueError("FAST-LIO supports only point_time_unit seconds")
+    relative = effective["derived"]["geometry"]["relative_transforms"][
+        "imu_from_lidar"
+    ]
+    expected = {
+        ("preprocess", "scan_line"): lidar["scan_lines"],
+        ("preprocess", "scan_rate"): _fast_lio_scan_rate(lidar),
+        ("preprocess", "timestamp_unit"): 0,
+        ("mapping", "extrinsic_T"): _finite_float_list(
+            relative["translation"], 3, "imu_from_lidar.translation"
+        ),
+        ("mapping", "extrinsic_R"): _rotation_matrix_from_xyzw(
+            relative["rotation_xyzw"]
+        ),
+        ("common", "lid_topic"): "/points_raw",
+        ("common", "imu_topic"): "/imu/data",
+        ("common", "time_sync_en"): False,
+        ("common", "time_offset_lidar_to_imu"): 0.0,
+        ("preprocess", "lidar_type"): 2,
+    }
+    _validate_rotation_matrix(
+        _get_existing(fast_lio, FAST_LIO_ROOT + ("mapping", "extrinsic_R"))
+    )
+    for suffix, expected_value in expected.items():
+        actual = _get_existing(fast_lio, FAST_LIO_ROOT + suffix)
+        if isinstance(expected_value, list):
+            valid = (
+                isinstance(actual, list)
+                and all(type(item) is float for item in actual)
+                and actual == expected_value
+            )
+        else:
+            valid = _same_typed_value(actual, expected_value)
+        if not valid:
+            raise ValueError(
+                f"generated fast_lio mismatch: {'.'.join(FAST_LIO_ROOT + suffix)}"
+            )
 
 
 def _render_lidar_adapter(template, effective):
@@ -663,14 +791,21 @@ def _validate_generated_configs(effective, controllers, web_ui, nav2):
 
 
 def _render_runtime_configs(inputs):
-    """Render and cross-check the three runtime modules without writing files."""
+    """Render and cross-check shared runtime modules without writing files."""
     effective = inputs["effective"]
     templates = inputs["templates"]
     controllers = _render_controller(templates["controllers"], effective)
     web_ui = _render_web_ui(templates["web_ui"], effective)
     nav2 = _render_nav2(templates["nav2"], effective)
+    fast_lio = _render_fast_lio(templates["fast_lio"], effective)
     _validate_generated_configs(effective, controllers, web_ui, nav2)
-    return {"controllers": controllers, "web_ui": web_ui, "nav2": nav2}
+    _validate_fast_lio_generated(effective, fast_lio)
+    return {
+        "controllers": controllers,
+        "web_ui": web_ui,
+        "nav2": nav2,
+        "fast_lio": fast_lio,
+    }
 
 
 def _prepare_output_dir(output_dir):
