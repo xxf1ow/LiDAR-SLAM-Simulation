@@ -1412,8 +1412,10 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
         "controllers_path",
         "web_ui_path",
         "nav2_path",
+        "fast_lio_path",
         *(f"{key}_path" for key in rcc.SENSOR_OUTPUT_FILENAMES[platform]),
         "robot_launch_arguments",
+        "fast_lio_body_bridge_arguments",
         "compatibility_body_weld_arguments",
     }
     assert manifest["bringup_config_path"] == runtime_tree.config.resolve()
@@ -1435,9 +1437,26 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
     assert manifest["controllers_path"] == paths["controllers"]
     assert manifest["web_ui_path"] == paths["web_ui"]
     assert manifest["nav2_path"] == paths["nav2"]
+    assert manifest["fast_lio_path"] == paths["fast_lio"]
+    assert manifest["fast_lio_path"].name == "fast_lio.generated.yaml"
     assert manifest["robot_launch_arguments"] == rcc._derive_robot_launch_arguments(
         loaded[0]["effective"]
     )
+    assert manifest["fast_lio_body_bridge_arguments"] == {
+        key: str(value)
+        for key, value in zip(
+            ("x", "y", "z", "qx", "qy", "qz", "qw"),
+            [
+                *loaded[0]["effective"]["derived"]["geometry"][
+                    "relative_transforms"
+                ]["imu_from_base_footprint"]["translation"],
+                *loaded[0]["effective"]["derived"]["geometry"][
+                    "relative_transforms"
+                ]["imu_from_base_footprint"]["rotation_xyzw"],
+            ],
+        )
+    }
+    assert "compatibility_body_weld_arguments" in manifest
     assert manifest["compatibility_body_weld_arguments"] == (
         rcc._derive_compatibility_body_weld_arguments(
             loaded[0]["selected_profile"]
@@ -1451,6 +1470,96 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
         if key != "effective_profile"
     }
     assert _temporary_files(output) == []
+
+
+@pytest.mark.parametrize(
+    "platform,mode,scan_line,bridge",
+    [
+        (
+            "sim",
+            "mapping",
+            16,
+            {
+                "x": "0.0",
+                "y": "0.0",
+                "z": "-0.556",
+                "qx": "0.0",
+                "qy": "0.0",
+                "qz": "0.0",
+                "qw": "1.0",
+            },
+        ),
+        (
+            "sim",
+            "navigation",
+            16,
+            {
+                "x": "0.0",
+                "y": "0.0",
+                "z": "-0.556",
+                "qx": "0.0",
+                "qy": "0.0",
+                "qz": "0.0",
+                "qw": "1.0",
+            },
+        ),
+        (
+            "real",
+            "mapping",
+            32,
+            {
+                "x": "-0.443",
+                "y": "0.0",
+                "z": "-0.905",
+                "qx": "0.0",
+                "qy": "0.0",
+                "qz": "0.0",
+                "qw": "1.0",
+            },
+        ),
+        (
+            "real",
+            "navigation",
+            32,
+            {
+                "x": "-0.443",
+                "y": "0.0",
+                "z": "-0.905",
+                "qx": "0.0",
+                "qy": "0.0",
+                "qz": "0.0",
+                "qw": "1.0",
+            },
+        ),
+    ],
+)
+def test_runtime_writes_fast_lio_for_every_platform_and_mode(
+    runtime_tree, tmp_path, platform, mode, scan_line, bridge
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    runtime_tree.set_bringup_value("mode", mode)
+    manifest = rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "out")
+    params = _load_yaml(manifest["fast_lio_path"])["/**"]["ros__parameters"]
+    assert params["preprocess"]["scan_line"] == scan_line
+    assert params["preprocess"]["scan_rate"] == 10
+    assert params["preprocess"]["timestamp_unit"] == 0
+    assert params["mapping"]["extrinsic_T"] == [0.0, 0.0, 0.0]
+    assert params["mapping"]["extrinsic_R"] == [
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+    ]
+    assert manifest["fast_lio_body_bridge_arguments"] == bridge
+    report = _load_yaml(manifest["effective_profile_path"])
+    assert report["generated_configs"]["fast_lio"] == str(
+        manifest["fast_lio_path"]
+    )
 
 
 @pytest.mark.parametrize(

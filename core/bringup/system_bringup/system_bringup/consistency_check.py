@@ -184,6 +184,7 @@ _COMMON_RUNTIME_ARTIFACTS = {
     "controllers_path": "controllers",
     "web_ui_path": "web_ui",
     "nav2_path": "nav2",
+    "fast_lio_path": "fast_lio",
 }
 _SENSOR_RUNTIME_ARTIFACTS = {
     "sim": {
@@ -521,7 +522,7 @@ def _validate_installed_freshness(repo_root, failures):
         if active_bytes != reviewed_bytes:
             failures.append(
                 "active installed runtime differs from reviewed source; rebuild the "
-                "workspace (prefer --symlink-install) before launch: "
+                "workspace; run colcon build before launch: "
                 f"{active_path} != {reviewed_path}"
             )
 
@@ -776,6 +777,24 @@ def run_runtime_consistency(repo_root, manifest):
                         f"!= effective geometry {expected!r}"
                     )
 
+        try:
+            expected_bridge = rcc._derive_fast_lio_body_bridge_arguments(report)
+        except (KeyError, TypeError, ValueError) as exc:
+            failures.append(f"effective report FAST-LIO body bridge is invalid: {exc}")
+        else:
+            actual_bridge = manifest.get("fast_lio_body_bridge_arguments")
+            for key, expected in expected_bridge.items():
+                actual = (
+                    actual_bridge.get(key, _MISSING)
+                    if isinstance(actual_bridge, dict)
+                    else _MISSING
+                )
+                if actual != expected:
+                    failures.append(
+                        f"manifest fast_lio_body_bridge_arguments.{key} "
+                        f"{actual!r} != effective bridge {expected!r}"
+                    )
+
         profile = report.get("profile")
         try:
             expected_weld = rcc._derive_compatibility_body_weld_arguments(profile)
@@ -831,6 +850,14 @@ def run_runtime_consistency(repo_root, manifest):
             )
         except (KeyError, TypeError, ValueError) as exc:
             failures.append(f"generated runtime config mismatch: {exc}")
+
+    if "effective_profile" in loaded and "fast_lio" in loaded:
+        try:
+            rcc._validate_fast_lio_generated(
+                loaded["effective_profile"], loaded["fast_lio"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            failures.append(f"generated fast_lio validation failed: {exc}")
 
     if platform in ("sim", "real"):
         _validate_unmigrated_runtime_config(config, platform, failures)

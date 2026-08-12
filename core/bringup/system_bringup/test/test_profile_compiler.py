@@ -712,6 +712,7 @@ def test_setup_registers_compiler_and_installs_profiles():
         in setup_source
     )
     assert "config/profiles/*.yaml" in setup_source
+    assert (PACKAGE_ROOT / "config" / "templates" / "fast_lio.yaml").is_file()
     assert "config/templates/*.yaml" in setup_source
     assert (
         "compile_runtime_configs = "

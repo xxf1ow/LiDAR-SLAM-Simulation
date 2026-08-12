@@ -127,8 +127,10 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     loads = []
     validations = []
     sensor_validations = []
+    fast_lio_validations = []
     validate_generated = rcc._validate_generated_configs
     validate_sensors = rcc._validate_sensor_generated_configs
+    validate_fast_lio = rcc._validate_fast_lio_generated
 
     def counted_load(stream):
         loads.append(stream)
@@ -142,6 +144,10 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
         sensor_validations.append(args)
         return validate_sensors(*args)
 
+    def counted_fast_lio_validation(effective, fast_lio):
+        fast_lio_validations.append((effective, fast_lio))
+        return validate_fast_lio(effective, fast_lio)
+
     def forbidden(*_args, **_kwargs):
         raise AssertionError("runtime consistency must be read-only and manifest-only")
 
@@ -154,6 +160,9 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     monkeypatch.setattr(
         rcc, "_validate_sensor_generated_configs", counted_sensor_validation
     )
+    monkeypatch.setattr(
+        rcc, "_validate_fast_lio_generated", counted_fast_lio_validation
+    )
     monkeypatch.setattr(Path, "write_text", forbidden)
     monkeypatch.setattr(Path, "write_bytes", forbidden)
 
@@ -161,6 +170,11 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     assert len(loads) == len(cc._runtime_artifacts(platform))
     assert len(validations) == 1
     assert len(sensor_validations) == 1
+    assert len(fast_lio_validations) == 1
+    assert fast_lio_validations[0][0] == _load_yaml(
+        manifest["effective_profile_path"]
+    )
+    assert fast_lio_validations[0][1] == _load_yaml(manifest["fast_lio_path"])
 
 
 def test_missing_artifact_reports_manifest_key_and_path(runtime_factory):
@@ -171,6 +185,52 @@ def test_missing_artifact_reports_manifest_key_and_path(runtime_factory):
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
     assert any("nav2_path" in failure and str(missing) in failure for failure in failures)
+
+
+def test_missing_fast_lio_artifact_is_reported(runtime_factory):
+    repo_root, manifest = runtime_factory()
+    manifest["fast_lio_path"].unlink()
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("fast_lio_path file does not exist" in item for item in failures)
+
+
+def test_fast_lio_generated_reference_drift_is_reported(runtime_factory):
+    repo_root, manifest = runtime_factory()
+    _mutate_yaml(
+        manifest["effective_profile_path"],
+        ("generated_configs", "fast_lio"),
+        "/tmp/not-fast-lio.yaml",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("generated_configs.fast_lio" in item for item in failures)
+
+
+def test_fast_lio_content_drift_is_reported(runtime_factory):
+    repo_root, manifest = runtime_factory("real")
+    _mutate_yaml(
+        manifest["fast_lio_path"],
+        ("/**", "ros__parameters", "preprocess", "scan_line"),
+        16,
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("fast_lio" in item and "scan_line" in item for item in failures)
+
+
+def test_fast_lio_body_bridge_drift_is_reported(runtime_factory):
+    repo_root, manifest = runtime_factory("real")
+    manifest["fast_lio_body_bridge_arguments"]["z"] = "0.0"
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        "fast_lio_body_bridge_arguments.z" in item for item in failures
+    )
 
 
 @pytest.mark.parametrize(
@@ -714,7 +774,13 @@ def test_forced_same_path_resolution_error_is_aggregated(
 
 @pytest.mark.parametrize(
     "stale_label",
-    ["formal", "runtime_config_compiler", "sensor_gate_node"],
+    [
+        "formal",
+        "profile_compiler",
+        "runtime_config_compiler",
+        "consistency_check",
+        "sensor_gate_node",
+    ],
 )
 def test_installed_freshness_rejects_source_install_mismatch(
     runtime_factory, tmp_path, monkeypatch, stale_label

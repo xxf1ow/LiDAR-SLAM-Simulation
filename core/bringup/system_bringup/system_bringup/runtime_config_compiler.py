@@ -39,6 +39,7 @@ COMMON_OUTPUT_FILENAMES = {
     "controllers": "robot_controllers.generated.yaml",
     "web_ui": "robot_web_ui.generated.yaml",
     "nav2": "nav2.generated.yaml",
+    "fast_lio": "fast_lio.generated.yaml",
 }
 SENSOR_OUTPUT_FILENAMES = {
     "sim": {
@@ -293,6 +294,25 @@ def _derive_robot_launch_arguments(effective):
 
 def _stable_float(value):
     return 0.0 if abs(value) < 1e-15 else value
+
+
+def _derive_fast_lio_body_bridge_arguments(effective):
+    transform = effective["derived"]["geometry"]["relative_transforms"][
+        "imu_from_base_footprint"
+    ]
+    translation = _finite_float_list(
+        transform["translation"], 3, "imu_from_base_footprint.translation"
+    )
+    rotation = _finite_float_list(
+        transform["rotation_xyzw"], 4, "imu_from_base_footprint.rotation_xyzw"
+    )
+    if abs(sum(value * value for value in rotation) - 1.0) > 1e-9:
+        raise ValueError("imu_from_base_footprint.rotation_xyzw must be normalized")
+    values = [*translation, *rotation]
+    return {
+        key: str(_stable_float(float(value)))
+        for key, value in zip(("x", "y", "z", "qx", "qy", "qz", "qw"), values)
+    }
 
 
 def _derive_compatibility_body_weld_transform(profile):
@@ -856,6 +876,9 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
     generated = _render_runtime_configs(inputs)
     generated.update(_render_sensor_configs(inputs))
     robot_launch_arguments = _derive_robot_launch_arguments(inputs["effective"])
+    fast_lio_body_bridge_arguments = _derive_fast_lio_body_bridge_arguments(
+        effective
+    )
     body_weld = _derive_compatibility_body_weld_transform(
         inputs["selected_profile"]
     )
@@ -884,7 +907,9 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
         "controllers_path": paths["controllers"],
         "web_ui_path": paths["web_ui"],
         "nav2_path": paths["nav2"],
+        "fast_lio_path": paths["fast_lio"],
         "robot_launch_arguments": robot_launch_arguments,
+        "fast_lio_body_bridge_arguments": fast_lio_body_bridge_arguments,
         "compatibility_body_weld_arguments": body_weld_arguments,
     }
     for key in SENSOR_OUTPUT_FILENAMES[inputs["platform"]]:
