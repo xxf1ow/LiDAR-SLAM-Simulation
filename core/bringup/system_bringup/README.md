@@ -189,8 +189,9 @@ bag 保留在 `~/result/rosbag/`，不提交 `.db3` 或 metadata；可用 `ros2 
 - 雷达设备协议和厂家标定仍归驱动/设备配置；Profile 维护跨模块需要共享的平台事实。
 
 > `bringup.yaml` 与 Profiles 是运行时源码事实，不复制到 install；launch 从已安装 package share
-> 固定映射回同一 colcon 工作区的源码路径，所以改配置不用 rebuild。templates 同时保留安装副本，
-> runtime 闸门会校验源码与安装态字节一致，防止修改 template 后忘记重建。
+> 固定映射回同一 colcon 工作区的源码路径，所以改配置不用 rebuild。该 source config tree 是唯一
+> active template source；installed templates 只由 packaging/static acceptance 验证。production
+> runtime gate 的 source/install byte freshness 仅覆盖 ROS 实际加载的 launch/Python runtime 文件。
 
 ## 已知边界
 - 契约类（帧/话题/字段）由 sim/real 共用的 `sensor_contract_gate` 强制检查；仿真

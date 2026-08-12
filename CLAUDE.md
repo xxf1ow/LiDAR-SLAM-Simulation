@@ -81,8 +81,9 @@ templates and writes generated YAML to a unique `/tmp/system_bringup-runtime-*` 
   through the manifest. GICP and LIO-SAM remain in their owning upstream/package configuration files.
 - Generated `/tmp` files and effective reports are never source files and never enter Git.
 
-The installed template copy is packaging evidence. The source config tree selected by `bringup.yaml`
-remains the active template source; runtime consistency checks source/install freshness before launch.
+The source config tree selected by `bringup.yaml` is the only active template source. Installed
+templates are packaging/static-acceptance evidence only. Production runtime consistency checks
+source/install byte freshness only for the launch/Python runtime files ROS actually loads.
 
 Do not pass ad-hoc overrides around the compiler. Direct module launches are diagnostic paths and
 must not be documented as equivalent to the formal full-stack entry.
