@@ -888,7 +888,6 @@ def test_report_source_profile_must_match_selected_manifest_profile(runtime_fact
 @pytest.mark.parametrize(
     "platform,dotted_path,expected",
     [
-        ("sim", ("slam_stack", "sim", "fast_lio", "config"), "slam_stack.sim.fast_lio.config"),
         ("sim", ("robot_gz", "world"), "robot_gz.world"),
         ("real", ("slam_stack", "real", "lio_sam", "config"), "slam_stack.real.lio_sam.config"),
         ("real", ("robot_bringup", "use_mock_hardware"), "robot_bringup.use_mock_hardware"),
@@ -906,6 +905,14 @@ def test_unmigrated_downstream_config_shape_is_validated(
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
     assert any(expected in failure for failure in failures)
+
+
+def test_runtime_consistency_does_not_require_retired_fast_lio_selector(
+    runtime_factory,
+):
+    repo_root, manifest = runtime_factory("sim", "navigation")
+    assert "fast_lio" not in manifest["bringup_config"]["slam_stack"]["sim"]
+    assert cc.run_runtime_consistency(repo_root, manifest) == []
 
 
 def test_real_manifest_remains_valid_without_legacy_vanjee_section(runtime_factory):

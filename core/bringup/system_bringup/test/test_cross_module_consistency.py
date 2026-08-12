@@ -83,30 +83,23 @@ def test_xacro_joint_origins_consume_independent_mount_arguments():
         "${imu_x} ${imu_y} ${imu_z}"
 
 
-def test_fastlio_sim_patch_yaml_reconstructed_by_path():
+def test_fast_lio_patch_contains_only_the_imu_qos_source_change():
     patch = cc._read(_root(), cc.F_FASTLIO_PATCH)
-    params = cc._yaml(
-        cc._patch_added_file(patch, "config/gazebo_velodyne.yaml")
-    )["/**"]["ros__parameters"]
-    assert params["preprocess"] == {
-        "lidar_type": 2,
-        "scan_line": 16,
-        "scan_rate": 10,
-        "timestamp_unit": 2,
-        "blind": 1.0,
-    }
+    headers = [
+        line for line in patch.splitlines() if line.startswith("diff --git ")
+    ]
+    assert headers == [
+        "diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp"
+    ]
+    assert "config/gazebo_velodyne.yaml" not in patch
+    assert "config/vanjee_722.yaml" not in patch
+    section = cc._patch_file_section(patch, "src/laserMapping.cpp")
+    assert "(imu_topic, 10, imu_cbk);" in section
+    assert "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);" in section
 
 
 def test_sim_imu_topic_is_atomically_fixed_across_active_sources():
     root = _root()
-    fastlio = cc._yaml(
-        cc._patch_added_file(
-            cc._read(root, cc.F_FASTLIO_PATCH),
-            "config/gazebo_velodyne.yaml",
-        )
-    )["/**"]["ros__parameters"]
-    assert fastlio["common"]["imu_topic"] == "/imu/data"
-
     liosam_patch = cc._read(root, cc.F_LIOSAM_PATCH)
     assert cc._patch_added_value(
         liosam_patch, "config/params.yaml", "imuTopic"
@@ -117,19 +110,6 @@ def test_sim_imu_topic_is_atomically_fixed_across_active_sources():
     )
     imu_bridge = next(item for item in bridge if item["gz_topic_name"] == "/imu")
     assert imu_bridge["ros_topic_name"] == "/imu/data"
-
-
-def test_fastlio_patch_uses_sensor_data_qos_for_imu_subscription():
-    patch = cc._read(_root(), cc.F_FASTLIO_PATCH)
-    section = cc._patch_file_section(patch, "src/laserMapping.cpp")
-    assert (
-        "-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
-        "(imu_topic, 10, imu_cbk);"
-    ) in section
-    assert (
-        "+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
-        "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);"
-    ) in section
 
 
 def test_liosam_sim_patch_values_are_scoped_by_path():
@@ -172,6 +152,25 @@ def test_legacy_checker_does_not_parse_generated_adapter_config_from_launch():
     assert not hasattr(cc, "_adapter_scan_period")
 
 
+def test_legacy_source_checks_do_not_reconstruct_fast_lio_patch_yaml(monkeypatch):
+    seen = []
+    original = cc._patch_added_file
+
+    def counted(text, relative_path):
+        seen.append(relative_path)
+        return original(text, relative_path)
+
+    monkeypatch.setattr(cc, "_patch_added_file", counted)
+    assert cc.check_geometry(_root(), "sim") == []
+    assert cc.check_lidar(_root(), "sim") == []
+    assert cc.check_geometry(_root(), "real") == []
+    assert cc.check_lidar(_root(), "real") == []
+    assert not any("fast" in path.lower() for path in seen)
+    assert not hasattr(cc, "FASTLIO_CONFIG")
+    assert not hasattr(cc, "F_NAV_LAUNCH")
+    assert not hasattr(cc, "_launch_floats")
+
+
 def test_geometry_consistent():
     fails = cc.check_geometry(_root())
     assert fails == [], "几何不一致:\n" + "\n".join(fails)
@@ -188,16 +187,15 @@ def test_sim_lidar_consistent_without_reading_real_profile():
 
 def test_sim_lidar_reads_only_sim_sources(monkeypatch):
     reads = _guarded_read(monkeypatch, {cc.F_NAV_PARAMS_REAL, cc.F_VANJEE_PARAMS})
-    added_files = _guarded_added_file(monkeypatch, {cc.FASTLIO_CONFIG["real"]})
+    added_files = _guarded_added_file(monkeypatch, {cc.LIOSAM_CONFIG["real"]})
 
     assert cc.check_lidar(_root(), "sim") == []
     assert set(reads) == {
-        cc.F_FASTLIO_PATCH,
         cc.F_LIOSAM_PATCH,
         cc.F_GAZEBO,
         cc.F_ROBOT_XACRO,
     }
-    assert added_files == [cc.FASTLIO_CONFIG["sim"]]
+    assert added_files == []
 
 
 def test_real_lidar_consistent_without_reading_gazebo_geometry():
@@ -208,12 +206,12 @@ def test_real_lidar_reads_only_real_sources(monkeypatch):
     reads = _guarded_read(monkeypatch, {cc.F_GAZEBO, cc.F_GZ_LAUNCH, cc.F_NAV_PARAMS})
     added_files = _guarded_added_file(
         monkeypatch,
-        {cc.FASTLIO_CONFIG["sim"], cc.LIOSAM_CONFIG["sim"]},
+        {cc.LIOSAM_CONFIG["sim"]},
     )
 
     assert cc.check_lidar(_root(), "real") == []
-    assert set(reads) == {cc.F_FASTLIO_PATCH, cc.F_LIOSAM_PATCH, cc.F_VANJEE_PARAMS}
-    assert added_files == [cc.FASTLIO_CONFIG["real"], cc.LIOSAM_CONFIG["real"]]
+    assert set(reads) == {cc.F_LIOSAM_PATCH, cc.F_VANJEE_PARAMS}
+    assert added_files == [cc.LIOSAM_CONFIG["real"]]
 
 
 def test_sim_geometry_consistent():
@@ -222,18 +220,15 @@ def test_sim_geometry_consistent():
 
 def test_sim_geometry_reads_only_sim_sources(monkeypatch):
     reads = _guarded_read(monkeypatch, {cc.F_NAV_PARAMS_REAL, cc.F_VANJEE_PARAMS})
-    added_files = _guarded_added_file(monkeypatch, {cc.FASTLIO_CONFIG["real"]})
+    added_files = _guarded_added_file(monkeypatch, set())
 
     assert cc.check_geometry(_root(), "sim") == []
     assert set(reads) == {
-        cc.F_MACRO,
         cc.F_ROBOT_XACRO,
         cc.F_NAV_PARAMS,
         cc.F_CONTROLLERS,
-        cc.F_NAV_LAUNCH,
-        cc.F_FASTLIO_PATCH,
     }
-    assert added_files == [cc.FASTLIO_CONFIG["sim"]]
+    assert added_files == []
 
 
 def test_real_geometry_consistent():
@@ -406,16 +401,14 @@ def test_default_runtime_output_uses_a_private_unique_directory(
 
 def test_real_geometry_reads_only_real_sources(monkeypatch):
     reads = _guarded_read(monkeypatch, {cc.F_GAZEBO, cc.F_GZ_LAUNCH, cc.F_NAV_PARAMS})
-    added_files = _guarded_added_file(monkeypatch, {cc.FASTLIO_CONFIG["sim"]})
+    added_files = _guarded_added_file(monkeypatch, set())
 
     assert cc.check_geometry(_root(), "real") == []
     assert set(reads) == {
-        cc.F_MACRO,
         cc.F_NAV_PARAMS_REAL,
         cc.F_CONTROLLERS,
-        cc.F_FASTLIO_PATCH,
     }
-    assert added_files == [cc.FASTLIO_CONFIG["real"]]
+    assert added_files == []
 
 
 @pytest.mark.parametrize("checker", [cc.check_geometry, cc.check_lidar])
@@ -432,7 +425,7 @@ def test_real_lidar_uses_added_files_not_added_values(monkeypatch):
     )
 
     assert cc.check_lidar(_root(), "real") == []
-    assert added_files == [cc.FASTLIO_CONFIG["real"], cc.LIOSAM_CONFIG["real"]]
+    assert added_files == [cc.LIOSAM_CONFIG["real"]]
 
 
 def test_sim_lidar_uses_added_values_for_modified_liosam_params(monkeypatch):
@@ -451,48 +444,23 @@ def test_sim_lidar_uses_added_values_for_modified_liosam_params(monkeypatch):
         (cc.LIOSAM_CONFIG["sim"], "N_SCAN"),
         (cc.LIOSAM_CONFIG["sim"], "Horizon_SCAN"),
     ]
-    assert added_files == [cc.FASTLIO_CONFIG["sim"]]
+    assert added_files == []
 
 
-def test_real_lidar_accepts_quoted_numeric_yaml_values(monkeypatch):
+def test_real_lidar_accepts_quoted_liosam_numeric_values(monkeypatch):
     original_yaml = cc._yaml
 
     def quoted_numeric_yaml(text):
         value = original_yaml(text)
         if "/**" in value:
             params = value["/**"]["ros__parameters"]
-            if "preprocess" in params:
-                params["preprocess"].update({
-                    "lidar_type": "2",
-                    "scan_line": "32",
-                    "scan_rate": "10",
-                    "timestamp_unit": "0",
-                    "blind": "0.3",
-                })
-            else:
-                params["N_SCAN"] = "32"
-                params["Horizon_SCAN"] = "1200"
-        else:
-            value["vanjee_lidar"]["ros__parameters"]["min_distance"] = "0.05"
+            params["N_SCAN"] = "32"
+            params["Horizon_SCAN"] = "1200"
         return value
 
     monkeypatch.setattr(cc, "_yaml", quoted_numeric_yaml)
 
     assert cc.check_lidar(_root(), "real") == []
-
-
-def test_real_lidar_reports_quoted_invalid_scan_rate_without_type_error(monkeypatch):
-    original_yaml = cc._yaml
-
-    def quoted_invalid_rate_yaml(text):
-        value = original_yaml(text)
-        if "/**" in value and "preprocess" in value["/**"]["ros__parameters"]:
-            value["/**"]["ros__parameters"]["preprocess"]["scan_rate"] = "11"
-        return value
-
-    monkeypatch.setattr(cc, "_yaml", quoted_invalid_rate_yaml)
-
-    assert cc.check_lidar(_root(), "real") == ["[R3] fast-lio scan_rate=11(应为 10)。"]
 
 
 @pytest.mark.parametrize("platform", ["sim", "real"])

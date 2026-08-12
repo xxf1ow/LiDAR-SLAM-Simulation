@@ -28,7 +28,6 @@ F_GAZEBO = "core/robot/robot_description/gazebo/robot.gazebo.xacro"
 F_CONTROLLERS = "core/robot/robot_bringup/config/robot_controllers.yaml"
 F_NAV_PARAMS = "core/navigation/robot_navigation/config/nav2_params.yaml"
 F_NAV_PARAMS_REAL = "core/navigation/robot_navigation/config/nav2_params_real.yaml"
-F_NAV_LAUNCH = "core/navigation/robot_navigation/launch/navigation.launch.py"
 F_GZ_LAUNCH = "core/simulation/robot_gz_bringup/launch/robot_gz.launch.py"
 F_FASTLIO_PATCH = "core/localization/fast-lio2.patch"
 F_LIOSAM_PATCH = "core/mapping/lio-sam.patch"
@@ -37,10 +36,6 @@ F_VANJEE_PARAMS = (
     "vanjee_lidar_ros/config/vanjee_722.yaml"
 )
 
-FASTLIO_CONFIG = {
-    "sim": "config/gazebo_velodyne.yaml",
-    "real": "config/vanjee_722.yaml",
-}
 LIOSAM_CONFIG = {
     "sim": "config/params.yaml",
     "real": "config/params_real.yaml",
@@ -346,7 +341,6 @@ def _validate_unmigrated_runtime_config(config, platform, failures):
     )
     for path in (
         ("slam_stack", platform, "lio_sam", "config"),
-        ("slam_stack", platform, "fast_lio", "config"),
         ("slam_stack", platform, "gicp_localization", "config"),
         ("slam_stack", platform, "gicp_localization", "prior_map_path"),
         ("slam_stack", platform, "robot_navigation", "config"),
@@ -904,16 +898,6 @@ def _gazebo_lidar(text, arg_defaults):
             "update_rate": int(rate), "range_min": float(rmin)}
 
 
-def _launch_floats(text, names):
-    """从 launch py 文本取 `NAME = <float>` 字面量。"""
-    out = {}
-    for n in names:
-        m = re.search(re.escape(n) + r'\s*=\s*([-\d.]+)', text)
-        if m:
-            out[n] = float(m.group(1))
-    return out
-
-
 def _parse_footprint(s):
     return [(float(x), float(y)) for x, y in ast.literal_eval(s)]
 
@@ -999,11 +983,10 @@ def write_real_runtime_configs(repo_root, config, output_dir=None):
 
 
 def check_geometry(repo_root, platform="sim"):
-    """G1–G5:几何派生值在 xacro / controllers / nav2 / launch 间自洽。"""
+    """G1/G2/G5:车体、控制器和 Nav2 的几何与限速保持自洽。"""
     if platform not in ("sim", "real"):
         return ["未知 platform=%r(应为 sim|real)。" % platform]
     fails = []
-    macro = _read(repo_root, F_MACRO)
     if platform == "real":
         runtime = build_real_runtime_configs(
             repo_root, load_bringup_config(repo_root)
@@ -1011,7 +994,6 @@ def check_geometry(repo_root, platform="sim"):
         geometry = runtime["geometry"]
         base_l = geometry["body"]["length"]
         base_w = geometry["body"]["width"]
-        base_h = geometry["body"]["height"]
         wheel_r = geometry["drive_wheel"]["radius"]
         wheel_separation = geometry["drive_wheel"]["separation"]
         nav = runtime["nav2"]
@@ -1020,7 +1002,6 @@ def check_geometry(repo_root, platform="sim"):
         defaults = _xacro_args(_read(repo_root, F_ROBOT_XACRO))
         base_l = defaults["base_length"]
         base_w = defaults["base_width"]
-        base_h = defaults["base_height"]
         wheel_r = defaults["wheel_radius"]
         wheel_separation = defaults["wheel_separation"]
         nav = _yaml(_read(repo_root, F_NAV_PARAMS))
@@ -1047,35 +1028,6 @@ def check_geometry(repo_root, platform="sim"):
         fails.append("[G2] wheel_separation controllers=%.4f != geometry %.4f。" %
                      (cp["wheel_separation"], wheel_separation))
 
-    # G3 仿真 launch 默认焊接继续与仿真 xacro 默认值一致；真机由同一份派生值下发。
-    if platform == "sim":
-        lidar_h = _xacro_props(macro)["lidar_height"]
-        lc = _launch_floats(
-            _read(repo_root, F_NAV_LAUNCH),
-            ["_BASE_HEIGHT", "_WHEEL_RADIUS", "_LIDAR_HEIGHT"],
-        )
-        for cname, xval in [
-            ("_BASE_HEIGHT", base_h),
-            ("_WHEEL_RADIUS", wheel_r),
-            ("_LIDAR_HEIGHT", lidar_h),
-        ]:
-            if cname not in lc:
-                fails.append("[G3] navigation.launch.py 缺仿真几何常量 %s。" % cname)
-            elif abs(lc[cname] - xval) > 1e-9:
-                fails.append("[G3] navigation.launch.py %s=%.4f != 仿真 xacro %.4f。"
-                             % (cname, lc[cname], xval))
-
-    # G4 FAST-LIO 外参仍是第 5 节前的未迁移算法配置，不能从 URDF mount 推导。
-    fastlio = _yaml(_patch_added_file(
-        _read(repo_root, F_FASTLIO_PATCH),
-        FASTLIO_CONFIG[platform],
-    ))["/**"]["ros__parameters"]
-    flm = fastlio["mapping"]
-    if [float(v) for v in flm["extrinsic_T"]] != [0.0, 0.0, 0.0]:
-        fails.append("[G4] fast-lio extrinsic_T 非零: %s(第 5 节前基线应为 [0,0,0])。" % flm["extrinsic_T"])
-    if [float(v) for v in flm["extrinsic_R"]] != [1, 0, 0, 0, 1, 0, 0, 0, 1]:
-        fails.append("[G4] fast-lio extrinsic_R 非单位阵: %s。" % flm["extrinsic_R"])
-
     # G5 nav2 限速 <= 底盘限速
     fpp = nav["controller_server"]["ros__parameters"]["FollowPath"]
     if fpp["vx_max"] > cp["linear.x.max_velocity"] + 1e-9:
@@ -1087,14 +1039,10 @@ def check_geometry(repo_root, platform="sim"):
 
 
 def check_lidar(repo_root, platform="sim"):
-    """sim 检查 L1–L4，real 检查 R1–R9。"""
+    """检查 Gazebo/Vanjee 与 LIO-SAM 仍共同拥有的雷达事实。"""
     if platform not in ("sim", "real"):
         return ["未知 platform=%r(应为 sim|real)。" % platform]
     fails = []
-    fastlio = _yaml(_patch_added_file(
-        _read(repo_root, F_FASTLIO_PATCH),
-        FASTLIO_CONFIG[platform],
-    ))["/**"]["ros__parameters"]
 
     if platform == "real":
         lio = _yaml(_patch_added_file(
@@ -1102,36 +1050,19 @@ def check_lidar(repo_root, platform="sim"):
             LIOSAM_CONFIG[platform],
         ))["/**"]["ros__parameters"]
         driver = _yaml(_read(repo_root, F_VANJEE_PARAMS))["vanjee_lidar"]["ros__parameters"]
-        fl_pre = fastlio["preprocess"]
-        fl_common = fastlio["common"]
-        fl_lidar_type = int(fl_pre["lidar_type"])
-        fl_scan_line = int(fl_pre["scan_line"])
-        fl_scan_rate = int(fl_pre["scan_rate"])
-        fl_timestamp_unit = int(fl_pre["timestamp_unit"])
-        fl_blind = float(fl_pre["blind"])
-        driver_min_distance = float(driver["min_distance"])
         lio_n_scan = int(lio["N_SCAN"])
         lio_horizon_scan = int(lio["Horizon_SCAN"])
 
-        if not (driver["lidar_type"] == "vanjee_722" and fl_lidar_type == 2):
-            fails.append("[R1] lidar_type 不一致: driver=%r, fast-lio=%r(应为 vanjee_722/2)。"
-                         % (driver["lidar_type"], fl_lidar_type))
-        if not (fl_scan_line == lio_n_scan == 32):
-            fails.append("[R2] 线数不一致: fast-lio=%d, lio-sam=%d(应均为 32)。"
-                         % (fl_scan_line, lio_n_scan))
-        if fl_scan_rate != 10:
-            fails.append("[R3] fast-lio scan_rate=%d(应为 10)。" % fl_scan_rate)
-        if fl_timestamp_unit != 0:
-            fails.append("[R4] fast-lio timestamp_unit=%d(应为 0)。" % fl_timestamp_unit)
-        if not (fl_blind == 0.3 and fl_blind >= driver_min_distance):
-            fails.append("[R5] fast-lio blind=%.2f(应为 0.30且不小于 driver min_distance=%.2f)。"
-                         % (fl_blind, driver_min_distance))
-        if not (driver["point_cloud_topic"] == fl_common["lid_topic"] == lio["pointCloudTopic"] == "/points_raw"):
-            fails.append("[R6] 点云话题不一致: driver=%r, fast-lio=%r, lio-sam=%r(应均为 /points_raw)。"
-                         % (driver["point_cloud_topic"], fl_common["lid_topic"], lio["pointCloudTopic"]))
-        if not (driver["imu_topic"] == fl_common["imu_topic"] == lio["imuTopic"] == "/imu/data"):
-            fails.append("[R7] IMU 话题不一致: driver=%r, fast-lio=%r, lio-sam=%r(应均为 /imu/data)。"
-                         % (driver["imu_topic"], fl_common["imu_topic"], lio["imuTopic"]))
+        if driver["lidar_type"] != "vanjee_722":
+            fails.append("[R1] driver lidar_type=%r(应为 vanjee_722)。" % driver["lidar_type"])
+        if lio_n_scan != 32:
+            fails.append("[R2] lio-sam N_SCAN=%d(应为 32)。" % lio_n_scan)
+        if not (driver["point_cloud_topic"] == lio["pointCloudTopic"] == "/points_raw"):
+            fails.append("[R6] 点云话题不一致: driver=%r, lio-sam=%r(应均为 /points_raw)。"
+                         % (driver["point_cloud_topic"], lio["pointCloudTopic"]))
+        if not (driver["imu_topic"] == lio["imuTopic"] == "/imu/data"):
+            fails.append("[R7] IMU 话题不一致: driver=%r, lio-sam=%r(应均为 /imu/data)。"
+                         % (driver["imu_topic"], lio["imuTopic"]))
         if (driver["lidar_frame"], driver["imu_frame"]) != ("velodyne", "imu_link"):
             fails.append("[R8] driver frame 不一致: lidar=%r, imu=%r(应为 velodyne/imu_link)。"
                          % (driver["lidar_frame"], driver["imu_frame"]))
@@ -1147,7 +1078,6 @@ def check_lidar(repo_root, platform="sim"):
         _read(repo_root, F_GAZEBO),
         _xacro_args(_read(repo_root, F_ROBOT_XACRO)),
     )
-    fl_pre = fastlio["preprocess"]
     n_scan = int(_patch_added_value(
         _read(repo_root, F_LIOSAM_PATCH),
         LIOSAM_CONFIG[platform],
@@ -1159,20 +1089,12 @@ def check_lidar(repo_root, platform="sim"):
         "Horizon_SCAN",
     ))
     # L1 线数
-    if not (gz["v_samples"] == n_scan == fl_pre["scan_line"]):
-        fails.append("[L1] 线数不一致: gazebo=%d, lio-sam N_SCAN=%d, fast-lio scan_line=%d。"
-                     % (gz["v_samples"], n_scan, fl_pre["scan_line"]))
+    if gz["v_samples"] != n_scan:
+        fails.append("[L1] 线数不一致: gazebo=%d, lio-sam N_SCAN=%d。"
+                     % (gz["v_samples"], n_scan))
     # L2 水平
     if gz["h_samples"] != horizon:
         fails.append("[L2] 水平点数不一致: gazebo=%d, lio-sam Horizon_SCAN=%d。" % (gz["h_samples"], horizon))
-    # L3 频率
-    if gz["update_rate"] != fl_pre["scan_rate"]:
-        fails.append("[L3] 频率不一致: gazebo update_rate=%d, fast-lio scan_rate=%d。"
-                     % (gz["update_rate"], fl_pre["scan_rate"]))
-    # L4 近距(不等式:盲区 >= 传感器最小距)
-    if fl_pre["blind"] < gz["range_min"] - 1e-9:
-        fails.append("[L4] fast-lio blind %.2f < gazebo range.min %.2f(盲区应 >= 传感器最小距)。"
-                     % (fl_pre["blind"], gz["range_min"]))
     return fails
 
 
