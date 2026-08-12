@@ -114,13 +114,16 @@ def _node_call(function, package, executable):
     )
 
 
-def _assert_boolean_clock_parameter(call, variable):
+def _assert_boolean_clock_parameter(call):
     parameters = _keyword(call, "parameters")
     assert isinstance(parameters, ast.List) and len(parameters.elts) == 1
     clock = _dict_value(parameters.elts[0], "use_sim_time")
     assert isinstance(clock, ast.Call)
     assert isinstance(clock.func, ast.Name) and clock.func.id == "ParameterValue"
-    assert isinstance(clock.args[0], ast.Name) and clock.args[0].id == variable
+    assert isinstance(clock.args[0], ast.Call)
+    assert isinstance(clock.args[0].func, ast.Name)
+    assert clock.args[0].func.id == "LaunchConfiguration"
+    assert _string(clock.args[0].args[0]) == "use_sim_time"
     value_type = _keyword(clock, "value_type")
     assert isinstance(value_type, ast.Name) and value_type.id == "bool"
 
@@ -302,7 +305,7 @@ def test_slam_stack_navigation_owns_one_manifest_driven_body_bridge():
         ("--qx", "qx"), ("--qy", "qy"), ("--qz", "qz"), ("--qw", "qw"),
     ):
         assert _subscript_path(values[option]) == ("bridge", (name,))
-    _assert_boolean_clock_parameter(publisher, "use_sim")
+    _assert_boolean_clock_parameter(publisher)
     result = next(
         node.value for node in navigation.body if isinstance(node, ast.Return)
     )
@@ -609,7 +612,7 @@ def test_static_body_bridge_receives_native_boolean_clock_parameter():
     bridge = _node_call(
         _function(tree, "_stack"), "tf2_ros", "static_transform_publisher"
     )
-    _assert_boolean_clock_parameter(bridge, "use_sim")
+    _assert_boolean_clock_parameter(bridge)
 
 
 def _fake_launch_module(monkeypatch, package_share):

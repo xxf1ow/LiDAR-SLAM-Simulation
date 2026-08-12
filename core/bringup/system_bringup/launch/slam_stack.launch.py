@@ -82,7 +82,11 @@ def _stack(context, *args, **kwargs):
                 "--frame-id", "body", "--child-frame-id", "base_footprint",
             ],
             parameters=[
-                {"use_sim_time": ParameterValue(use_sim, value_type=bool)}
+                {
+                    "use_sim_time": ParameterValue(
+                        LaunchConfiguration("use_sim_time"), value_type=bool
+                    )
+                }
             ],
         )
         gicp = _inc("gicp_localization", "launch/localization.launch.py",
