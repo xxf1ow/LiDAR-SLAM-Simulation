@@ -114,11 +114,15 @@ def _node_call(function, package, executable):
     )
 
 
-def _assert_clock_parameter(call, variable):
+def _assert_boolean_clock_parameter(call, variable):
     parameters = _keyword(call, "parameters")
     assert isinstance(parameters, ast.List) and len(parameters.elts) == 1
     clock = _dict_value(parameters.elts[0], "use_sim_time")
-    assert isinstance(clock, ast.Name) and clock.id == variable
+    assert isinstance(clock, ast.Call)
+    assert isinstance(clock.func, ast.Name) and clock.func.id == "ParameterValue"
+    assert isinstance(clock.args[0], ast.Name) and clock.args[0].id == variable
+    value_type = _keyword(clock, "value_type")
+    assert isinstance(value_type, ast.Name) and value_type.id == "bool"
 
 
 def _include_arguments(function, package, launch_file):
@@ -298,7 +302,7 @@ def test_slam_stack_navigation_owns_one_manifest_driven_body_bridge():
         ("--qx", "qx"), ("--qy", "qy"), ("--qz", "qz"), ("--qw", "qw"),
     ):
         assert _subscript_path(values[option]) == ("bridge", (name,))
-    _assert_clock_parameter(publisher, "use_sim")
+    _assert_boolean_clock_parameter(publisher, "use_sim")
     result = next(
         node.value for node in navigation.body if isinstance(node, ast.Return)
     )
@@ -591,6 +595,21 @@ def test_slam_ready_gates_receive_the_existing_single_clock_value():
         value = _keyword(gate, "use_sim_time")
         assert isinstance(value, ast.Name)
         assert value.id == "use_sim"
+
+
+def test_static_body_bridge_receives_native_boolean_clock_parameter():
+    tree = _tree(SLAM_STACK)
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "launch_ros.parameter_descriptions"
+        and any(alias.name == "ParameterValue" for alias in node.names)
+        for node in tree.body
+    )
+
+    bridge = _node_call(
+        _function(tree, "_stack"), "tf2_ros", "static_transform_publisher"
+    )
+    _assert_boolean_clock_parameter(bridge, "use_sim")
 
 
 def _fake_launch_module(monkeypatch, package_share):

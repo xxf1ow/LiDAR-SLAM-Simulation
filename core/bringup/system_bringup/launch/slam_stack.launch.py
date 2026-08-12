@@ -13,6 +13,7 @@ from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 from system_bringup.ready_gate import ready_gate
 
@@ -80,7 +81,9 @@ def _stack(context, *args, **kwargs):
                 "--qz", bridge["qz"], "--qw", bridge["qw"],
                 "--frame-id", "body", "--child-frame-id", "base_footprint",
             ],
-            parameters=[{"use_sim_time": use_sim}],
+            parameters=[
+                {"use_sim_time": ParameterValue(use_sim, value_type=bool)}
+            ],
         )
         gicp = _inc("gicp_localization", "launch/localization.launch.py",
                     {"config_file": gicp_config, "prior_map_path": prior,
