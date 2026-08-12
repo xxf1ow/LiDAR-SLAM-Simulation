@@ -96,20 +96,39 @@ def test_fast_lio_patch_contains_only_the_imu_qos_source_change():
     assert "config/vanjee_722.yaml" not in patch
     section = cc._patch_file_section(patch, "src/laserMapping.cpp")
     hunks = [line for line in section.splitlines() if line.startswith("@@ ")]
-    assert hunks == ["@@ -925,4 +925,4 @@"]
-    assert "(imu_topic, 10, imu_cbk);" in section
-    assert "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);" in section
+    assert hunks == ["@@ -926,7 +926,7 @@ public:"]
+    removed = [
+        line
+        for line in section.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    added = [
+        line
+        for line in section.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    assert removed == [
+        "-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
+        "(imu_topic, 10, imu_cbk);"
+    ]
+    assert added == [
+        "+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
+        "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);"
+    ]
 
 
 def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
     source = tmp_path / "src/laserMapping.cpp"
     source.parent.mkdir(parents=True)
     source.write_text(
-        "// pinned-equivalent filler\n" * 924
+        "// pinned-equivalent filler\n" * 925
         + "        {\n"
         + "            sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);\n"
         + "        }\n"
-        + "        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);\n",
+        + "        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);\n"
+        + "        pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_registered\", 20);\n"
+        + "        pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_registered_body\", 20);\n"
+        + "        pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_effected\", 20);\n",
         encoding="utf-8",
     )
 
@@ -119,12 +138,14 @@ def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
             "apply",
             "--check",
             "--no-index",
+            "--verbose",
             str(Path(_root()) / cc.F_FASTLIO_PATCH),
         ],
         cwd=tmp_path,
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path.parent)},
     )
 
     assert result.returncode == 0, result.stderr
