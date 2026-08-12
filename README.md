@@ -24,14 +24,13 @@ ros2 launch system_bringup bringup.launch.py
 ```
 
 它读取 `core/bringup/system_bringup/config/bringup.yaml`，选择 `sim|real` 和
-`mapping|navigation`，把 Profile 编译为临时 YAML，完成一致性检查后再启动节点。
+`mapping|navigation`，把 Profile 和集中维护的 FAST-LIO template 编译为临时 YAML，完成
+一致性检查后再启动节点。
 
 ## 运行时拓扑
 
 ```text
-map ── GICP ──> camera_init ── FAST-LIO ──> body
-                                              │
-                                              v
+map ── GICP ──> camera_init ── FAST-LIO ──> body ── slam_stack bridge ──> base_footprint
 base_footprint ── URDF ──> base_link ──> velodyne / imu_link / wheels
 
 Nav2 ──> /cmd_vel_auto ─┐
@@ -102,7 +101,7 @@ colcon test-result --all --verbose
 ```
 
 `core/colcon_defaults.yaml` 会在默认测试中跳过上游 clone 和 aarch64 厂商包；这些包
-需要时单独测试。2026-08-11 的 WSL 基线结果为 `717 tests, 0 failures, 11 skipped`。
+需要时单独测试。5B 最终 WSL 回归为 `768 tests, 0 errors, 0 failures, 0 skipped`。
 
 ## 选择并启动运行模式
 
@@ -178,9 +177,9 @@ bash mapping/save_map.sh
 | `robot/` | gz/mock/real URDF、ros2_control 和控制 gate 已完成 | 8030D、Web、轮速反馈和静态链路已接入 | 物理急停状态、速度平滑、失联/故障安全策略和完整动态验收 |
 | `simulation/` | 工厂世界、LiDAR/IMU、桥接、点云适配和控制器已完成 | 不适用 | 动态障碍、退化场景和故障注入场景 |
 | `mapping/` | LIO-SAM 建图、保存 PCD 和二维地图转换已完成 | Vanjee real 配置和正式入口已接入 | 最终 LiDAR/IMU 外参、真机动态建图与地图质量验收 |
-| `localization/` | FAST-LIO + GICP 先验图定位已完成 | real 参数和静态链路已接入 | 首次有效配准 readiness、`/initialpose` 帧语义、动态标定、退化检测和全局重定位 |
+| `localization/` | FAST-LIO 配置已集中化；FAST-LIO + GICP 先验图定位已完成 | real 参数和静态链路已接入 | GICP 配置集中化、首次有效配准 readiness、`/initialpose` 帧语义、动态标定、退化检测和全局重定位 |
 | `navigation/` | Smac Hybrid-A*、MPPI、STVL 和控制仲裁可运行 | real Profile 与静态 Nav2 链已接入 | 真机动态导航、近场盲区防撞、运动障碍、waypoint 和恢复策略加固 |
-| `bringup/` | sim mapping/navigation 统一入口和 runtime gate 已完成 | real mapping/navigation 四组合已接线 | FAST-LIO/GICP/LIO-SAM 配置继续集中化、lifecycle、优雅停机和全局 diagnostics |
+| `bringup/` | sim mapping/navigation 统一入口、runtime gate 和 FAST-LIO 生成产物已完成 | real mapping/navigation 四组合已接线 | GICP/LIO-SAM 配置继续集中化、lifecycle、优雅停机和全局 diagnostics |
 
 **当前结论**：不存在尚未创建的主链功能目录；缺口集中在安全模块、定位增强、动态场景、
 真机动态闭环和运维交付能力。

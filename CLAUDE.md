@@ -41,7 +41,7 @@ colcon test-result --all --verbose
 
 `colcon_defaults.yaml` skips vendor/upstream packages during the default test run. Test them
 explicitly only on a compatible platform; these package exclusions are not skipped test cases. The
-latest verified WSL baseline is 719 tests with zero errors, failures, and skips.
+latest verified WSL baseline is 768 tests with zero errors, failures, and skips.
 
 The Web asset tests require a `node` executable. This machine currently exposes Node 22.21.0 to WSL
 through `/home/lxx/.local/bin/node`, linked to the existing Windows Node installation. Verify
@@ -76,10 +76,13 @@ templates and writes generated YAML to a unique `/tmp/system_bringup-runtime-*` 
 
 - `bringup.yaml`: run selection and resource paths.
 - `config/profiles/{sim,real}.yaml`: platform facts, geometry, sensors, backends, and shared limits.
-- `config/templates/*.yaml`: complete native configs owned by system_bringup.
-- FAST-LIO, GICP, and LIO-SAM configs not yet migrated remain in their owning upstream/package
-  configuration files.
+- `config/templates/*.yaml`: complete native configs owned by system_bringup, including FAST-LIO.
+- Formal FAST-LIO parameters are rendered as `fast_lio.generated.yaml` and passed by absolute path
+  through the manifest. GICP and LIO-SAM remain in their owning upstream/package configuration files.
 - Generated `/tmp` files and effective reports are never source files and never enter Git.
+
+The installed template copy is packaging evidence. The source config tree selected by `bringup.yaml`
+remains the active template source; runtime consistency checks source/install freshness before launch.
 
 Do not pass ad-hoc overrides around the compiler. Direct module launches are diagnostic paths and
 must not be documented as equivalent to the formal full-stack entry.

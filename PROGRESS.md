@@ -420,17 +420,32 @@ sim navigation/mapping 动态冒烟、运行时 topic 观察、低 RTF/暂停恢
 `USER_BOUNDARY_NOT_RUN`，不记为通过；无人看护真机运动也未执行。整个 4B 未创建 Git
 worktree，未执行 push 或其他 remote-changing action。用户已接受上述边界，第 4 节完成。
 
-### [ ] 5. FAST-LIO 配置迁移
+### [x] 5. FAST-LIO 配置迁移
 
-目的：从 Profile 注入真实/仿真的传感器契约、时间同步和明确需要跨模块一致的参数；
-滤波、迭代等 FAST-LIO 内部调参仍留在模板。
+5A 建立共享完整 FAST-LIO template、严格 renderer、相对变换、runtime artifact，以及
+manifest/report 接口。5B 将正式 navigation 切换为 `fast_lio.generated.yaml`，由
+`slam_stack` 永久拥有 `body -> base_footprint` bridge，并删除 `robot_navigation` 的临时
+weld、两个 bringup selector 与 patch 曾新增的两份 YAML。`fast-lio2.patch` 最终仅保留 IMU
+`SensorDataQoS` 修改。
 
-本节必须正式确认 FAST-LIO `body` frame 的物理含义，以及 LiDAR/IMU 外参的方向约定；
-据此确认、改正或删除 3A 引入的 `compatibility.body_to_base_footprint`。不得把临时
-“`body` 与 LiDAR 原点重合”假设静默升级为 Profile 事实。
+自动化验收（Task 4 repeat，HEAD
+`2dbdd09183291bf0141c407060fca4c42e0f01e3`）：16-package `colcon build` 完成；
+`sim/real × mapping/navigation` 四种组合均生成 `fast_lio.generated.yaml` 并通过 runtime
+consistency；41 topology tests passed；`colcon test-result --all --verbose` 为
+`Summary: 768 tests, 0 errors, 0 failures, 0 skipped`。Windows 与 WSL HEAD 对齐；pinned clone
+最终只含预期的 QoS source modification。
 
-完成条件：两平台生成原生 FAST-LIO YAML；现有仿真行为不变，真机点云时间与里程计
-契约可单独验收；compatibility weld 已有明确的最终归属或消除方案。
+真机静态验收（Task 5 repeat，2026-08-13）：传感器门释放后完成了要求的至少 30 秒连续
+观察；用户摘要未提供更精确时长。16-package build 完成；实际 FAST-LIO 节点
+`/laser_mapping` 的参数为 `scan_line=32`、`scan_rate=10`、`timestamp_unit=0`，topics 为
+`/points_raw`、`/imu/data`；point `time` 为 `0.0..0.099954 s`；`/Odometry` 与
+`/cloud_registered` 约 10 Hz。`camera_init -> body -> base_footprint` 全链连通，后段 translation
+为 `[-0.443, 0, -0.905]`、quaternion 为 `[0, 0, 0, 1]`；
+`InvalidParameterTypeException=0`，日志没有 generated-config/fallback/package-YAML 路径问题。
+停止、还原后 tracked worktree clean。headless RViz 因无 X display 崩溃是环境限制，不影响本节
+验收契约。
+
+无人看护的真机动态运动未运行，也不是第 5 节完成条件。
 
 ### [ ] 6. GICP 配置迁移
 
@@ -498,5 +513,5 @@ controller clamp 掩盖 behavior server 或规划器的语义冲突。
 
 ## 下一步
 
-第 4 节已完成。下一步按执行规则先讨论第 5 节 FAST-LIO 配置迁移的边界和验收条件；
-本次文档收尾不迁移算法参数、算法外参或 compatibility weld。
+第 5 节已完成。下一步按执行规则讨论第 6 节 GICP 配置迁移的边界和验收条件；本次收尾
+不提前规划或实现第 6 节。

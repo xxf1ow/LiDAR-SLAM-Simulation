@@ -10,7 +10,7 @@
 完整定位链：
 
 ```text
-map ── GICP ──> camera_init ── FAST-LIO ──> body ── weld ──> base_footprint
+map ── GICP ──> camera_init ── FAST-LIO ──> body ── slam_stack bridge ──> base_footprint
 ```
 
 ## FAST-LIO 集成
@@ -27,8 +27,10 @@ git checkout a4743b095409588842a5b30ddfa27e29d2f99164
 git apply ../fast-lio2.patch
 ```
 
-补丁包含 Gazebo 与 Vanjee 两套配置，并使 IMU 订阅兼容 BEST_EFFORT。配置中的算法外参是
-当前兼容基线，不等同于 URDF 的独立 LiDAR/IMU mount；真实六自由度外参仍需动态标定。
+补丁只将 IMU 订阅改为 `SensorDataQoS`。正式 FAST-LIO 参数由
+`system_bringup` 的 source template 渲染为 `fast_lio.generated.yaml`，不再由上游 clone
+中的 package YAML 提供。算法外参不等同于 URDF 的独立 LiDAR/IMU mount；真实六自由度
+外参仍需动态标定。
 
 `livox_ros_driver2` 是仓库内的消息桩，只满足 FAST-LIO 编译期类型依赖，不需要 Livox SDK。
 
@@ -68,8 +70,10 @@ source install/setup.bash
 ros2 launch system_bringup bringup.launch.py
 ```
 
-shared sensor gate 通过后启动 FAST-LIO；随后 GICP 和底盘里程计 gate 放行 Nav2。平台对应的
-FAST-LIO、GICP 配置和地图路径仍由 `bringup.yaml` 选择。
+shared sensor gate 通过后启动 FAST-LIO；随后 GICP 和底盘里程计 gate 放行 Nav2。
+formal bringup 从 manifest 传入 `fast_lio.generated.yaml` 的绝对路径；`slam_stack` 将其拆为
+上游 FAST-LIO 的 `config_path`/`config_file`，并永久发布 `body -> base_footprint` bridge。
+GICP 配置和地图路径仍由 `bringup.yaml` 选择。
 
 ## Vanjee 逐点时间检查
 
@@ -82,8 +86,12 @@ Vanjee 配置中的 `timestamp_unit: 0` 表示每点 `time` 以秒为单位。�
 以下命令只用于分离 FAST-LIO/GICP 问题，不替代正式 bringup：
 
 ```bash
+runtime_dir="$(mktemp -d /tmp/system_bringup-runtime-XXXXXX)"
+ros2 run system_bringup compile_runtime_configs \
+  --bringup-config "$PWD/bringup/system_bringup/config/bringup.yaml" \
+  --output-dir "$runtime_dir"
 ros2 launch fast_lio mapping.launch.py \
-  config_file:=gazebo_velodyne.yaml use_sim_time:=true
+  config_path:="$runtime_dir" config_file:=fast_lio.generated.yaml use_sim_time:=true
 ros2 launch gicp_localization localization.launch.py
 ```
 
@@ -99,7 +107,7 @@ ros2 run tf2_ros tf2_echo camera_init body
 
 - `/Odometry`、`/cloud_registered` 持续发布，注册点云结构稳定。
 - GICP 成功加载 `GlobalMap.pcd`，`~/prior_map` 可显示。
-- `map -> camera_init -> body` 连通；完整栈还应连到 `base_footprint`。
+- `map -> camera_init -> body -> base_footprint` 连通；最后一段由 `slam_stack` permanent bridge 发布。
 - 实时注册点云与先验图贴合，错误 90° 假解被当前 fitness 阈值拒绝。
 - `/initialpose` 能在合理初值范围内重新引导配准。
 
