@@ -223,6 +223,20 @@ def test_navigation_map_server_uses_generated_params_with_only_map_override():
 def test_slam_stack_splits_generated_fast_lio_path_for_upstream_launch():
     function = _function(_tree(SLAM_STACK), "_stack")
     navigation = _mode_branch(function, "navigation")
+    fast_lio_includes = [
+        call
+        for call in _calls(function, "_inc")
+        if _string(call.args[0]) == "fast_lio"
+        and _string(call.args[1]) == "launch/mapping.launch.py"
+    ]
+    navigation_includes = [
+        call
+        for call in _calls(navigation, "_inc")
+        if _string(call.args[0]) == "fast_lio"
+        and _string(call.args[1]) == "launch/mapping.launch.py"
+    ]
+    assert len(fast_lio_includes) == 1
+    assert fast_lio_includes == navigation_includes
     config_path = _assigned_value(function, "fast_lio_config_path")
     config_file = _assigned_value(function, "fast_lio_config_file")
     assert ast.unparse(config_path) == "os.path.dirname(fast_lio_params_file)"
@@ -240,7 +254,8 @@ def test_slam_stack_splits_generated_fast_lio_path_for_upstream_launch():
     assert _string(error.exc.args[0]) == (
         "fast_lio_params_file must be an absolute generated YAML path"
     )
-    arguments = _include_arguments(function, "fast_lio", "launch/mapping.launch.py")
+    arguments = fast_lio_includes[0].args[2]
+    assert isinstance(arguments, ast.Dict)
     assert isinstance(_dict_value(arguments, "config_path"), ast.Name)
     assert _dict_value(arguments, "config_path").id == "fast_lio_config_path"
     assert isinstance(_dict_value(arguments, "config_file"), ast.Name)
@@ -253,12 +268,17 @@ def test_slam_stack_splits_generated_fast_lio_path_for_upstream_launch():
 def test_slam_stack_navigation_owns_one_manifest_driven_body_bridge():
     function = _function(_tree(SLAM_STACK), "_stack")
     navigation = _mode_branch(function, "navigation")
-    publishers = [
+    all_publishers = [
         call
-        for call in _calls(navigation, "Node")
+        for call in _calls(function, "Node")
         if _string(_keyword(call, "package")) == "tf2_ros"
         and _string(_keyword(call, "executable")) == "static_transform_publisher"
     ]
+    publishers = [
+        call for call in _calls(navigation, "Node") if call in all_publishers
+    ]
+    assert len(all_publishers) == 1
+    assert all_publishers == publishers
     assert len(publishers) == 1
     publisher = publishers[0]
     assert _string(_keyword(publisher, "name")) == (
@@ -290,12 +310,71 @@ def test_slam_stack_navigation_owns_one_manifest_driven_body_bridge():
     assert first_term.elts[2].id == "fast_lio"
 
 
-def test_slam_stack_mapping_has_no_body_bridge():
+def test_slam_stack_mapping_has_no_fast_lio_or_body_bridge():
     function = _function(_tree(SLAM_STACK), "_stack")
     mapping = _mode_branch(function, "mapping")
+    result = next(node.value for node in mapping.body if isinstance(node, ast.Return))
+    ownership_names = {
+        target.id
+        for assignment in ast.walk(function)
+        if isinstance(assignment, ast.Assign)
+        and isinstance(assignment.value, ast.Call)
+        and (
+            (
+                isinstance(assignment.value.func, ast.Name)
+                and assignment.value.func.id == "_inc"
+                and _string(assignment.value.args[0]) == "fast_lio"
+            )
+            or (
+                isinstance(assignment.value.func, ast.Name)
+                and assignment.value.func.id == "Node"
+                and _string(_keyword(assignment.value, "package")) == "tf2_ros"
+            )
+        )
+        for target in assignment.targets
+        if isinstance(target, ast.Name)
+    }
+    assignments = {
+        target.id: assignment.value
+        for assignment in ast.walk(function)
+        if isinstance(assignment, ast.Assign)
+        for target in assignment.targets
+        if isinstance(target, ast.Name)
+    }
+    reachable_names = {
+        node.id for node in ast.walk(result) if isinstance(node, ast.Name)
+    }
+    pending = list(reachable_names)
+    while pending:
+        value = assignments.get(pending.pop())
+        if value is None:
+            continue
+        dependencies = {
+            node.id for node in ast.walk(value) if isinstance(node, ast.Name)
+        } - reachable_names
+        reachable_names.update(dependencies)
+        pending.extend(dependencies)
+    assert ownership_names.isdisjoint(reachable_names)
+    reachable_values = [
+        assignments[name] for name in reachable_names if name in assignments
+    ]
+    assert not any(
+        _string(call.args[0]) == "fast_lio"
+        for value in reachable_values
+        for call in _calls(value, "_inc")
+    )
     assert not any(
         _string(_keyword(call, "package")) == "tf2_ros"
-        for call in _calls(mapping, "Node")
+        for value in reachable_values
+        for call in _calls(value, "Node")
+    )
+    assert not any(
+        _string(call.args[0]) == "fast_lio"
+        for call in _calls(result, "_inc")
+    )
+    assert not any(
+        _string(_keyword(call, "package")) == "tf2_ros"
+        for call in _calls(result, "Node")
     )
 
 
