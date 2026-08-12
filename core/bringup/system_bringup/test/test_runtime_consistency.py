@@ -583,79 +583,32 @@ def test_manifest_robot_launch_arguments_drift_is_reported(runtime_factory):
     assert any("robot_launch_arguments.lidar_scan_lines" in failure for failure in failures)
 
 
-def test_manifest_weld_drift_is_reported(runtime_factory):
-    repo_root, manifest = runtime_factory()
-    manifest["compatibility_body_weld_arguments"]["qw"] = "0.0"
+def test_valid_runtime_report_contains_no_retired_compatibility_weld(runtime_factory):
+    repo_root, manifest = runtime_factory("real")
+    report = _load_yaml(manifest["effective_profile_path"])
 
-    failures = cc.run_runtime_consistency(repo_root, manifest)
+    assert "compatibility_body_weld_arguments" not in manifest
+    assert "compatibility" not in report
+    assert cc.run_runtime_consistency(repo_root, manifest) == []
 
-    assert any("compatibility_body_weld_arguments.qw" in failure for failure in failures)
 
-
-@pytest.mark.parametrize(
-    "section,key,value",
-    [
-        ("translation", "x", 99.0),
-        ("rotation", "qw", 0.0),
-    ],
-)
-def test_effective_report_compatibility_weld_drift_is_reported(
-    runtime_factory, section, key, value
-):
-    repo_root, manifest = runtime_factory()
+def test_deferred_nav2_metadata_still_cannot_drift(runtime_factory):
+    repo_root, manifest = runtime_factory("real")
     _mutate_yaml(
         manifest["effective_profile_path"],
-        ("compatibility", "body_to_base_footprint", section, key),
-        value,
+        ("deferred_compatibility", 0, "status"),
+        "done",
     )
-
     failures = cc.run_runtime_consistency(repo_root, manifest)
-
     assert any(
-        f"compatibility.body_to_base_footprint.{section}.{key}" in failure
-        for failure in failures
-    )
-
-
-@pytest.mark.parametrize(
-    "section,key",
-    [("translation", "x"), ("rotation", "qw")],
-)
-def test_effective_report_compatibility_weld_missing_value_is_reported(
-    runtime_factory, section, key
-):
-    repo_root, manifest = runtime_factory()
-    _delete_yaml(
-        manifest["effective_profile_path"],
-        ("compatibility", "body_to_base_footprint", section, key),
-    )
-
-    failures = cc.run_runtime_consistency(repo_root, manifest)
-
-    assert any(
-        f"compatibility.body_to_base_footprint.{section}.{key}" in failure
-        for failure in failures
+        "deferred_compatibility.nav2.behavior_server.status" in item
+        for item in failures
     )
 
 
 @pytest.mark.parametrize(
     "dotted_path,value,expected",
     [
-        (
-            ("compatibility", "body_to_base_footprint", "status"),
-            "permanent",
-            "compatibility.body_to_base_footprint.status",
-        ),
-        (
-            ("compatibility", "body_to_base_footprint", "assumption"),
-            "different assumption",
-            "compatibility.body_to_base_footprint.assumption",
-        ),
-        (
-            ("compatibility", "body_to_base_footprint", "follow_up_section"),
-            99,
-            "compatibility.body_to_base_footprint.follow_up_section",
-        ),
         (
             ("deferred_compatibility", 0, "component"),
             "different.component",
@@ -707,10 +660,6 @@ def test_effective_report_required_metadata_drift_is_reported(
 @pytest.mark.parametrize(
     "dotted_path,expected",
     [
-        (
-            ("compatibility", "body_to_base_footprint", "assumption"),
-            "compatibility.body_to_base_footprint.assumption",
-        ),
         (
             ("deferred_compatibility", 0, "reason"),
             "deferred_compatibility.nav2.behavior_server.reason",

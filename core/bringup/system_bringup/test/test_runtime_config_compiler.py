@@ -2,7 +2,7 @@ import shutil
 from copy import deepcopy
 import json
 import math
-from math import cos, degrees, sin, sqrt
+from math import degrees
 from pathlib import Path
 import subprocess
 import sys
@@ -1031,184 +1031,30 @@ def test_robot_launch_arguments_project_independent_effective_mounts_and_sensor_
     ]["ros__parameters"]
 
 
-@pytest.mark.parametrize(
-    ("platform", "expected"),
-    [
-        (
-            "sim",
-            {
-                "x": "0.0",
-                "y": "0.0",
-                "z": "-0.556",
-                "qx": "0.0",
-                "qy": "0.0",
-                "qz": "0.0",
-                "qw": "1.0",
-            },
-        ),
-        (
-            "real",
-            {
-                "x": "-0.443",
-                "y": "0.0",
-                "z": "-0.905",
-                "qx": "0.0",
-                "qy": "0.0",
-                "qz": "0.0",
-                "qw": "1.0",
-            },
-        ),
-    ],
-)
-def test_compatibility_body_weld_arguments_match_profile_baselines(
-    runtime_tree, platform, expected
-):
-    runtime_tree.set_bringup_value("platform", platform)
-    profile = rcc._load_runtime_inputs(runtime_tree.config)["selected_profile"]
+def test_runtime_manifest_has_only_the_permanent_fast_lio_bridge(runtime_tree, tmp_path):
+    manifest = rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "out")
+    report = _load_yaml(manifest["effective_profile_path"])
 
-    assert rcc._derive_compatibility_body_weld_arguments(profile) == expected
-
-
-def _quaternion_matrix(qx, qy, qz, qw):
-    return (
-        (
-            1.0 - 2.0 * (qy * qy + qz * qz),
-            2.0 * (qx * qy - qz * qw),
-            2.0 * (qx * qz + qy * qw),
-        ),
-        (
-            2.0 * (qx * qy + qz * qw),
-            1.0 - 2.0 * (qx * qx + qz * qz),
-            2.0 * (qy * qz - qx * qw),
-        ),
-        (
-            2.0 * (qx * qz - qy * qw),
-            2.0 * (qy * qz + qx * qw),
-            1.0 - 2.0 * (qx * qx + qy * qy),
-        ),
-    )
-
-
-def _compose_transform(left, right):
-    left_rotation, left_translation = left
-    right_rotation, right_translation = right
-    rotation = tuple(
-        tuple(
-            sum(left_rotation[row][k] * right_rotation[k][column] for k in range(3))
-            for column in range(3)
-        )
-        for row in range(3)
-    )
-    translation = tuple(
-        left_translation[row]
-        + sum(left_rotation[row][k] * right_translation[k] for k in range(3))
-        for row in range(3)
-    )
-    return rotation, translation
-
-
-def test_compatibility_body_weld_is_full_se3_inverse_for_nonzero_rpy():
-    mount = {
-        "x": 0.4,
-        "y": -0.2,
-        "z": 0.8,
-        "roll": 0.3,
-        "pitch": -0.4,
-        "yaw": 0.7,
+    assert set(manifest["fast_lio_body_bridge_arguments"]) == {
+        "x", "y", "z", "qx", "qy", "qz", "qw",
     }
-    cr, sr = cos(mount["roll"] / 2.0), sin(mount["roll"] / 2.0)
-    cp, sp = cos(mount["pitch"] / 2.0), sin(mount["pitch"] / 2.0)
-    cy, sy = cos(mount["yaw"] / 2.0), sin(mount["yaw"] / 2.0)
-    forward_quaternion = (
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-        cr * cp * cy + sr * sp * sy,
-    )
-    norm = sqrt(sum(value * value for value in forward_quaternion))
-    forward_rotation = _quaternion_matrix(
-        *(value / norm for value in forward_quaternion)
+    assert "compatibility_body_weld_arguments" not in manifest
+    assert "compatibility" not in report
+    assert report["deferred_compatibility"][0]["component"] == (
+        "nav2.behavior_server"
     )
 
-    weld = rcc._derive_compatibility_body_weld_arguments(
-        {"robot": {"mounts": {"lidar": mount}}}
-    )
-    inverse_rotation = _quaternion_matrix(
-        float(weld["qx"]),
-        float(weld["qy"]),
-        float(weld["qz"]),
-        float(weld["qw"]),
-    )
-    composed = _compose_transform(
-        (forward_rotation, (mount["x"], mount["y"], mount["z"])),
-        (
-            inverse_rotation,
-            (float(weld["x"]), float(weld["y"]), float(weld["z"])),
-        ),
-    )
 
-    for row in range(3):
-        for column in range(3):
-            assert composed[0][row][column] == pytest.approx(
-                1.0 if row == column else 0.0, abs=1e-12
-            )
-    assert composed[1] == pytest.approx((0.0, 0.0, 0.0), abs=1e-12)
-
-
-@pytest.mark.parametrize("platform", ["sim", "real"])
-def test_runtime_report_records_temporary_and_deferred_compatibility(
-    runtime_tree, platform
-):
-    runtime_tree.set_bringup_value("platform", platform)
-    inputs = rcc._load_runtime_inputs(runtime_tree.config)
-    effective_before = deepcopy(inputs["effective"])
-    weld = rcc._derive_compatibility_body_weld_transform(
-        inputs["selected_profile"]
-    )
-
-    report = rcc._build_runtime_report(inputs["effective"], weld)
-
-    assert inputs["effective"] == effective_before
-    assert all(report[key] == value for key, value in effective_before.items())
-    assert report["compatibility"] == {
-        "body_to_base_footprint": {
-            "status": "temporary",
-            "assumption": "FAST-LIO body is colocated with the lidar/IMU origin",
-            "follow_up_section": 5,
-            "translation": {key: weld[key] for key in ("x", "y", "z")},
-            "rotation": {key: weld[key] for key in ("qx", "qy", "qz", "qw")},
-        }
-    }
-    assert report["deferred_compatibility"] == [
-        {
-            "component": "nav2.behavior_server",
-            "status": "deferred_to_section_9",
-            "template_values": {
-                "max_rotational_vel": 1.0,
-                "min_rotational_vel": 0.4,
-                "rotational_acc_lim": 3.2,
-            },
-            "profile_values": {
-                "max_angular_velocity": effective_before["profile"]["motion"][
-                    "max_angular_velocity"
-                ],
-                "max_angular_acceleration": effective_before["profile"]["motion"][
-                    "max_angular_acceleration"
-                ],
-            },
-            "reason": "Humble Nav2 behavior capability and semantics require target-version review",
-        }
-    ]
+def test_runtime_compiler_exports_no_temporary_weld_helpers():
+    assert not hasattr(rcc, "_derive_compatibility_body_weld_transform")
+    assert not hasattr(rcc, "_derive_compatibility_body_weld_arguments")
 
 
 def test_real_runtime_report_preserves_deferred_compatibility_difference(runtime_tree):
     runtime_tree.set_bringup_value("platform", "real")
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
-    weld = rcc._derive_compatibility_body_weld_transform(
-        inputs["selected_profile"]
-    )
 
-    debt = rcc._build_runtime_report(inputs["effective"], weld)[
+    debt = rcc._build_runtime_report(inputs["effective"])[
         "deferred_compatibility"
     ][0]
 
@@ -1378,7 +1224,6 @@ def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
     legacy_report_keys = {"platform", "source_profile", "profile", "derived"}
     runtime_only_keys = {
         "generated_configs",
-        "compatibility",
         "deferred_compatibility",
     }
     for platform_values in generated.values():
@@ -1429,7 +1274,6 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
         *(f"{key}_path" for key in rcc.SENSOR_OUTPUT_FILENAMES[platform]),
         "robot_launch_arguments",
         "fast_lio_body_bridge_arguments",
-        "compatibility_body_weld_arguments",
     }
     assert manifest["bringup_config_path"] == runtime_tree.config.resolve()
     assert manifest["bringup_config"] == loaded[0]["config"]
@@ -1469,12 +1313,7 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
             ],
         )
     }
-    assert "compatibility_body_weld_arguments" in manifest
-    assert manifest["compatibility_body_weld_arguments"] == (
-        rcc._derive_compatibility_body_weld_arguments(
-            loaded[0]["selected_profile"]
-        )
-    )
+    assert "compatibility_body_weld_arguments" not in manifest
 
     report = _load_yaml(paths["effective_profile"])
     assert report["generated_configs"] == {

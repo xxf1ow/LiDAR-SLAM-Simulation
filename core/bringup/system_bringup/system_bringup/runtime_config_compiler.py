@@ -1,7 +1,7 @@
 import argparse
 from copy import deepcopy
 import json
-from math import cos, degrees, isfinite, sin, sqrt
+from math import degrees, isfinite
 import os
 from pathlib import Path
 import tempfile
@@ -322,71 +322,9 @@ def _derive_fast_lio_body_bridge_arguments(effective):
     }
 
 
-def _derive_compatibility_body_weld_transform(profile):
-    """Invert the raw base_footprint-to-lidar mount for the temporary body weld."""
-    mount = profile["robot"]["mounts"]["lidar"]
-    cr, sr = cos(mount["roll"] / 2.0), sin(mount["roll"] / 2.0)
-    cp, sp = cos(mount["pitch"] / 2.0), sin(mount["pitch"] / 2.0)
-    cy, sy = cos(mount["yaw"] / 2.0), sin(mount["yaw"] / 2.0)
-    quaternion = (
-        sr * cp * cy - cr * sp * sy,
-        cr * sp * cy + sr * cp * sy,
-        cr * cp * sy - sr * sp * cy,
-        cr * cp * cy + sr * sp * sy,
-    )
-    norm = sqrt(sum(value * value for value in quaternion))
-    qx, qy, qz, qw = (value / norm for value in quaternion)
-
-    rotation = (
-        (
-            1.0 - 2.0 * (qy * qy + qz * qz),
-            2.0 * (qx * qy - qz * qw),
-            2.0 * (qx * qz + qy * qw),
-        ),
-        (
-            2.0 * (qx * qy + qz * qw),
-            1.0 - 2.0 * (qx * qx + qz * qz),
-            2.0 * (qy * qz - qx * qw),
-        ),
-        (
-            2.0 * (qx * qz - qy * qw),
-            2.0 * (qy * qz + qx * qw),
-            1.0 - 2.0 * (qx * qx + qy * qy),
-        ),
-    )
-    translation = (mount["x"], mount["y"], mount["z"])
-    inverse_translation = tuple(
-        -sum(rotation[row][column] * translation[row] for row in range(3))
-        for column in range(3)
-    )
-    values = inverse_translation + (-qx, -qy, -qz, qw)
-    return {
-        key: _stable_float(value)
-        for key, value in zip(("x", "y", "z", "qx", "qy", "qz", "qw"), values)
-    }
-
-
-def _derive_compatibility_body_weld_arguments(profile):
-    transform = _derive_compatibility_body_weld_transform(profile)
-    return {key: str(value) for key, value in transform.items()}
-
-
-def _build_runtime_report(effective, body_weld):
+def _build_runtime_report(effective):
     report = deepcopy(effective)
     selected_motion = effective["profile"]["motion"]
-    report["compatibility"] = {
-        "body_to_base_footprint": {
-            "status": "temporary",
-            "assumption": "FAST-LIO body is colocated with the lidar/IMU origin",
-            "follow_up_section": 5,
-            "translation": {
-                key: body_weld[key] for key in ("x", "y", "z")
-            },
-            "rotation": {
-                key: body_weld[key] for key in ("qx", "qy", "qz", "qw")
-            },
-        }
-    }
     report["deferred_compatibility"] = [
         {
             "component": "nav2.behavior_server",
@@ -886,19 +824,12 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
     fast_lio_body_bridge_arguments = _derive_fast_lio_body_bridge_arguments(
         effective
     )
-    body_weld = _derive_compatibility_body_weld_transform(
-        inputs["selected_profile"]
-    )
-    body_weld_arguments = {
-        key: str(value) for key, value in body_weld.items()
-    }
-
     output = _prepare_output_dir(output_dir)
     output_filenames = _output_filenames(inputs["platform"])
     paths = {
         key: output / filename for key, filename in output_filenames.items()
     }
-    report = _build_runtime_report(effective, body_weld)
+    report = _build_runtime_report(effective)
     report["generated_configs"] = {
         key: str(paths[key])
         for key in output_filenames
@@ -917,7 +848,6 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
         "fast_lio_path": paths["fast_lio"],
         "robot_launch_arguments": robot_launch_arguments,
         "fast_lio_body_bridge_arguments": fast_lio_body_bridge_arguments,
-        "compatibility_body_weld_arguments": body_weld_arguments,
     }
     for key in SENSOR_OUTPUT_FILENAMES[inputs["platform"]]:
         manifest[f"{key}_path"] = paths[key]

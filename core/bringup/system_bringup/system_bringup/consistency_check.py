@@ -527,23 +527,12 @@ def _validate_installed_freshness(repo_root, failures):
             )
 
 
-def _validate_report_metadata(report, expected_weld, runtime_compiler, failures):
-    body_weld = {key: float(value) for key, value in expected_weld.items()}
+def _validate_report_metadata(report, runtime_compiler, failures):
     try:
-        expected_report = runtime_compiler._build_runtime_report(report, body_weld)
+        expected_report = runtime_compiler._build_runtime_report(report)
     except (KeyError, TypeError, ValueError) as exc:
         failures.append(f"effective report metadata cannot be derived: {exc}")
         return
-
-    expected_body = expected_report["compatibility"]["body_to_base_footprint"]
-    for key in ("status", "assumption", "follow_up_section"):
-        path = ("compatibility", "body_to_base_footprint", key)
-        actual = _nested_value(report, path)
-        expected = expected_body[key]
-        if actual != expected:
-            failures.append(
-                f"effective report {'.'.join(path)} {actual!r} != {expected!r}"
-            )
 
     expected_deferred = next(
         entry
@@ -795,42 +784,7 @@ def run_runtime_consistency(repo_root, manifest):
                         f"{actual!r} != effective bridge {expected!r}"
                     )
 
-        profile = report.get("profile")
-        try:
-            expected_weld = rcc._derive_compatibility_body_weld_arguments(profile)
-        except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
-            failures.append(f"effective report compatibility weld is invalid: {exc}")
-        else:
-            actual_weld = manifest.get("compatibility_body_weld_arguments")
-            for key, expected in expected_weld.items():
-                actual = (
-                    actual_weld.get(key, _MISSING)
-                    if isinstance(actual_weld, dict)
-                    else _MISSING
-                )
-                if actual != expected:
-                    failures.append(
-                        f"manifest compatibility_body_weld_arguments.{key} "
-                        f"{actual!r} != effective weld {expected!r}"
-                    )
-                section = "translation" if key in ("x", "y", "z") else "rotation"
-                report_value = _nested_value(
-                    report,
-                    ("compatibility", "body_to_base_footprint", section, key),
-                )
-                expected_report_value = float(expected)
-                if (
-                    isinstance(report_value, bool)
-                    or not isinstance(report_value, (int, float))
-                    or report_value != expected_report_value
-                ):
-                    failures.append(
-                        "effective report "
-                        f"compatibility.body_to_base_footprint.{section}.{key} "
-                        f"{report_value!r} != derived/manifest weld "
-                        f"{expected_report_value!r}/{actual!r}"
-                    )
-            _validate_report_metadata(report, expected_weld, rcc, failures)
+        _validate_report_metadata(report, rcc, failures)
 
     if all(name in loaded for name in artifacts.values()):
         try:
