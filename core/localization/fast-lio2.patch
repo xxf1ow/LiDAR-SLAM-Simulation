@@ -11,7 +11,7 @@ diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp
 index e5d9950..4337f0f 100644
 --- a/src/laserMapping.cpp
 +++ b/src/laserMapping.cpp
-@@ -925,7 +925,7 @@
+@@ -925,4 +925,4 @@
          {
              sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);
          }

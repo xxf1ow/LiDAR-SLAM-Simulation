@@ -2,6 +2,7 @@
 import copy
 import os
 from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -94,8 +95,39 @@ def test_fast_lio_patch_contains_only_the_imu_qos_source_change():
     assert "config/gazebo_velodyne.yaml" not in patch
     assert "config/vanjee_722.yaml" not in patch
     section = cc._patch_file_section(patch, "src/laserMapping.cpp")
+    hunks = [line for line in section.splitlines() if line.startswith("@@ ")]
+    assert hunks == ["@@ -925,4 +925,4 @@"]
     assert "(imu_topic, 10, imu_cbk);" in section
     assert "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);" in section
+
+
+def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
+    source = tmp_path / "src/laserMapping.cpp"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "// pinned-equivalent filler\n" * 924
+        + "        {\n"
+        + "            sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);\n"
+        + "        }\n"
+        + "        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);\n",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            "git",
+            "apply",
+            "--check",
+            "--no-index",
+            str(Path(_root()) / cc.F_FASTLIO_PATCH),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_sim_imu_topic_is_atomically_fixed_across_active_sources():
@@ -166,6 +198,9 @@ def test_legacy_source_checks_do_not_reconstruct_fast_lio_patch_yaml(monkeypatch
     assert cc.check_geometry(_root(), "real") == []
     assert cc.check_lidar(_root(), "real") == []
     assert not any("fast" in path.lower() for path in seen)
+
+
+def test_retired_legacy_source_interfaces_are_absent():
     assert not hasattr(cc, "FASTLIO_CONFIG")
     assert not hasattr(cc, "F_NAV_LAUNCH")
     assert not hasattr(cc, "_launch_floats")
