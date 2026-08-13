@@ -368,6 +368,116 @@ def test_shared_templates_are_complete_mappings():
         assert data
 
 
+def test_gicp_template_is_complete_confirmed_real_baseline():
+    params = _load_yaml(TEMPLATE_DIR / "gicp.yaml")["gicp_localization"][
+        "ros__parameters"
+    ]
+    assert params == {
+        "map_frame": "map",
+        "odom_frame": "camera_init",
+        "base_frame": "body",
+        "cloud_topic": "/cloud_registered",
+        "odom_topic": "/Odometry",
+        "prior_map_path": "",
+        "map_voxel_size": 0.4,
+        "scan_voxel_size": 0.1,
+        "localization_freq": 0.5,
+        "tf_pub_freq": 50.0,
+        "gicp_max_corr_dist": 1.0,
+        "gicp_num_neighbors": 20,
+        "gicp_num_threads": 4,
+        "gicp_max_iterations": 20,
+        "fitness_threshold": 0.9,
+        "min_scan_points": 100,
+        "initial_pose": [0.0] * 6,
+        "use_sim_time": False,
+    }
+
+
+def test_lio_sam_template_is_complete_confirmed_real_baseline():
+    data = _load_yaml(TEMPLATE_DIR / "lio_sam.yaml")
+    assert set(data) == {"/**"}
+    params = data["/**"]["ros__parameters"]
+    assert set(params) == {
+        "use_sim_time", "pointCloudTopic", "imuTopic", "odomTopic", "gpsTopic",
+        "lidarFrame", "baselinkFrame", "odometryFrame", "mapFrame",
+        "useImuHeadingInitialization", "useGpsElevation", "gpsCovThreshold",
+        "poseCovThreshold", "savePCD", "savePCDDirectory", "sensor", "N_SCAN",
+        "Horizon_SCAN", "downsampleRate", "lidarMinRange", "lidarMaxRange",
+        "imuAccNoise", "imuGyrNoise", "imuAccBiasN", "imuGyrBiasN", "imuGravity",
+        "imuRPYWeight", "extrinsicTrans", "extrinsicRot", "extrinsicRPY",
+        "edgeThreshold", "surfThreshold", "edgeFeatureMinValidNum",
+        "surfFeatureMinValidNum", "odometrySurfLeafSize", "mappingCornerLeafSize",
+        "mappingSurfLeafSize", "z_tollerance", "rotation_tollerance",
+        "numberOfCores", "mappingProcessInterval",
+        "surroundingkeyframeAddingDistThreshold",
+        "surroundingkeyframeAddingAngleThreshold", "surroundingKeyframeDensity",
+        "surroundingKeyframeSearchRadius", "loopClosureEnableFlag",
+        "loopClosureFrequency", "surroundingKeyframeSize",
+        "historyKeyframeSearchRadius", "historyKeyframeSearchTimeDiff",
+        "historyKeyframeSearchNum", "historyKeyframeFitnessScore",
+        "globalMapVisualizationSearchRadius", "globalMapVisualizationPoseDensity",
+        "globalMapVisualizationLeafSize",
+    }
+    assert params == {
+        "use_sim_time": False,
+        "pointCloudTopic": "/points_raw",
+        "imuTopic": "/imu/data",
+        "odomTopic": "odometry/imu",
+        "gpsTopic": "odometry/gpsz",
+        "lidarFrame": "velodyne",
+        "baselinkFrame": "base_footprint",
+        "odometryFrame": "odom",
+        "mapFrame": "map",
+        "useImuHeadingInitialization": False,
+        "useGpsElevation": False,
+        "gpsCovThreshold": 2.0,
+        "poseCovThreshold": 25.0,
+        "savePCD": True,
+        "savePCDDirectory": "/result/loam/",
+        "sensor": "velodyne",
+        "N_SCAN": 32,
+        "Horizon_SCAN": 1200,
+        "downsampleRate": 1,
+        "lidarMinRange": 0.3,
+        "lidarMaxRange": 40.0,
+        "imuAccNoise": 3.9939570888238808e-03,
+        "imuGyrNoise": 1.5636343949698187e-03,
+        "imuAccBiasN": 6.4356659353532566e-05,
+        "imuGyrBiasN": 3.5640318696367613e-05,
+        "imuGravity": 9.80511,
+        "imuRPYWeight": 0.01,
+        "extrinsicTrans": [0.0, 0.0, 0.0],
+        "extrinsicRot": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "extrinsicRPY": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
+        "edgeThreshold": 0.1,
+        "surfThreshold": 0.1,
+        "edgeFeatureMinValidNum": 5,
+        "surfFeatureMinValidNum": 30,
+        "odometrySurfLeafSize": 0.2,
+        "mappingCornerLeafSize": 0.1,
+        "mappingSurfLeafSize": 0.2,
+        "z_tollerance": 1000.0,
+        "rotation_tollerance": 1000.0,
+        "numberOfCores": 3,
+        "mappingProcessInterval": 0.0,
+        "surroundingkeyframeAddingDistThreshold": 1.0,
+        "surroundingkeyframeAddingAngleThreshold": 0.2,
+        "surroundingKeyframeDensity": 2.0,
+        "surroundingKeyframeSearchRadius": 50.0,
+        "loopClosureEnableFlag": False,
+        "loopClosureFrequency": 1.0,
+        "surroundingKeyframeSize": 25,
+        "historyKeyframeSearchRadius": 15.0,
+        "historyKeyframeSearchTimeDiff": 30.0,
+        "historyKeyframeSearchNum": 25,
+        "historyKeyframeFitnessScore": 0.3,
+        "globalMapVisualizationSearchRadius": 1000.0,
+        "globalMapVisualizationPoseDensity": 10.0,
+        "globalMapVisualizationLeafSize": 1.0,
+    }
+
+
 def test_fast_lio_template_is_complete_and_preserves_confirmed_policy():
     params = _load_yaml(TEMPLATE_DIR / "fast_lio.yaml")["/**"]["ros__parameters"]
     assert set(params) == {
