@@ -188,7 +188,18 @@ diff --git a/launch/run.launch.py b/launch/run.launch.py
 index cfde01d..ed8f877 100644
 --- a/launch/run.launch.py
 +++ b/launch/run.launch.py
-@@ -16,7 +16,4 @@ def generate_launch_description():
+@@ -4,3 +4,4 @@ from launch import LaunchDescription
+ from launch.actions import DeclareLaunchArgument
+ from launch.substitutions import LaunchConfiguration, Command
++from launch_ros.parameter_descriptions import ParameterValue
+ from launch_ros.actions import Node
+@@ -11,3 +12,4 @@ def generate_launch_description():
+     share_dir = get_package_share_directory('lio_sam')
+-    parameter_file = LaunchConfiguration('params_file')
++    parameter_file = ParameterValue(
++        LaunchConfiguration('params_file'), value_type=str)
+     xacro_path = os.path.join(share_dir, 'config', 'robot.urdf.xacro')
+@@ -16,7 +18,4 @@ def generate_launch_description():
      params_declare = DeclareLaunchArgument(
          'params_file',
 -        default_value=os.path.join(
@@ -197,7 +208,7 @@ index cfde01d..ed8f877 100644
 -
 +        description='Absolute path to the generated ROS2 parameter file.')
      print("urdf_file_name : {}".format(xacro_path))
-@@ -30,15 +27,17 @@ def generate_launch_description():
+@@ -30,15 +29,17 @@ def generate_launch_description():
              parameters=[parameter_file],
              output='screen'
              ),
@@ -224,7 +235,7 @@ index cfde01d..ed8f877 100644
          Node(
              package='lio_sam',
              executable='lio_sam_imuPreintegration',
-@@ -72,6 +74,7 @@ def generate_launch_description():
+@@ -72,6 +76,7 @@ def generate_launch_description():
              executable='rviz2',
              name='rviz2',
              arguments=['-d', rviz_config_file],
