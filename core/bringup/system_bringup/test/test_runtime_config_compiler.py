@@ -552,7 +552,16 @@ def test_nav2_template_preserves_complete_current_sim_baseline():
         / "navigation/robot_navigation/config/nav2_params.yaml"
     )
     template = _load_yaml(TEMPLATE_DIR / "nav2.yaml")
-    assert template == source
+    expected = deepcopy(source)
+    follow_path = expected["controller_server"]["ros__parameters"]["FollowPath"]
+    follow_path["vx_min"] = -0.1
+    follow_path["wz_std"] = 0.2
+    behavior = expected["behavior_server"]["ros__parameters"]
+    behavior["max_rotational_vel"] = 0.2
+    behavior["min_rotational_vel"] = 0.1
+    behavior["rotational_acc_lim"] = 0.2
+
+    assert template == expected
     assert set(template) == {
         "map_server",
         "planner_server",
@@ -850,10 +859,14 @@ def test_renderer_maps_profile_motion_and_geometry_to_all_modules(
 
     assert follow_path["vx_max"] == motion["max_linear_velocity"]
     assert follow_path["wz_max"] == motion["max_angular_velocity"]
-    assert follow_path["vx_min"] == -0.35
+    assert follow_path["vx_min"] == -0.1
     assert {"ax_max", "ax_min", "az_max"}.isdisjoint(follow_path)
     assert follow_path["vx_std"] == 0.2
-    assert follow_path["wz_std"] == 0.6
+    assert follow_path["wz_std"] == 0.2
+    behavior = rendered["nav2"]["behavior_server"]["ros__parameters"]
+    assert behavior["max_rotational_vel"] == 0.2
+    assert behavior["min_rotational_vel"] == 0.1
+    assert behavior["rotational_acc_lim"] == 0.2
     assert rendered["nav2"]["controller_server"]["ros__parameters"][
         "controller_frequency"
     ] == 10.0
@@ -906,6 +919,25 @@ def test_renderer_does_not_mutate_loaded_templates(runtime_tree):
     rcc._render_runtime_configs(inputs)
 
     assert inputs["templates"] == original_templates
+
+
+@pytest.mark.parametrize(
+    "profile_path,value,expected",
+    [
+        (("motion", "max_linear_velocity"), 0.09, "vx_min"),
+        (("motion", "max_angular_velocity"), 0.19, "max_rotational_vel"),
+        (("motion", "max_angular_velocity"), 0.09, "min_rotational_vel"),
+        (("motion", "max_angular_acceleration"), 0.19, "rotational_acc_lim"),
+    ],
+)
+def test_nav2_fixed_behavior_must_fit_profile_capability(
+    runtime_tree, profile_path, value, expected
+):
+    runtime_tree.set_profile_value("real", profile_path, value)
+    runtime_tree.set_bringup_value("platform", "real")
+    with pytest.raises(ValueError, match=expected):
+        inputs = rcc._load_runtime_inputs(runtime_tree.config)
+        rcc._render_runtime_configs(inputs)
 
 
 @pytest.mark.parametrize(
@@ -1239,7 +1271,103 @@ NAV2_RENDER_PATHS = (
     ("controller_server", "ros__parameters", "FollowPath", "wz_max"),
     ("global_costmap", "global_costmap", "ros__parameters", "footprint"),
     ("local_costmap", "local_costmap", "ros__parameters", "footprint"),
-) + rcc.NAV2_TIME_PATHS
+)
+NAV2_STVL_ROOTS = (
+    ("global_costmap", "global_costmap", "ros__parameters", "stvl_layer"),
+    ("local_costmap", "local_costmap", "ros__parameters", "stvl_layer"),
+)
+NAV2_STVL_RENDER_PATHS = tuple(
+    root + suffix
+    for root in NAV2_STVL_ROOTS
+    for suffix in (
+        ("pointcloud_mark", "min_obstacle_height"),
+        ("pointcloud_mark", "max_obstacle_height"),
+        ("pointcloud_clear", "min_z"),
+        ("pointcloud_clear", "max_z"),
+        ("pointcloud_clear", "vertical_fov_angle"),
+        ("pointcloud_clear", "horizontal_fov_angle"),
+    )
+)
+NAV2_RENDER_PATHS += NAV2_STVL_RENDER_PATHS + rcc.NAV2_TIME_PATHS
+NAV2_FIXED_BEHAVIOR_PATHS = (
+    ("controller_server", "ros__parameters", "FollowPath", "vx_min"),
+    ("controller_server", "ros__parameters", "FollowPath", "wz_std"),
+    ("behavior_server", "ros__parameters", "max_rotational_vel"),
+    ("behavior_server", "ros__parameters", "min_rotational_vel"),
+    ("behavior_server", "ros__parameters", "rotational_acc_lim"),
+)
+
+
+def test_nav2_renderer_changes_only_whitelisted_leaves_and_injects_stvl_profile(
+    runtime_tree,
+):
+    runtime_tree.set_profile_value(
+        "real", ("sensors", "lidar", "vertical_fov_angle"), 0.6
+    )
+    runtime_tree.set_profile_value(
+        "real", ("perception", "obstacle_height", "min"), -0.4
+    )
+    runtime_tree.set_profile_value(
+        "real", ("perception", "obstacle_height", "max"), 1.8
+    )
+    runtime_tree.set_bringup_value("platform", "real")
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    source = inputs["templates"]["nav2"]
+    before = deepcopy(source)
+
+    rendered = rcc._render_nav2(source, inputs["effective"])
+    expected = deepcopy(before)
+    for path in NAV2_RENDER_PATHS:
+        _set_nested(expected, path, _path_value(rendered, path))
+
+    assert rendered == expected
+    assert source == before
+
+    effective = inputs["effective"]
+    min_height = effective["profile"]["perception"]["obstacle_height"]["min"]
+    max_height = effective["profile"]["perception"]["obstacle_height"]["max"]
+    lidar = effective["profile"]["sensors"]["lidar"]
+    horizontal_fov = (
+        lidar["horizontal_end_angle"] - lidar["horizontal_start_angle"]
+    )
+    for root in NAV2_STVL_ROOTS:
+        assert _path_value(
+            rendered, root + ("pointcloud_mark", "min_obstacle_height")
+        ) == min_height
+        assert _path_value(
+            rendered, root + ("pointcloud_mark", "max_obstacle_height")
+        ) == max_height
+        assert _path_value(
+            rendered, root + ("pointcloud_clear", "min_z")
+        ) == min_height
+        assert _path_value(
+            rendered, root + ("pointcloud_clear", "max_z")
+        ) == max_height
+        assert _path_value(
+            rendered, root + ("pointcloud_clear", "vertical_fov_angle")
+        ) == lidar["vertical_fov_angle"]
+        assert _path_value(
+            rendered, root + ("pointcloud_clear", "horizontal_fov_angle")
+        ) == horizontal_fov
+
+
+@pytest.mark.parametrize(
+    "path", NAV2_STVL_RENDER_PATHS + NAV2_FIXED_BEHAVIOR_PATHS
+)
+def test_generated_config_validator_rejects_nav2_stvl_and_fixed_behavior_drift(
+    runtime_tree, path
+):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    rendered = rcc._render_runtime_configs(inputs)
+    _set_nested(rendered["nav2"], path, 99.0)
+
+    with pytest.raises(ValueError, match="generated nav2 mismatch"):
+        rcc._validate_generated_configs(
+            inputs["effective"],
+            rendered["controllers"],
+            rendered["web_ui"],
+            rendered["nav2"],
+        )
 
 
 def _mutate_path(mapping, path, mutation):
@@ -1380,9 +1508,8 @@ def test_runtime_manifest_has_only_the_permanent_fast_lio_bridge(runtime_tree, t
     }
     assert "compatibility_body_weld_arguments" not in manifest
     assert "compatibility" not in report
-    assert report["deferred_compatibility"][0]["component"] == (
-        "nav2.behavior_server"
-    )
+    assert "deferred_compatibility" not in report
+    assert "deferred_to_section_9" not in yaml.safe_dump(report)
 
 
 def test_runtime_compiler_exports_no_temporary_weld_helpers():
@@ -1390,23 +1517,16 @@ def test_runtime_compiler_exports_no_temporary_weld_helpers():
     assert not hasattr(rcc, "_derive_compatibility_body_weld_arguments")
 
 
-def test_real_runtime_report_preserves_deferred_compatibility_difference(runtime_tree):
+def test_runtime_report_is_an_exact_copy_without_deferred_compatibility(runtime_tree):
     runtime_tree.set_bringup_value("platform", "real")
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
 
-    debt = rcc._build_runtime_report(inputs["effective"])[
-        "deferred_compatibility"
-    ][0]
+    report = rcc._build_runtime_report(inputs["effective"])
 
-    assert debt["template_values"] == {
-        "max_rotational_vel": 1.0,
-        "min_rotational_vel": 0.4,
-        "rotational_acc_lim": 3.2,
-    }
-    assert debt["profile_values"] == {
-        "max_angular_velocity": 0.4,
-        "max_angular_acceleration": 0.3,
-    }
+    assert report == deepcopy(inputs["effective"])
+    assert report is not inputs["effective"]
+    assert "deferred_compatibility" not in report
+    assert "deferred_to_section_9" not in yaml.safe_dump(report)
 
 
 def _temporary_files(output):
@@ -1562,10 +1682,7 @@ def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
     }
 
     legacy_report_keys = {"platform", "source_profile", "profile", "derived"}
-    runtime_only_keys = {
-        "generated_configs",
-        "deferred_compatibility",
-    }
+    runtime_only_keys = {"generated_configs"}
     for platform_values in generated.values():
         for values in platform_values.values():
             assert set(values["effective_profile"]) == (

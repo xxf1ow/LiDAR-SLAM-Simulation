@@ -75,9 +75,9 @@ controller_server:
       batch_size: 1000          # 2000→1000 降算力(WSL 软渲算力紧);再紧可降到 500
       vx_std: 0.2
       vy_std: 0.2
-      wz_std: 0.6               # 0.4→0.6 多探索转向样本,改善弯道边走边转
+      wz_std: 0.2               # 已确认 real 转向采样标准差
       vx_max: 1.0               # CHASSIS: 0.5→1.0 提速(≤底盘 1.5)
-      vx_min: -0.35             # CHASSIS
+      vx_min: -0.1              # CHASSIS
       vy_max: 0.5
       wz_max: 1.8               # CHASSIS: 1.0→1.8 治弯道爬行(≤底盘 2.0);紧弯 vx=wz·r 不再被钳死
       iteration_count: 1
@@ -289,9 +289,9 @@ behavior_server:
     robot_base_frame: base_footprint
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    max_rotational_vel: 0.2
+    min_rotational_vel: 0.1
+    rotational_acc_lim: 0.2
 
 bt_navigator:
   ros__parameters:

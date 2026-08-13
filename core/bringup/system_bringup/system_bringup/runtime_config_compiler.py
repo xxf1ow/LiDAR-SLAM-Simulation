@@ -73,6 +73,10 @@ NAV2_TIME_PATHS = (
     ("behavior_server", "ros__parameters", "use_sim_time"),
     ("bt_navigator", "ros__parameters", "use_sim_time"),
 )
+NAV2_STVL_ROOTS = (
+    ("global_costmap", "global_costmap", "ros__parameters", "stvl_layer"),
+    ("local_costmap", "local_costmap", "ros__parameters", "stvl_layer"),
+)
 
 
 class _OneLineArgumentParser(argparse.ArgumentParser):
@@ -401,27 +405,7 @@ def _derive_fast_lio_body_bridge_arguments(effective):
 
 
 def _build_runtime_report(effective):
-    report = deepcopy(effective)
-    selected_motion = effective["profile"]["motion"]
-    report["deferred_compatibility"] = [
-        {
-            "component": "nav2.behavior_server",
-            "status": "deferred_to_section_9",
-            "template_values": {
-                "max_rotational_vel": 1.0,
-                "min_rotational_vel": 0.4,
-                "rotational_acc_lim": 3.2,
-            },
-            "profile_values": {
-                "max_angular_velocity": selected_motion["max_angular_velocity"],
-                "max_angular_acceleration": selected_motion[
-                    "max_angular_acceleration"
-                ],
-            },
-            "reason": "Humble Nav2 behavior capability and semantics require target-version review",
-        }
-    ]
-    return report
+    return deepcopy(effective)
 
 
 def _render_controller(template, effective):
@@ -481,7 +465,49 @@ def _render_web_ui(template, effective):
 def _render_nav2(template, effective):
     nav2 = deepcopy(template)
     motion = effective["profile"]["motion"]
+    perception = effective["profile"]["perception"]
+    lidar = effective["profile"]["sensors"]["lidar"]
     footprint = _format_footprint(effective["derived"]["geometry"]["footprint"])
+
+    fixed_behavior_paths = {
+        "vx_min": (
+            "controller_server", "ros__parameters", "FollowPath", "vx_min"
+        ),
+        "max_rotational_vel": (
+            "behavior_server", "ros__parameters", "max_rotational_vel"
+        ),
+        "min_rotational_vel": (
+            "behavior_server", "ros__parameters", "min_rotational_vel"
+        ),
+        "rotational_acc_lim": (
+            "behavior_server", "ros__parameters", "rotational_acc_lim"
+        ),
+    }
+    fixed_behavior = {}
+    for name, path in fixed_behavior_paths.items():
+        try:
+            value = _get_existing(nav2, path)
+        except ValueError as exc:
+            raise ValueError(f"nav2 template: {exc}") from exc
+        if type(value) is not float or not isfinite(value):
+            raise ValueError(f"nav2 template {name} must be a finite float")
+        fixed_behavior[name] = value
+
+    if abs(fixed_behavior["vx_min"]) > motion["max_linear_velocity"]:
+        raise ValueError("nav2 template vx_min exceeds profile linear capability")
+    if fixed_behavior["min_rotational_vel"] > motion["max_angular_velocity"]:
+        raise ValueError(
+            "nav2 template min_rotational_vel exceeds profile angular capability"
+        )
+    if fixed_behavior["max_rotational_vel"] > motion["max_angular_velocity"]:
+        raise ValueError(
+            "nav2 template max_rotational_vel exceeds profile angular capability"
+        )
+    if fixed_behavior["rotational_acc_lim"] > motion["max_angular_acceleration"]:
+        raise ValueError(
+            "nav2 template rotational_acc_lim exceeds profile angular acceleration"
+        )
+
     _set_template_existing(
         "nav2",
         nav2,
@@ -501,6 +527,22 @@ def _render_nav2(template, effective):
         ("local_costmap", "local_costmap", "ros__parameters", "footprint"),
     ):
         _set_template_existing("nav2", nav2, path, footprint, str)
+    min_height = perception["obstacle_height"]["min"]
+    max_height = perception["obstacle_height"]["max"]
+    vertical_fov = lidar["vertical_fov_angle"]
+    horizontal_fov = (
+        lidar["horizontal_end_angle"] - lidar["horizontal_start_angle"]
+    )
+    for root in NAV2_STVL_ROOTS:
+        for suffix, value in (
+            (("pointcloud_mark", "min_obstacle_height"), float(min_height)),
+            (("pointcloud_mark", "max_obstacle_height"), float(max_height)),
+            (("pointcloud_clear", "min_z"), float(min_height)),
+            (("pointcloud_clear", "max_z"), float(max_height)),
+            (("pointcloud_clear", "vertical_fov_angle"), float(vertical_fov)),
+            (("pointcloud_clear", "horizontal_fov_angle"), float(horizontal_fov)),
+        ):
+            _set_template_existing("nav2", nav2, root + suffix, value, float)
     for path in NAV2_TIME_PATHS:
         _set_template_existing(
             "nav2", nav2, path, effective["derived"]["use_sim_time"], bool
@@ -887,6 +929,35 @@ def _validate_generated_configs(effective, controllers, web_ui, nav2):
     unsupported = {"ax_max", "ax_min", "az_max"}.intersection(follow_values)
     if unsupported:
         raise ValueError(f"generated nav2 has unsupported keys: {sorted(unsupported)}")
+
+    fixed_behavior = (
+        (follow_path + ("vx_min",), -0.1),
+        (follow_path + ("wz_std",), 0.2),
+        (("behavior_server", "ros__parameters", "max_rotational_vel"), 0.2),
+        (("behavior_server", "ros__parameters", "min_rotational_vel"), 0.1),
+        (("behavior_server", "ros__parameters", "rotational_acc_lim"), 0.2),
+    )
+    for path, expected in fixed_behavior:
+        if not _same_typed_value(_get_existing(nav2, path), expected):
+            raise ValueError(f"generated nav2 mismatch: {'.'.join(path)}")
+
+    obstacle_height = effective["profile"]["perception"]["obstacle_height"]
+    lidar = effective["profile"]["sensors"]["lidar"]
+    horizontal_fov = (
+        lidar["horizontal_end_angle"] - lidar["horizontal_start_angle"]
+    )
+    for root in NAV2_STVL_ROOTS:
+        for suffix, expected in (
+            (("pointcloud_mark", "min_obstacle_height"), obstacle_height["min"]),
+            (("pointcloud_mark", "max_obstacle_height"), obstacle_height["max"]),
+            (("pointcloud_clear", "min_z"), obstacle_height["min"]),
+            (("pointcloud_clear", "max_z"), obstacle_height["max"]),
+            (("pointcloud_clear", "vertical_fov_angle"), lidar["vertical_fov_angle"]),
+            (("pointcloud_clear", "horizontal_fov_angle"), horizontal_fov),
+        ):
+            path = root + suffix
+            if not _same_typed_value(_get_existing(nav2, path), float(expected)):
+                raise ValueError(f"generated nav2 mismatch: {'.'.join(path)}")
 
     footprint = _format_footprint(effective["derived"]["geometry"]["footprint"])
     for path in (
