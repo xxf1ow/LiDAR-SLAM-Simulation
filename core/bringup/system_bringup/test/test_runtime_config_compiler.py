@@ -136,17 +136,7 @@ def runtime_tree(tmp_path):
                     "prior_pcd": "~/result/GlobalMap.pcd",
                     "nav2_map": "~/result/factory_map.yaml",
                 },
-                "slam_stack": {
-                    platform: {
-                        "gicp_localization": {
-                            "prior_map_path": "~/result/GlobalMap.pcd",
-                        },
-                        "robot_navigation": {
-                            "map": "~/result/factory_map.yaml",
-                        },
-                    }
-                    for platform in ("sim", "real")
-                },
+                "slam_stack": {"settling": 20.0},
             },
             sort_keys=False,
         ),
@@ -158,6 +148,15 @@ def runtime_tree(tmp_path):
 def test_runtime_inputs_preserve_literal_map_artifacts(runtime_tree):
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
 
+    assert inputs["map_artifacts"] == {
+        "lio_sam_work_dir": "/result/loam/",
+        "prior_pcd": "~/result/GlobalMap.pcd",
+        "nav2_map": "~/result/factory_map.yaml",
+    }
+
+
+def test_runtime_inputs_need_no_retired_platform_selectors(runtime_tree):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
     assert inputs["map_artifacts"] == {
         "lio_sam_work_dir": "/result/loam/",
         "prior_pcd": "~/result/GlobalMap.pcd",
@@ -192,24 +191,6 @@ def test_map_file_artifacts_must_be_non_empty_strings(runtime_tree, key, value):
     _set_config_path(runtime_tree, ("map_artifacts", key), value)
 
     with pytest.raises(ValueError, match=rf"map_artifacts\.{key}"):
-        rcc._load_runtime_inputs(runtime_tree.config)
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        ("slam_stack", "sim", "gicp_localization", "prior_map_path"),
-        ("slam_stack", "real", "gicp_localization", "prior_map_path"),
-        ("slam_stack", "sim", "robot_navigation", "map"),
-        ("slam_stack", "real", "robot_navigation", "map"),
-    ],
-)
-def test_transition_duplicate_map_paths_must_match_map_artifacts(
-    runtime_tree, path
-):
-    _set_config_path(runtime_tree, path, "~/different/path")
-
-    with pytest.raises(ValueError, match="transition duplicate"):
         rcc._load_runtime_inputs(runtime_tree.config)
 
 

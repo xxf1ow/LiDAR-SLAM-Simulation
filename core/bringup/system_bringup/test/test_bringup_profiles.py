@@ -32,75 +32,16 @@ def test_default_platform_and_mode_remain_sim_navigation():
     assert cfg["mode"] == "navigation"
 
 
-def test_sim_profile_preserves_existing_files_and_maps():
+def test_bringup_has_only_runtime_selection_resources_and_orchestration():
     cfg = _load()
-    sim = cfg["slam_stack"]["sim"]
+    assert set(cfg) == {
+        "platform", "mode", "profiles", "map_artifacts", "robot_gz", "slam_stack"
+    }
+    assert cfg["slam_stack"] == {"settling": 20.0}
     assert cfg["map_artifacts"] == {
         "lio_sam_work_dir": "/result/loam/",
         "prior_pcd": "~/result/GlobalMap.pcd",
         "nav2_map": "~/result/factory_map.yaml",
-    }
-    assert sim["lio_sam"]["config"] == "params.yaml"
-    assert sim["gicp_localization"] == {
-        "config": "gicp_localization.yaml",
-        "prior_map_path": "~/result/GlobalMap.pcd",
-    }
-    assert sim["robot_navigation"] == {
-        "config": "nav2_params.yaml",
-        "map": "~/result/factory_map.yaml",
-    }
-    for platform in ("sim", "real"):
-        stack = cfg["slam_stack"][platform]
-        assert stack["gicp_localization"]["prior_map_path"] == cfg[
-            "map_artifacts"
-        ]["prior_pcd"]
-        assert stack["robot_navigation"]["map"] == cfg["map_artifacts"][
-            "nav2_map"
-        ]
-
-
-def test_real_profile_selects_only_real_parameter_files():
-    real = _load()["slam_stack"]["real"]
-    assert real["lio_sam"]["config"] == "params_real.yaml"
-    assert real["gicp_localization"]["config"] == "gicp_localization_real.yaml"
-    assert real["robot_navigation"]["config"] == "nav2_params_real.yaml"
-    assert real["gicp_localization"]["prior_map_path"] == "~/result/GlobalMap.pcd"
-    assert real["robot_navigation"]["map"] == "~/result/factory_map.yaml"
-
-
-def test_fast_lio_is_not_selected_by_platform_config():
-    config = _load()
-    for platform in ("sim", "real"):
-        assert "fast_lio" not in config["slam_stack"][platform]
-
-
-def test_real_driver_selects_vanjee_722_config():
-    assert _load()["vanjee_lidar"]["config"] == "vanjee_722.yaml"
-
-
-def test_real_geometry_keeps_all_measured_values_in_bringup():
-    geometry = _load()["real_geometry"]
-
-    assert geometry == {
-        "body": {
-            "length": 0.960,
-            "width": 0.610,
-            "height": 0.377,
-            "ground_clearance": 0.143,
-        },
-        "drive_wheel": {
-            "diameter": 0.205,
-            "width": 0.101,
-            "separation": 0.463,
-        },
-        "lidar": {
-            "x": 0.443,
-            "y": 0.0,
-            "z": 0.905,
-            "roll": 0.0,
-            "pitch": 0.0,
-            "yaw": 0.0,
-        },
     }
 
 

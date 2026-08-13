@@ -202,17 +202,6 @@ def _nested_value(mapping, path):
     return value
 
 
-def _require_runtime_value(mapping, path, predicate, failures, expectation):
-    value = _nested_value(mapping, path)
-    dotted = ".".join(path)
-    if value is _MISSING:
-        failures.append(f"manifest bringup_config missing {dotted}")
-    elif not predicate(value):
-        failures.append(
-            f"manifest bringup_config {dotted} must be {expectation}; got {value!r}"
-        )
-
-
 def _normalize_path(value, label, failures, require_absolute=False):
     try:
         path = Path(value).expanduser()
@@ -336,51 +325,6 @@ def _load_runtime_template(
         )
         return None
     return template
-
-
-def _validate_unmigrated_runtime_config(config, platform, failures):
-    nonempty_string = lambda value: isinstance(value, str) and bool(value.strip())
-    nonnegative_number = lambda value: (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-        and value >= 0.0
-    )
-    _require_runtime_value(
-        config,
-        ("slam_stack", "settling"),
-        nonnegative_number,
-        failures,
-        "a finite number >= 0",
-    )
-    for path in (
-        ("slam_stack", platform, "lio_sam", "config"),
-        ("slam_stack", platform, "gicp_localization", "config"),
-        ("slam_stack", platform, "gicp_localization", "prior_map_path"),
-        ("slam_stack", platform, "robot_navigation", "config"),
-        ("slam_stack", platform, "robot_navigation", "map"),
-    ):
-        _require_runtime_value(
-            config, path, nonempty_string, failures, "a non-empty string"
-        )
-
-    if platform == "sim":
-        for key in ("gui", "rviz", "world", "spawn_x", "spawn_y", "spawn_z"):
-            _require_runtime_value(
-                config,
-                ("robot_gz", key),
-                nonempty_string,
-                failures,
-                "a non-empty string",
-            )
-    elif platform == "real":
-        _require_runtime_value(
-            config,
-            ("robot_bringup", "use_mock_hardware"),
-            lambda value: isinstance(value, bool),
-            failures,
-            "a boolean",
-        )
 
 
 _ACTIVE_RUNTIME_FILES = {
@@ -809,8 +753,6 @@ def run_runtime_consistency(repo_root, manifest):
             except (KeyError, TypeError, ValueError) as exc:
                 failures.append(f"generated lio_sam validation failed: {exc}")
 
-    if platform in ("sim", "real"):
-        _validate_unmigrated_runtime_config(config, platform, failures)
     if root is not None and root.is_dir():
         _validate_installed_freshness(root, failures)
     return failures

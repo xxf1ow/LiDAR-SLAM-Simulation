@@ -108,7 +108,12 @@ def runtime_factory(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize(
     "platform,mode",
-    [("sim", "navigation"), ("real", "mapping")],
+    [
+        ("sim", "mapping"),
+        ("sim", "navigation"),
+        ("real", "mapping"),
+        ("real", "navigation"),
+    ],
 )
 def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     runtime_factory, monkeypatch, platform, mode
@@ -901,37 +906,34 @@ def test_report_source_profile_must_match_selected_manifest_profile(runtime_fact
 
 
 @pytest.mark.parametrize(
-    "platform,dotted_path,expected",
+    "platform,mode",
     [
-        ("sim", ("robot_gz", "world"), "robot_gz.world"),
-        ("real", ("slam_stack", "real", "lio_sam", "config"), "slam_stack.real.lio_sam.config"),
-        ("real", ("robot_bringup", "use_mock_hardware"), "robot_bringup.use_mock_hardware"),
+        ("sim", "mapping"), ("sim", "navigation"),
+        ("real", "mapping"), ("real", "navigation"),
     ],
 )
-def test_unmigrated_downstream_config_shape_is_validated(
-    runtime_factory, platform, dotted_path, expected
+def test_final_bringup_shape_passes_runtime_consistency(
+    runtime_factory, platform, mode
 ):
-    repo_root, manifest = runtime_factory(platform)
-    target = manifest["bringup_config"]
-    for key in dotted_path[:-1]:
-        target = target[key]
-    del target[dotted_path[-1]]
+    repo_root, manifest = runtime_factory(platform, mode)
+    assert set(manifest["bringup_config"]["slam_stack"]) == {"settling"}
+    assert cc.run_runtime_consistency(repo_root, manifest) == []
 
-    failures = cc.run_runtime_consistency(repo_root, manifest)
 
-    assert any(expected in failure for failure in failures)
+def test_unmigrated_runtime_gate_is_removed():
+    assert not hasattr(cc, "_validate_unmigrated_runtime_config")
+    assert not hasattr(cc, "_require_runtime_value")
 
 
 def test_runtime_consistency_does_not_require_retired_fast_lio_selector(
     runtime_factory,
 ):
     repo_root, manifest = runtime_factory("sim", "navigation")
-    assert "fast_lio" not in manifest["bringup_config"]["slam_stack"]["sim"]
+    assert "fast_lio" not in manifest["bringup_config"]["slam_stack"]
     assert cc.run_runtime_consistency(repo_root, manifest) == []
 
 
 def test_real_manifest_remains_valid_without_legacy_vanjee_section(runtime_factory):
     repo_root, manifest = runtime_factory("real")
-    del manifest["bringup_config"]["vanjee_lidar"]
-
+    assert "vanjee_lidar" not in manifest["bringup_config"]
     assert cc.run_runtime_consistency(repo_root, manifest) == []

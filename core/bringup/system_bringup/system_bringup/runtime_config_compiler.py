@@ -153,29 +153,6 @@ def _validate_map_artifacts(config):
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"map_artifacts.{key} must be a non-empty string")
 
-    try:
-        stack = config["slam_stack"]
-        duplicates_by_platform = {
-            platform: {
-                "prior_pcd": stack[platform]["gicp_localization"][
-                    "prior_map_path"
-                ],
-                "nav2_map": stack[platform]["robot_navigation"]["map"],
-            }
-            for platform in ("sim", "real")
-        }
-    except (KeyError, TypeError) as exc:
-        raise ValueError(
-            "bringup config transition slam_stack is incomplete"
-        ) from exc
-
-    for platform, duplicates in duplicates_by_platform.items():
-        for key, legacy_value in duplicates.items():
-            if legacy_value != artifacts[key]:
-                raise ValueError(
-                    f"transition duplicate {platform}.{key} must match "
-                    f"map_artifacts.{key}"
-                )
     return deepcopy(artifacts)
 
 

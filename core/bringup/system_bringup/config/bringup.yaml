@@ -26,55 +26,6 @@ robot_gz:
   spawn_y: "0.0"
   spawn_z: "0.05"
 
-# === 真机底层:robot_bringup(platform=real 时生效,真实底盘 launch 已接线)===
-robot_bringup:
-  use_mock_hardware: false
-
-# === 历史兼容：旧真机几何（非活动运行时源）===
-# 活动运行时源是 profiles/real.yaml；本段仅为旧检查/历史代码保留，后续统一清理。
-# 单位:m / rad。以下均为 2026-08-03 人工测量的暂定历史值。
-# 暂按驱动轴中点=车体几何中心，并将其地面投影定义为 base_footprint；待厂家图确认。
-# lidar xyz 是 base_footprint -> 雷达/内置 IMU 坐标原点。
-real_geometry:
-  body:
-    length: 0.960
-    width: 0.610
-    height: 0.377
-    ground_clearance: 0.143
-  drive_wheel:
-    diameter: 0.205
-    width: 0.101
-    separation: 0.463
-  lidar:
-    x: 0.443
-    y: 0.0
-    z: 0.905
-    roll: 0.0
-    pitch: 0.0
-    yaw: 0.0
-
-# === 真机雷达驱动 ===
-vanjee_lidar:
-  config: vanjee_722.yaml
-
-# === 共享上层:两套参数文件互不覆盖 ===
+# === 共享上层编排 ===
 slam_stack:
   settling: 20.0              # ready_gate 就绪后再等的稳定秒数(所有 gate 共用)
-  sim:
-    lio_sam:
-      config: params.yaml
-    gicp_localization:
-      config: gicp_localization.yaml
-      prior_map_path: ~/result/GlobalMap.pcd     # 先验图(save_map.sh 落 ~/result)
-    robot_navigation:
-      config: nav2_params.yaml
-      map: ~/result/factory_map.yaml             # 占据栅格(pcd_to_occupancy 生成)
-  real:
-    lio_sam:
-      config: params_real.yaml
-    gicp_localization:
-      config: gicp_localization_real.yaml
-      prior_map_path: ~/result/GlobalMap.pcd
-    robot_navigation:
-      config: nav2_params_real.yaml
-      map: ~/result/factory_map.yaml
