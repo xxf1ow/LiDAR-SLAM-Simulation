@@ -33,7 +33,6 @@ setup(
         'console_scripts': [
             'compile_profile = system_bringup.profile_compiler:main',
             'compile_runtime_configs = system_bringup.runtime_config_compiler:main',
-            'consistency_check = system_bringup.consistency_check:main',
             'sensor_contract_gate = system_bringup.sensor_gate_node:main',
         ],
     },

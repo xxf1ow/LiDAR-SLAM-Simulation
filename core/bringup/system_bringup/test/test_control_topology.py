@@ -700,13 +700,6 @@ def _fake_launch_module(monkeypatch, package_share):
     consistency = module(
         "system_bringup.consistency_check",
         run_runtime_consistency=lambda repo_root, manifest: [],
-        find_repo_root=lambda: (_ for _ in ()).throw(RuntimeError("legacy discovery")),
-        load_bringup_config=lambda repo_root: {},
-        run=lambda repo_root: [],
-        derive_real_geometry=lambda config: {},
-        real_geometry_launch_arguments=lambda geometry: {},
-        require_runtime_config_file=lambda path, component: path,
-        write_real_runtime_configs=lambda repo_root, config: {},
     )
     runtime_compiler = module(
         "system_bringup.runtime_config_compiler",
@@ -1105,9 +1098,12 @@ def test_sensor_contract_gate_main_spins_only_until_result_is_finished():
     assert ast.dump(spins[0]) == ast.dump(expected_spin)
 
 
-def test_sensor_contract_gate_replaces_the_legacy_console_entry_point():
+def test_setup_installs_only_active_bringup_console_entry_points():
     source = SETUP.read_text(encoding="utf-8")
+    assert "compile_profile = system_bringup.profile_compiler:main" in source
+    assert "compile_runtime_configs = system_bringup.runtime_config_compiler:main" in source
     assert "sensor_contract_gate = system_bringup.sensor_gate_node:main" in source
+    assert "consistency_check = system_bringup.consistency_check:main" not in source
     assert "real_sensor_ready_gate" not in source
 
 

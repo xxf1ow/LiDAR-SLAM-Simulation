@@ -1,3 +1,4 @@
+import ast
 import builtins
 import shutil
 import tempfile
@@ -38,6 +39,90 @@ ACTIVE_RUNTIME_FILES = {
         "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
     ),
 }
+
+LEGACY_PRODUCTION_FUNCTIONS = {
+    "find_repo_root",
+    "load_bringup_config",
+    "require_runtime_config_file",
+    "derive_real_geometry",
+    "_read",
+    "_yaml",
+    "_xacro_props",
+    "_xacro_args",
+    "_xacro_joint_origin_xyz",
+    "_patch_file_section",
+    "_patch_added_file",
+    "_patch_added_value",
+    "_gazebo_lidar",
+    "_parse_footprint",
+    "_format_footprint",
+    "build_real_runtime_configs",
+    "real_geometry_launch_arguments",
+    "write_real_runtime_configs",
+    "check_geometry",
+    "check_lidar",
+    "run",
+    "main",
+}
+
+LEGACY_PRODUCTION_CONSTANTS = {
+    "F_MACRO",
+    "F_ROBOT_XACRO",
+    "F_GAZEBO",
+    "F_CONTROLLERS",
+    "F_NAV_PARAMS",
+    "F_NAV_PARAMS_REAL",
+    "F_GZ_LAUNCH",
+    "F_FASTLIO_PATCH",
+    "F_LIOSAM_PATCH",
+    "F_VANJEE_PARAMS",
+    "LIOSAM_CONFIG",
+    "_MARKER",
+}
+
+
+def test_production_consistency_module_has_only_the_runtime_checker_path():
+    module_path = PACKAGE_ROOT / "system_bringup" / "consistency_check.py"
+    tree = ast.parse(module_path.read_text(encoding="utf-8"))
+    function_names = {
+        node.name for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    assigned_names = {
+        target.id
+        for node in tree.body
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+        for target in (
+            node.targets if isinstance(node, ast.Assign) else [node.target]
+        )
+        if isinstance(target, ast.Name)
+    }
+
+    assert "run_runtime_consistency" in function_names
+    assert LEGACY_PRODUCTION_FUNCTIONS.isdisjoint(function_names)
+    assert LEGACY_PRODUCTION_CONSTANTS.isdisjoint(assigned_names)
+
+    definitions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    reachable = set()
+    pending = ["run_runtime_consistency"]
+    while pending:
+        name = pending.pop()
+        if name in reachable:
+            continue
+        reachable.add(name)
+        pending.extend(
+            call.func.id
+            for call in ast.walk(definitions[name])
+            if isinstance(call, ast.Call)
+            and isinstance(call.func, ast.Name)
+            and call.func.id in definitions
+        )
+
+    assert set(definitions) == reachable
 
 
 def _load_yaml(path):
@@ -162,9 +247,6 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
         )
 
     monkeypatch.setattr(cc.yaml, "safe_load", counted_load)
-    monkeypatch.setattr(cc, "load_bringup_config", forbidden)
-    monkeypatch.setattr(cc, "build_real_runtime_configs", forbidden)
-    monkeypatch.setattr(cc, "write_real_runtime_configs", forbidden)
     monkeypatch.setattr(rcc, "compile_runtime_configs", forbidden)
     monkeypatch.setattr(rcc, "_validate_generated_configs", counted_validation)
     monkeypatch.setattr(
