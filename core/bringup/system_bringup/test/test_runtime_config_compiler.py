@@ -961,6 +961,17 @@ FAST_LIO_RENDER_PATHS = (
     ("/**", "ros__parameters", "mapping", "extrinsic_T"),
     ("/**", "ros__parameters", "mapping", "extrinsic_R"),
 )
+GICP_RENDER_PATHS = (
+    ("gicp_localization", "ros__parameters", "use_sim_time"),
+)
+LIO_SAM_RENDER_PATHS = (
+    ("/**", "ros__parameters", "use_sim_time"),
+    ("/**", "ros__parameters", "N_SCAN"),
+    ("/**", "ros__parameters", "Horizon_SCAN"),
+    ("/**", "ros__parameters", "savePCDDirectory"),
+    ("/**", "ros__parameters", "extrinsicTrans"),
+    ("/**", "ros__parameters", "extrinsicRot"),
+)
 
 
 @pytest.mark.parametrize("path", FAST_LIO_RENDER_PATHS)
@@ -1052,6 +1063,129 @@ def test_fast_lio_validator_rejects_invalid_rotation_matrix(
     rendered["/**"]["ros__parameters"]["mapping"]["extrinsic_R"] = matrix
     with pytest.raises(ValueError, match=error):
         rcc._validate_fast_lio_generated(inputs["effective"], rendered)
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_gicp_renderer_changes_only_the_whitelisted_clock_leaf(
+    runtime_tree, platform
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    source = inputs["templates"]["gicp"]
+    before = deepcopy(source)
+
+    rendered = rcc._render_gicp(source, inputs["effective"])
+    expected = deepcopy(before)
+    expected["gicp_localization"]["ros__parameters"]["use_sim_time"] = (
+        inputs["effective"]["derived"]["use_sim_time"]
+    )
+
+    assert rendered == expected
+    assert source == before
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_lio_sam_renderer_changes_only_the_six_whitelisted_leaves(
+    runtime_tree, platform
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    source = inputs["templates"]["lio_sam"]
+    before = deepcopy(source)
+
+    rendered = rcc._render_lio_sam(
+        source, inputs["effective"], inputs["map_artifacts"]
+    )
+    expected = deepcopy(before)
+    for path in LIO_SAM_RENDER_PATHS:
+        expected_node = expected
+        actual_node = rendered
+        for key in path[:-1]:
+            expected_node = expected_node[key]
+            actual_node = actual_node[key]
+        expected_node[path[-1]] = actual_node[path[-1]]
+
+    assert rendered == expected
+    assert source == before
+
+
+@pytest.mark.parametrize("path", GICP_RENDER_PATHS)
+@pytest.mark.parametrize("mutation", ["missing_parent", "missing_leaf", "wrong_type"])
+def test_gicp_renderer_rejects_template_target_drift(runtime_tree, path, mutation):
+    runtime_tree.mutate_template("gicp", path, mutation)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+
+    with pytest.raises(ValueError, match="gicp template:.*template target"):
+        rcc._render_gicp(inputs["templates"]["gicp"], inputs["effective"])
+
+
+@pytest.mark.parametrize("path", LIO_SAM_RENDER_PATHS)
+@pytest.mark.parametrize("mutation", ["missing_parent", "missing_leaf", "wrong_type"])
+def test_lio_sam_renderer_rejects_template_target_drift(
+    runtime_tree, path, mutation
+):
+    runtime_tree.mutate_template("lio_sam", path, mutation)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+
+    with pytest.raises(ValueError, match="lio_sam template:.*template target"):
+        rcc._render_lio_sam(
+            inputs["templates"]["lio_sam"],
+            inputs["effective"],
+            inputs["map_artifacts"],
+        )
+
+
+def test_lio_sam_renderer_uses_lidar_to_imu_translation_and_inverse_rotation(
+    runtime_tree
+):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    relative = inputs["effective"]["derived"]["geometry"][
+        "relative_transforms"
+    ]["imu_from_lidar"]
+    relative["translation"] = [1.25, -2.5, 3.75]
+    relative["rotation_xyzw"] = [
+        0.2392983377447303,
+        0.189307857412,
+        0.03813457647485015,
+        0.9515485246437885,
+    ]
+
+    params = rcc._render_lio_sam(
+        inputs["templates"]["lio_sam"],
+        inputs["effective"],
+        inputs["map_artifacts"],
+    )["/**"]["ros__parameters"]
+
+    assert params["extrinsicTrans"] == [1.25, -2.5, 3.75]
+    assert params["extrinsicRot"] == pytest.approx([
+        0.9254165783983234, 0.16317591116653482, -0.34202014332566866,
+        0.01802831123629728, 0.8825641192593856, 0.4698463103929541,
+        0.37852230636979245, -0.44096961052988237, 0.8137976813493737,
+    ], abs=1e-12)
+    assert params["extrinsicRPY"] == [
+        1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, 0.0, 1.0,
+    ]
+
+    rotation = [params["extrinsicRot"][index:index + 3] for index in range(0, 9, 3)]
+    for row in range(3):
+        for column in range(3):
+            dot = sum(rotation[row][index] * rotation[column][index]
+                      for index in range(3))
+            assert dot == pytest.approx(1.0 if row == column else 0.0, abs=1e-12)
+    determinant = (
+        rotation[0][0] * (
+            rotation[1][1] * rotation[2][2] - rotation[1][2] * rotation[2][1]
+        )
+        - rotation[0][1] * (
+            rotation[1][0] * rotation[2][2] - rotation[1][2] * rotation[2][0]
+        )
+        + rotation[0][2] * (
+            rotation[1][0] * rotation[2][1] - rotation[1][1] * rotation[2][0]
+        )
+    )
+    assert determinant == pytest.approx(1.0, abs=1e-12)
 
 
 @pytest.mark.parametrize(

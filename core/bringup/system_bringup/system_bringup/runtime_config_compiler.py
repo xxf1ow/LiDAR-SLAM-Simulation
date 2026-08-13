@@ -24,8 +24,12 @@ TEMPLATE_FILENAMES = {
     "web_ui": "robot_web_ui.yaml",
     "nav2": "nav2.yaml",
     "fast_lio": "fast_lio.yaml",
+    "lio_sam": "lio_sam.yaml",
+    "gicp": "gicp.yaml",
 }
 FAST_LIO_ROOT = ("/**", "ros__parameters")
+GICP_ROOT = ("gicp_localization", "ros__parameters")
+LIO_SAM_ROOT = ("/**", "ros__parameters")
 SENSOR_TEMPLATE_FILENAMES = {
     "sim": {
         "lidar_adapter": "lidar_adapter.yaml",
@@ -41,6 +45,8 @@ COMMON_OUTPUT_FILENAMES = {
     "web_ui": "robot_web_ui.generated.yaml",
     "nav2": "nav2.generated.yaml",
     "fast_lio": "fast_lio.generated.yaml",
+    "lio_sam": "lio_sam.generated.yaml",
+    "gicp": "gicp.generated.yaml",
 }
 SENSOR_OUTPUT_FILENAMES = {
     "sim": {
@@ -233,6 +239,13 @@ def _set_template_existing(label, mapping, path, value, expected_type):
         raise ValueError(f"{label} template: {exc}") from exc
 
 
+def _apply_template_overrides(label, mapping, root, overrides):
+    for suffix, value, expected_type in overrides:
+        _set_template_existing(
+            label, mapping, root + suffix, value, expected_type
+        )
+
+
 def _get_existing(mapping, path):
     node = mapping
     dotted = ".".join(path)
@@ -274,8 +287,15 @@ def _rotation_matrix_from_xyzw(value):
     ]
 
 
-def _validate_rotation_matrix(values):
-    values = _finite_float_list(values, 9, "generated fast_lio extrinsic_R")
+def _inverse_rotation_matrix_from_xyzw(value):
+    qx, qy, qz, qw = _finite_float_list(
+        value, 4, "imu_from_lidar.rotation_xyzw"
+    )
+    return _rotation_matrix_from_xyzw([-qx, -qy, -qz, qw])
+
+
+def _validate_rotation_matrix(values, label):
+    values = _finite_float_list(values, 9, label)
     matrix = [values[0:3], values[3:6], values[6:9]]
     for row in range(3):
         for column in range(3):
@@ -283,14 +303,14 @@ def _validate_rotation_matrix(values):
                       for index in range(3))
             expected = 1.0 if row == column else 0.0
             if abs(dot - expected) > 1e-9:
-                raise ValueError("generated fast_lio extrinsic_R is not orthonormal")
+                raise ValueError(f"{label} is not orthonormal")
     determinant = (
         matrix[0][0] * (matrix[1][1]*matrix[2][2] - matrix[1][2]*matrix[2][1])
         - matrix[0][1] * (matrix[1][0]*matrix[2][2] - matrix[1][2]*matrix[2][0])
         + matrix[0][2] * (matrix[1][0]*matrix[2][1] - matrix[1][1]*matrix[2][0])
     )
     if abs(determinant - 1.0) > 1e-9:
-        raise ValueError("generated fast_lio extrinsic_R determinant must be 1")
+        raise ValueError(f"{label} determinant must be 1")
 
 
 def _fast_lio_scan_rate(lidar):
@@ -539,7 +559,8 @@ def _validate_fast_lio_generated(effective, fast_lio):
         ("preprocess", "lidar_type"): 2,
     }
     _validate_rotation_matrix(
-        _get_existing(fast_lio, FAST_LIO_ROOT + ("mapping", "extrinsic_R"))
+        _get_existing(fast_lio, FAST_LIO_ROOT + ("mapping", "extrinsic_R")),
+        "generated fast_lio extrinsic_R",
     )
     for suffix, expected_value in expected.items():
         actual = _get_existing(fast_lio, FAST_LIO_ROOT + suffix)
@@ -555,6 +576,79 @@ def _validate_fast_lio_generated(effective, fast_lio):
             raise ValueError(
                 f"generated fast_lio mismatch: {'.'.join(FAST_LIO_ROOT + suffix)}"
             )
+
+
+def _gicp_overrides(effective):
+    return (
+        (("use_sim_time",), effective["derived"]["use_sim_time"], bool),
+    )
+
+
+def _validate_gicp_generated(effective, template, generated):
+    expected = deepcopy(template)
+    _apply_template_overrides(
+        "gicp", expected, GICP_ROOT, _gicp_overrides(effective)
+    )
+    if generated != expected:
+        raise ValueError("generated gicp does not match template plus overrides")
+
+
+def _render_gicp(template, effective):
+    gicp = deepcopy(template)
+    _apply_template_overrides(
+        "gicp", gicp, GICP_ROOT, _gicp_overrides(effective)
+    )
+    _validate_gicp_generated(effective, template, gicp)
+    return gicp
+
+
+def _lio_sam_overrides(effective, map_artifacts):
+    lidar = effective["profile"]["sensors"]["lidar"]
+    relative = effective["derived"]["geometry"]["relative_transforms"][
+        "imu_from_lidar"
+    ]
+    return (
+        (("use_sim_time",), effective["derived"]["use_sim_time"], bool),
+        (("N_SCAN",), lidar["scan_lines"], int),
+        (("Horizon_SCAN",), lidar["columns_per_scan"], int),
+        (("savePCDDirectory",), map_artifacts["lio_sam_work_dir"], str),
+        (("extrinsicTrans",), _finite_float_list(
+            relative["translation"], 3, "imu_from_lidar.translation"
+        ), list),
+        (("extrinsicRot",), _inverse_rotation_matrix_from_xyzw(
+            relative["rotation_xyzw"]
+        ), list),
+    )
+
+
+def _validate_lio_sam_generated(
+    effective, map_artifacts, template, generated
+):
+    expected = deepcopy(template)
+    _apply_template_overrides(
+        "lio_sam",
+        expected,
+        LIO_SAM_ROOT,
+        _lio_sam_overrides(effective, map_artifacts),
+    )
+    rotation = _get_existing(generated, LIO_SAM_ROOT + ("extrinsicRot",))
+    _validate_rotation_matrix(rotation, "generated lio_sam extrinsicRot")
+    if generated != expected:
+        raise ValueError("generated lio_sam does not match template plus overrides")
+
+
+def _render_lio_sam(template, effective, map_artifacts):
+    lio_sam = deepcopy(template)
+    _apply_template_overrides(
+        "lio_sam",
+        lio_sam,
+        LIO_SAM_ROOT,
+        _lio_sam_overrides(effective, map_artifacts),
+    )
+    _validate_lio_sam_generated(
+        effective, map_artifacts, template, lio_sam
+    )
+    return lio_sam
 
 
 def _render_lidar_adapter(template, effective):
