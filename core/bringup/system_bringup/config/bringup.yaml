@@ -11,6 +11,12 @@ profiles:
   sim: profiles/sim.yaml    # 仿真平台完整事实
   real: profiles/real.yaml  # 当前实机完整事实
 
+# === 地图与算法工作目录：原样传给对应原生组件，不在编译期展开或创建 ===
+map_artifacts:
+  lio_sam_work_dir: /result/loam/ # LIO-SAM 使用 $HOME + 此路径，并会重建该专用子目录
+  prior_pcd: ~/result/GlobalMap.pcd # GICP 先验点云，由 6B launch 覆盖原生空占位
+  nav2_map: ~/result/factory_map.yaml # Nav2 栅格地图，由 6B launch 覆盖原生空占位
+
 # === 仿真底层:robot_gz_bringup(platform=sim 时生效)===
 robot_gz:
   gui: "true"

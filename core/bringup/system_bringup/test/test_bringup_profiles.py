@@ -33,7 +33,13 @@ def test_default_platform_and_mode_remain_sim_navigation():
 
 
 def test_sim_profile_preserves_existing_files_and_maps():
-    sim = _load()["slam_stack"]["sim"]
+    cfg = _load()
+    sim = cfg["slam_stack"]["sim"]
+    assert cfg["map_artifacts"] == {
+        "lio_sam_work_dir": "/result/loam/",
+        "prior_pcd": "~/result/GlobalMap.pcd",
+        "nav2_map": "~/result/factory_map.yaml",
+    }
     assert sim["lio_sam"]["config"] == "params.yaml"
     assert sim["gicp_localization"] == {
         "config": "gicp_localization.yaml",
@@ -43,6 +49,14 @@ def test_sim_profile_preserves_existing_files_and_maps():
         "config": "nav2_params.yaml",
         "map": "~/result/factory_map.yaml",
     }
+    for platform in ("sim", "real"):
+        stack = cfg["slam_stack"][platform]
+        assert stack["gicp_localization"]["prior_map_path"] == cfg[
+            "map_artifacts"
+        ]["prior_pcd"]
+        assert stack["robot_navigation"]["map"] == cfg["map_artifacts"][
+            "nav2_map"
+        ]
 
 
 def test_real_profile_selects_only_real_parameter_files():

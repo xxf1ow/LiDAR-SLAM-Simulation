@@ -12,6 +12,7 @@ from system_bringup import profile_compiler as pc
 
 
 SUPPORTED_MODES = {"mapping", "navigation"}
+MAP_ARTIFACT_KEYS = {"lio_sam_work_dir", "prior_pcd", "nav2_map"}
 MOTION_KEYS = (
     "max_linear_velocity",
     "max_angular_velocity",
@@ -106,11 +107,67 @@ def _validate_motion_pair(profiles):
                 )
 
 
+def _validate_map_artifacts(config):
+    artifacts = config.get("map_artifacts")
+    if not isinstance(artifacts, dict) or set(artifacts) != MAP_ARTIFACT_KEYS:
+        raise ValueError(
+            "bringup config map_artifacts must contain exactly "
+            "lio_sam_work_dir, prior_pcd, and nav2_map"
+        )
+
+    work_dir = artifacts["lio_sam_work_dir"]
+    if not isinstance(work_dir, str):
+        raise ValueError("map_artifacts.lio_sam_work_dir must be a string")
+    components = work_dir[1:-1].split("/") if len(work_dir) >= 2 else []
+    if (
+        not work_dir.startswith("/")
+        or not work_dir.endswith("/")
+        or work_dir == "/"
+        or len(components) < 2
+        or any(part in {"", ".", ".."} or "~" in part for part in components)
+    ):
+        raise ValueError(
+            "map_artifacts.lio_sam_work_dir must be an absolute-style literal "
+            "with at least two safe directory segments and a trailing slash"
+        )
+
+    for key in ("prior_pcd", "nav2_map"):
+        value = artifacts[key]
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"map_artifacts.{key} must be a non-empty string")
+
+    try:
+        stack = config["slam_stack"]
+        duplicates_by_platform = {
+            platform: {
+                "prior_pcd": stack[platform]["gicp_localization"][
+                    "prior_map_path"
+                ],
+                "nav2_map": stack[platform]["robot_navigation"]["map"],
+            }
+            for platform in ("sim", "real")
+        }
+    except (KeyError, TypeError) as exc:
+        raise ValueError(
+            "bringup config transition slam_stack is incomplete"
+        ) from exc
+
+    for platform, duplicates in duplicates_by_platform.items():
+        for key, legacy_value in duplicates.items():
+            if legacy_value != artifacts[key]:
+                raise ValueError(
+                    f"transition duplicate {platform}.{key} must match "
+                    f"map_artifacts.{key}"
+                )
+    return deepcopy(artifacts)
+
+
 def _load_runtime_inputs(bringup_config_path):
     """Load and validate one immutable-by-convention runtime input snapshot."""
     source, config, platform, profile_paths = pc.load_bringup_context(
         bringup_config_path
     )
+    map_artifacts = _validate_map_artifacts(config)
     mode = _validate_mode(config)
     profiles = {
         name: (path, pc.load_profile(path)) for name, path in profile_paths.items()
@@ -132,6 +189,7 @@ def _load_runtime_inputs(bringup_config_path):
     return {
         "source": source,
         "config": config,
+        "map_artifacts": map_artifacts,
         "platform": platform,
         "mode": mode,
         "profiles": profiles,

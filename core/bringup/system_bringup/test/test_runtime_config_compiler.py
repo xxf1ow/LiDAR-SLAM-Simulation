@@ -70,6 +70,17 @@ def _load_yaml(path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def _set_config_path(runtime_tree, path, value):
+    config = _load_yaml(runtime_tree.config)
+    target = config
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = value
+    runtime_tree.config.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+
+
 class _RuntimeTree:
     def __init__(self, config):
         self.config = config
@@ -120,12 +131,97 @@ def runtime_tree(tmp_path):
                     "sim": "profiles/sim.yaml",
                     "real": "profiles/real.yaml",
                 },
+                "map_artifacts": {
+                    "lio_sam_work_dir": "/result/loam/",
+                    "prior_pcd": "~/result/GlobalMap.pcd",
+                    "nav2_map": "~/result/factory_map.yaml",
+                },
+                "slam_stack": {
+                    platform: {
+                        "gicp_localization": {
+                            "prior_map_path": "~/result/GlobalMap.pcd",
+                        },
+                        "robot_navigation": {
+                            "map": "~/result/factory_map.yaml",
+                        },
+                    }
+                    for platform in ("sim", "real")
+                },
             },
             sort_keys=False,
         ),
         encoding="utf-8",
     )
     return _RuntimeTree(config)
+
+
+def test_runtime_inputs_preserve_literal_map_artifacts(runtime_tree):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+
+    assert inputs["map_artifacts"] == {
+        "lio_sam_work_dir": "/result/loam/",
+        "prior_pcd": "~/result/GlobalMap.pcd",
+        "nav2_map": "~/result/factory_map.yaml",
+    }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        "/",
+        "result/loam/",
+        "/result/loam",
+        "/result//loam/",
+        "/result/./",
+        "/result/../",
+        "/result/~/",
+    ],
+)
+def test_lio_sam_work_dir_rejects_unsafe_literal_paths(runtime_tree, value):
+    _set_config_path(
+        runtime_tree, ("map_artifacts", "lio_sam_work_dir"), value
+    )
+
+    with pytest.raises(ValueError, match="map_artifacts.lio_sam_work_dir"):
+        rcc._load_runtime_inputs(runtime_tree.config)
+
+
+@pytest.mark.parametrize("key,value", [("prior_pcd", ""), ("nav2_map", "  ")])
+def test_map_file_artifacts_must_be_non_empty_strings(runtime_tree, key, value):
+    _set_config_path(runtime_tree, ("map_artifacts", key), value)
+
+    with pytest.raises(ValueError, match=rf"map_artifacts\.{key}"):
+        rcc._load_runtime_inputs(runtime_tree.config)
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ("slam_stack", "sim", "gicp_localization", "prior_map_path"),
+        ("slam_stack", "real", "gicp_localization", "prior_map_path"),
+        ("slam_stack", "sim", "robot_navigation", "map"),
+        ("slam_stack", "real", "robot_navigation", "map"),
+    ],
+)
+def test_transition_duplicate_map_paths_must_match_map_artifacts(
+    runtime_tree, path
+):
+    _set_config_path(runtime_tree, path, "~/different/path")
+
+    with pytest.raises(ValueError, match="transition duplicate"):
+        rcc._load_runtime_inputs(runtime_tree.config)
+
+
+def test_missing_map_artifacts_does_not_fall_back_to_slam_stack(runtime_tree):
+    config = _load_yaml(runtime_tree.config)
+    del config["map_artifacts"]
+    runtime_tree.config.write_text(
+        yaml.safe_dump(config, sort_keys=False), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match="map_artifacts must contain exactly"):
+        rcc._load_runtime_inputs(runtime_tree.config)
 
 
 @pytest.mark.parametrize("mode", ["mapping", "navigation"])
