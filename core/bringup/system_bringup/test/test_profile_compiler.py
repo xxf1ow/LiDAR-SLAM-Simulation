@@ -409,6 +409,50 @@ def test_sensor_numeric_semantics_are_strict(
         pc.validate_profile_pair(pair)
 
 
+@pytest.mark.parametrize("platform", ["sim", "real"])
+@pytest.mark.parametrize("value", [0.0, -0.1, math.pi + 1e-9])
+def test_vertical_fov_must_be_in_open_zero_to_pi_range(
+    tmp_path, platform, value
+):
+    pair = _pair(_selection(tmp_path))
+    _set_pair_value(
+        pair, platform, ("sensors", "lidar", "vertical_fov_angle"), value
+    )
+    with pytest.raises(ValueError, match=r"vertical_fov_angle.*\(0, pi\]"):
+        pc.validate_profile_pair(pair)
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+@pytest.mark.parametrize(
+    "path,value,expected",
+    [
+        (("perception", "obstacle_height", "min"), None, "must not be null"),
+        (("perception", "obstacle_height", "max"), None, "must not be null"),
+        (("perception", "obstacle_height", "min"), float("nan"), "finite"),
+        (("perception", "obstacle_height", "max"), float("inf"), "finite"),
+    ],
+)
+def test_obstacle_height_bounds_must_be_finite_non_null(
+    tmp_path, platform, path, value, expected
+):
+    pair = _pair(_selection(tmp_path))
+    _set_pair_value(pair, platform, path, value)
+    with pytest.raises(ValueError, match=expected):
+        pc.validate_profile_pair(pair)
+
+
+@pytest.mark.parametrize("bounds", [(1.0, 1.0), (2.0, -0.52)])
+def test_obstacle_height_min_must_be_less_than_max(tmp_path, bounds):
+    pair = _pair(_selection(tmp_path))
+    for platform in ("sim", "real"):
+        pair[platform][1]["perception"]["obstacle_height"] = {
+            "min": bounds[0],
+            "max": bounds[1],
+        }
+    with pytest.raises(ValueError, match=r"obstacle_height\.min must be less"):
+        pc.validate_profile_pair(pair)
+
+
 @pytest.mark.parametrize(
     "start_angle,end_angle",
     [

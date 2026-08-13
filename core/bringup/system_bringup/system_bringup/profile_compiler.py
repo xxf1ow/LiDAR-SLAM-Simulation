@@ -77,6 +77,7 @@ _PROFILE_SCHEMA = {
             "scan_rate_hz": _NUMBER,
             "min_range": _NUMBER,
             "max_range": _NUMBER,
+            "vertical_fov_angle": _NUMBER,
             "horizontal_start_angle": _NUMBER,
             "horizontal_end_angle": _NUMBER,
             "point_time_field": _STRING,
@@ -95,8 +96,8 @@ _PROFILE_SCHEMA = {
     },
     "perception": {
         "obstacle_height": {
-            "min": _NULLABLE_NUMBER,
-            "max": _NULLABLE_NUMBER,
+            "min": _NUMBER,
+            "max": _NUMBER,
         },
     },
 }
@@ -250,6 +251,11 @@ def _validate_semantics(profile, source):
         raise ValueError(
             f"{source}: {_field_name(clearance_path)} must be >= 0"
         )
+    obstacle_height = profile["perception"]["obstacle_height"]
+    if obstacle_height["min"] >= obstacle_height["max"]:
+        raise ValueError(
+            f"{source}: perception.obstacle_height.min must be less than max"
+        )
 
 
 def _validate_sensor_semantics(platform, profile, source):
@@ -300,6 +306,11 @@ def _validate_sensor_semantics(platform, profile, source):
     if lidar["max_range"] <= lidar["min_range"]:
         raise ValueError(
             f"{source}: sensors.lidar.max_range must be greater than min_range"
+        )
+    vertical_fov = lidar["vertical_fov_angle"]
+    if not 0 < vertical_fov <= math.pi:
+        raise ValueError(
+            f"{source}: sensors.lidar.vertical_fov_angle must be in (0, pi]"
         )
     if platform == "real" and not (
         0 <= lidar["horizontal_start_angle"] <= math.tau

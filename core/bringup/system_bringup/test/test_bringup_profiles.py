@@ -103,6 +103,16 @@ def test_profiles_are_complete_and_have_identical_leaf_paths():
     assert set(_leaf_paths(sim)) == set(_leaf_paths(real))
 
 
+@pytest.mark.parametrize("name", ["sim.yaml", "real.yaml"])
+def test_profiles_define_obstacle_geometry_facts(name):
+    profile = _load_profile(name)
+    assert profile["sensors"]["lidar"]["vertical_fov_angle"] == 0.523
+    assert profile["perception"]["obstacle_height"] == {
+        "min": -0.52,
+        "max": 2.0,
+    }
+
+
 @pytest.mark.parametrize(
     ("name", "expected"),
     [

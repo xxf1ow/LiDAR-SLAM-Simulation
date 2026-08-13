@@ -44,6 +44,7 @@ sensors:
     scan_rate_hz: 10.0 # 完整点云频率，单位 Hz
     min_range: 0.05 # 驱动输出最小距离，单位 m
     max_range: 70.0 # 驱动输出最大距离，单位 m
+    vertical_fov_angle: 0.523 # 雷达垂直视场角，单位 rad；real 暂待厂家资料确认
     horizontal_start_angle: 0.0 # 水平输出起始角，单位 rad
     horizontal_end_angle: 6.283185307179586 # 水平输出终止角，单位 rad
     point_time_field: time # PointCloud2 逐点相对时间字段名
@@ -60,5 +61,5 @@ motion:
 
 perception:
   obstacle_height:
-    min: null # 第 8 节确认，离地高度，单位 m
-    max: null # 第 8 节确认，离地高度，单位 m
+    min: -0.52 # Nav2 STVL 障碍/清除最低高度，单位 m
+    max: 2.0 # Nav2 STVL 障碍/清除最高高度，单位 m
