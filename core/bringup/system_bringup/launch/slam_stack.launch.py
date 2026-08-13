@@ -90,8 +90,7 @@ def _stack(context, *args, **kwargs):
             ],
         )
         gicp = _inc("gicp_localization", "launch/localization.launch.py",
-                    {"config_file": gicp_config, "prior_map_path": prior,
-                     "use_sim_time": use_sim})
+                    {"config_file": gicp_config, "prior_map_path": prior})
         nav2 = _inc("robot_navigation", "launch/navigation.launch.py",
                     {"params_file": nav2_params, "map": nav_map, "use_rviz": "true",
                      "use_sim_time": use_sim, "cmd_vel_output_topic": cmd_vel_output_topic})
@@ -114,22 +113,12 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument("mode", default_value="navigation"),
         DeclareLaunchArgument("use_sim_time", default_value="true"),
-        DeclareLaunchArgument(
-            "lio_sam_params_file",
-            default_value=os.path.join(
-                get_package_share_directory("lio_sam"), "config", "params.yaml")),
+        DeclareLaunchArgument("lio_sam_params_file"),
         DeclareLaunchArgument("fast_lio_params_file"),
-        DeclareLaunchArgument(
-            "gicp_config_file",
-            default_value=os.path.join(
-                get_package_share_directory("gicp_localization"), "config",
-                "gicp_localization.yaml")),
-        DeclareLaunchArgument("prior_map_path", default_value="~/result/GlobalMap.pcd"),
-        DeclareLaunchArgument(
-            "nav2_params_file",
-            default_value=os.path.join(
-                get_package_share_directory("robot_navigation"), "config", "nav2_params.yaml")),
-        DeclareLaunchArgument("nav_map", default_value="~/result/factory_map.yaml"),
+        DeclareLaunchArgument("gicp_config_file"),
+        DeclareLaunchArgument("prior_map_path"),
+        DeclareLaunchArgument("nav2_params_file"),
+        DeclareLaunchArgument("nav_map"),
         DeclareLaunchArgument("cmd_vel_output_topic", default_value="/cmd_vel"),
         DeclareLaunchArgument("fast_lio_body_bridge_x"),
         DeclareLaunchArgument("fast_lio_body_bridge_y"),

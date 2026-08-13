@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[4]
 NAVIGATION = ROOT / "core/navigation/robot_navigation/launch/navigation.launch.py"
 SLAM_STACK = ROOT / "core/bringup/system_bringup/launch/slam_stack.launch.py"
 BRINGUP = ROOT / "core/bringup/system_bringup/launch/bringup.launch.py"
+GICP_LAUNCH = ROOT / "core/localization/gicp_localization/launch/localization.launch.py"
 ROBOT = ROOT / "core/robot/robot_bringup/launch/robot.launch.py"
 REAL_CHASSIS = ROOT / "core/robot/robot_bringup/launch/real_chassis.launch.py"
 SENSOR_GATE = ROOT / "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
@@ -549,7 +550,24 @@ def test_slam_stack_declares_profile_parameter_files():
     } <= declared
 
 
-def test_slam_stack_passes_profile_parameter_files_to_includes():
+def test_slam_stack_algorithm_and_map_paths_are_all_required():
+    tree = _tree(SLAM_STACK)
+    required = {
+        "lio_sam_params_file", "fast_lio_params_file", "gicp_config_file",
+        "prior_map_path", "nav2_params_file", "nav_map",
+    }
+    declarations = {
+        _string(call.args[0]): call
+        for call in _calls(tree, "DeclareLaunchArgument") if call.args
+    }
+    assert required <= set(declarations)
+    for name in required:
+        assert not any(
+            keyword.arg == "default_value" for keyword in declarations[name].keywords
+        )
+
+
+def test_slam_stack_passes_generated_parameter_files_to_includes():
     function = _function(_tree(SLAM_STACK), "_stack")
     for variable, argument in (
         ("lio_sam_params", "lio_sam_params_file"),
@@ -571,6 +589,12 @@ def test_slam_stack_passes_profile_parameter_files_to_includes():
     gicp_params = _dict_value(gicp, "config_file")
     assert isinstance(gicp_params, ast.Name)
     assert gicp_params.id == "gicp_config"
+    assert {_string(key) for key in gicp.keys} == {
+        "config_file", "prior_map_path",
+    }
+    prior_map = _dict_value(gicp, "prior_map_path")
+    assert isinstance(prior_map, ast.Name)
+    assert prior_map.id == "prior"
 
     nav2 = _include_arguments(
         function, "robot_navigation", "launch/navigation.launch.py"
@@ -578,6 +602,24 @@ def test_slam_stack_passes_profile_parameter_files_to_includes():
     nav2_params = _dict_value(nav2, "params_file")
     assert isinstance(nav2_params, ast.Name)
     assert nav2_params.id == "nav2_params"
+
+
+def test_gicp_launch_requires_config_and_map_without_clock_override():
+    tree = _tree(GICP_LAUNCH)
+    declarations = {
+        _string(call.args[0]): call
+        for call in _calls(tree, "DeclareLaunchArgument") if call.args
+    }
+    assert set(declarations) == {"config_file", "prior_map_path"}
+    assert all(
+        not any(keyword.arg == "default_value" for keyword in call.keywords)
+        for call in declarations.values()
+    )
+    function = _function(tree, "generate_launch_description")
+    node = _node_call(function, "gicp_localization", "gicp_localization_node")
+    parameters = _keyword(node, "parameters")
+    assert ast.unparse(parameters) == "[config_file, {'prior_map_path': prior_map_path}]"
+    assert "use_sim_time" not in GICP_LAUNCH.read_text(encoding="utf-8")
 
 
 def test_slam_stack_waits_for_localization_and_base_controller_odom_before_nav2():
@@ -789,80 +831,10 @@ def test_formal_bringup_failures_construct_no_actions(
     assert actions == []
 
 
-@pytest.mark.parametrize(
-    ("mode", "package", "filename", "component"),
-    (
-        ("mapping", "lio_sam", "params.yaml", "LIO-SAM"),
-    ),
-)
-def test_missing_selected_slam_config_fails_before_action_construction(
-    monkeypatch, tmp_path, mode, package, filename, component
-):
-    launch_module = _fake_launch_module(monkeypatch, tmp_path / "share")
-    source = (tmp_path / "core/bringup/system_bringup/config/bringup.yaml").resolve()
-    profile = {
-        "lio_sam": {"config": "params.yaml"},
-        "fast_lio": {"config": "gazebo_velodyne.yaml"},
-    }
-    manifest = {
-        "platform": "sim",
-        "mode": mode,
-        "use_sim_time": True,
-        "bringup_config": {
-            "slam_stack": {"settling": 20.0, "sim": profile},
-        },
-    }
-    required = []
-    actions = []
-    monkeypatch.setattr(launch_module, "_source_bringup_config_path", lambda: source)
-    monkeypatch.setattr(
-        launch_module, "compile_runtime_configs", lambda path: manifest
-    )
-    monkeypatch.setattr(
-        launch_module, "run_runtime_consistency", lambda repo_root, value: []
-    )
-    monkeypatch.setattr(
-        launch_module,
-        "_pkg_config",
-        lambda pkg, selected: f"/installed/{pkg}/config/{selected}",
-    )
-
-    def reject_missing(path, label):
-        required.append((path, label))
-        raise RuntimeError(f"{label} 运行时配置不存在: {path}")
-
-    monkeypatch.setattr(
-        launch_module, "require_runtime_config_file", reject_missing, raising=False
-    )
-    for name in ("Node", "_inc", "ready_gate", "LogInfo"):
-        monkeypatch.setattr(
-            launch_module,
-            name,
-            lambda *args, _name=name, **kwargs: actions.append(_name),
-        )
-
-    selected_path = f"/installed/{package}/config/{filename}"
-    with pytest.raises(
-        RuntimeError,
-        match=rf"{component} 运行时配置不存在: {selected_path}",
-    ):
-        launch_module._bringup(None)
-
-    assert required == [(selected_path, component)]
-    assert actions == []
-
-
-def test_navigation_generated_fast_lio_skips_package_config_preflight():
+def test_generated_slam_configs_skip_package_config_preflight():
     function = _function(_tree(BRINGUP), "_bringup")
-    mapping = _mode_branch(function, "mapping")
-    preflight_calls = _calls(function, "require_runtime_config_file")
-    assert len(preflight_calls) == 1
-    assert preflight_calls == _calls(mapping, "require_runtime_config_file")
-    assert not any(
-        _string(call.args[0]) == "fast_lio"
-        for call in _calls(function, "_pkg_config")
-        if call.args
-    )
+    assert not _calls(function, "require_runtime_config_file")
+    assert not _calls(function, "_pkg_config")
 
 
 def test_bringup_constructs_one_shared_control_and_slam_layer_before_branching():
@@ -929,14 +901,6 @@ def test_formal_bringup_passes_only_manifest_fast_lio_interfaces():
     nav2 = _dict_value(arguments, "nav2_params_file")
     assert isinstance(nav2, ast.Call) and nav2.func.id == "str"
     assert _subscript_path(nav2.args[0]) == ("manifest", ("nav2_path",))
-    for argument, package, component in (
-        ("lio_sam_params_file", "lio_sam", "lio_sam"),
-        ("gicp_config_file", "gicp_localization", "gicp_localization"),
-    ):
-        value = _dict_value(arguments, argument)
-        assert isinstance(value, ast.Call) and value.func.id == "_pkg_config"
-        assert _string(value.args[0]) == package
-        assert _subscript_path(value.args[1]) == ("profile", (component, "config"))
     bridge_arguments = next(
         value
         for key, value in zip(arguments.keys, arguments.values)
@@ -958,6 +922,29 @@ def test_formal_bringup_passes_only_manifest_fast_lio_interfaces():
         for key in arguments.keys
         if key is not None
     )
+
+
+def test_formal_passes_generated_algorithm_and_map_artifact_paths():
+    function = _function(_tree(BRINGUP), "_bringup")
+    arguments = _include_arguments(
+        function, "system_bringup", "launch/slam_stack.launch.py"
+    )
+    for argument, manifest_key in (
+        ("lio_sam_params_file", "lio_sam_path"),
+        ("fast_lio_params_file", "fast_lio_path"),
+        ("gicp_config_file", "gicp_path"),
+        ("nav2_params_file", "nav2_path"),
+    ):
+        value = _dict_value(arguments, argument)
+        assert isinstance(value, ast.Call) and value.func.id == "str"
+        assert _subscript_path(value.args[0]) == ("manifest", (manifest_key,))
+    assert _subscript_path(_dict_value(arguments, "prior_map_path")) == (
+        "map_artifacts", ("prior_pcd",)
+    )
+    assert _subscript_path(_dict_value(arguments, "nav_map")) == (
+        "map_artifacts", ("nav2_map",)
+    )
+    assert not _calls(function, "_pkg_config")
 
 
 def _assert_manifest_robot_interface(arguments):

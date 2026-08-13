@@ -17,7 +17,6 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 
 from system_bringup.consistency_check import (
-    require_runtime_config_file,
     run_runtime_consistency,
 )
 from system_bringup.ready_gate import ready_gate
@@ -28,10 +27,6 @@ def _inc(pkg, rel, args=None):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(get_package_share_directory(pkg), rel)),
         launch_arguments=(args or {}).items())
-
-
-def _pkg_config(package, filename):
-    return os.path.join(get_package_share_directory(package), "config", filename)
 
 
 def _source_bringup_config_path():
@@ -113,12 +108,7 @@ def _bringup(context, *args, **kwargs):
 
     cfg = manifest["bringup_config"]
     stack_cfg = cfg["slam_stack"]
-    profile = stack_cfg[platform]
-    if mode == "mapping":
-        require_runtime_config_file(
-            _pkg_config("lio_sam", profile["lio_sam"]["config"]),
-            "LIO-SAM",
-        )
+    map_artifacts = cfg["map_artifacts"]
     geometry = manifest["robot_launch_arguments"]
     bridge = manifest["fast_lio_body_bridge_arguments"]
     use_sim = "true" if use_sim_time else "false"
@@ -147,16 +137,12 @@ def _bringup(context, *args, **kwargs):
         {
             "mode": manifest["mode"],
             "use_sim_time": use_sim,
-            "lio_sam_params_file": _pkg_config(
-                "lio_sam", profile["lio_sam"]["config"]
-            ),
+            "lio_sam_params_file": str(manifest["lio_sam_path"]),
             "fast_lio_params_file": str(manifest["fast_lio_path"]),
-            "gicp_config_file": _pkg_config(
-                "gicp_localization", profile["gicp_localization"]["config"]
-            ),
-            "prior_map_path": profile["gicp_localization"]["prior_map_path"],
+            "gicp_config_file": str(manifest["gicp_path"]),
+            "prior_map_path": map_artifacts["prior_pcd"],
             "nav2_params_file": str(manifest["nav2_path"]),
-            "nav_map": profile["robot_navigation"]["map"],
+            "nav_map": map_artifacts["nav2_map"],
             "cmd_vel_output_topic": "/cmd_vel_auto",
             "settling": str(settling),
             **{
