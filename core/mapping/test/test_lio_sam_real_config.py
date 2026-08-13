@@ -151,6 +151,11 @@ def test_lio_sam_launch_requires_one_shared_parameter_file(tmp_path):
         and any(item.name == "ParameterValue" for item in node.names)
     ]
     assert len(parameter_value_imports) == 1
+    parameter_value_alias = next(
+        item for item in parameter_value_imports[0].names
+        if item.name == "ParameterValue"
+    )
+    assert parameter_value_alias.asname is None
 
     parameter_file_assignments = [
         node for node in ast.walk(tree)
@@ -170,6 +175,7 @@ def test_lio_sam_launch_requires_one_shared_parameter_file(tmp_path):
     assert isinstance(launch_configuration.func, ast.Name)
     assert launch_configuration.func.id == "LaunchConfiguration"
     assert len(launch_configuration.args) == 1
+    assert not launch_configuration.keywords
     assert isinstance(launch_configuration.args[0], ast.Constant)
     assert launch_configuration.args[0].value == "params_file"
     assert len(parameter_file_value.keywords) == 1
