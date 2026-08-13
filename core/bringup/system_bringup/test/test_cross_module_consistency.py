@@ -94,41 +94,6 @@ def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_sim_imu_topic_is_atomically_fixed_across_active_sources():
-    root = _root()
-    liosam_patch = cc._read(root, cc.F_LIOSAM_PATCH)
-    assert cc._patch_added_value(
-        liosam_patch, "config/params.yaml", "imuTopic"
-    ) == "/imu/data"
-
-    bridge = cc._yaml(
-        cc._read(root, "core/simulation/robot_gz_bringup/config/bridge.yaml")
-    )
-    imu_bridge = next(item for item in bridge if item["gz_topic_name"] == "/imu")
-    assert imu_bridge["ros_topic_name"] == "/imu/data"
-
-
-def test_liosam_sim_patch_values_are_scoped_by_path():
-    patch = cc._read(_root(), cc.F_LIOSAM_PATCH)
-    assert cc._patch_added_value(
-        patch, "config/params.yaml", "N_SCAN"
-    ) == "16"
-    assert cc._patch_added_value(
-        patch, "config/params.yaml", "Horizon_SCAN"
-    ) == "1800"
-    assert cc._patch_added_value(
-        patch, "config/params.yaml", "lidarFrame"
-    ) == "velodyne"
-
-
-def test_patch_added_file_rejects_modified_sim_liosam_params():
-    with pytest.raises(ValueError, match="不是新增文件"):
-        cc._patch_added_file(
-            cc._read(_root(), cc.F_LIOSAM_PATCH),
-            cc.LIOSAM_CONFIG["sim"],
-        )
-
-
 def test_adapter_scan_period(sim_adapter_scan_period):
     assert sim_adapter_scan_period == 0.1
 

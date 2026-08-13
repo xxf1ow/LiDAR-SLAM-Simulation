@@ -15,13 +15,8 @@ git checkout <pinned SHA>
 git apply ../lio-sam.patch
 ```
 
-补丁维护两份原生配置：
-
-- `params.yaml`：Gazebo 16×1800 点云和仿真时钟。
-- `params_real.yaml`：Vanjee 722 32×1200 点云和系统时钟。
-
-FAST-LIO/LIO-SAM 算法外参尚未迁入中央 Profile；当前配置中的兼容值不是由 URDF mount
-自动推导。修改上游配置后，从 clone 工作树重新生成补丁并提交补丁文件，不提交 clone。
+算法参数由 `system_bringup/config/templates/lio_sam.yaml` 与所选 Profile 编译为
+`lio_sam.generated.yaml`；`lio-sam.patch` 只维护 launch/TF 功能修改，patch 不再维护算法配置。
 
 ## TF 与接口
 
@@ -72,20 +67,14 @@ bash mapping/save_map.sh
 
 ## 独立诊断
 
-只有在排查 LIO-SAM 自身时才绕过正式入口。先确保平台驱动、TF、`/points_raw` 和
-`/imu/data` 已就绪，再执行：
+正式入口始终使用 `system_bringup bringup.launch.py`。独立诊断时先用现有
+`compile_runtime_configs` 入口生成运行目录，再显式传入同目录下的参数文件：
 
 ```bash
-cd core
-source install/setup.bash
-ros2 launch lio_sam run.launch.py
-```
-
-真机诊断显式选择安装态 real 配置：
-
-```bash
-REAL_PARAMS="$(ros2 pkg prefix lio_sam)/share/lio_sam/config/params_real.yaml"
-ros2 launch lio_sam run.launch.py params_file:="$REAL_PARAMS"
+REPORT="$(ros2 run system_bringup compile_runtime_configs \
+  --bringup-config "$PWD/bringup/system_bringup/config/bringup.yaml")"
+PARAMS="$(dirname "$REPORT")/lio_sam.generated.yaml"
+ros2 launch lio_sam run.launch.py params_file:="$PARAMS"
 ```
 
 ## 验收
