@@ -1,15 +1,16 @@
-"""nav2_params.yaml 关键 frame/源/拓扑校验(本机 pyyaml 可跑)。"""
-import os
+"""Canonical Nav2 template 关键 frame/源/拓扑校验(本机 pyyaml 可跑)。"""
+from pathlib import Path
 
 import yaml
 
-HERE = os.path.dirname(__file__)
-PARAMS = os.path.join(HERE, "..", "config", "nav2_params.yaml")
+ROOT = Path(__file__).resolve().parents[4]
+PARAMS = (
+    ROOT / "core/bringup/system_bringup/config/templates/nav2.yaml"
+)
 
 
 def _load():
-    with open(PARAMS, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f)
+    return yaml.safe_load(PARAMS.read_text(encoding="utf-8"))
 
 
 def test_global_costmap_frame_is_map():

@@ -380,6 +380,8 @@ def test_retired_package_algorithm_configs_are_absent():
     retired = [
         core / "localization/gicp_localization/config/gicp_localization.yaml",
         core / "localization/gicp_localization/config/gicp_localization_real.yaml",
+        core / "navigation/robot_navigation/config/nav2_params.yaml",
+        core / "navigation/robot_navigation/config/nav2_params_real.yaml",
     ]
     assert all(not path.exists() for path in retired)
 
@@ -536,22 +538,8 @@ def test_web_ui_template_is_a_complete_native_parameter_file():
     }
 
 
-def test_nav2_template_preserves_complete_current_sim_baseline():
-    source = _load_yaml(
-        PACKAGE_ROOT.parents[1]
-        / "navigation/robot_navigation/config/nav2_params.yaml"
-    )
+def test_nav2_template_is_complete_native_parameter_file():
     template = _load_yaml(TEMPLATE_DIR / "nav2.yaml")
-    expected = deepcopy(source)
-    follow_path = expected["controller_server"]["ros__parameters"]["FollowPath"]
-    follow_path["vx_min"] = -0.1
-    follow_path["wz_std"] = 0.2
-    behavior = expected["behavior_server"]["ros__parameters"]
-    behavior["max_rotational_vel"] = 0.2
-    behavior["min_rotational_vel"] = 0.1
-    behavior["rotational_acc_lim"] = 0.2
-
-    assert template == expected
     assert set(template) == {
         "map_server",
         "planner_server",
@@ -561,6 +549,13 @@ def test_nav2_template_preserves_complete_current_sim_baseline():
         "behavior_server",
         "bt_navigator",
     }
+    follow_path = template["controller_server"]["ros__parameters"]["FollowPath"]
+    assert follow_path["vx_min"] == -0.1
+    assert follow_path["wz_std"] == 0.2
+    behavior = template["behavior_server"]["ros__parameters"]
+    assert behavior["max_rotational_vel"] == 0.2
+    assert behavior["min_rotational_vel"] == 0.1
+    assert behavior["rotational_acc_lim"] == 0.2
 
 
 def test_sensor_templates_are_complete_native_parameter_files():
@@ -2129,8 +2124,6 @@ def test_runtime_compilation_does_not_modify_source_or_formal_files(
             for filename in filenames.values()
         ),
         core_dir / "robot/robot_bringup/config/robot_controllers.yaml",
-        core_dir / "navigation/robot_navigation/config/nav2_params.yaml",
-        core_dir / "navigation/robot_navigation/config/nav2_params_real.yaml",
         PACKAGE_ROOT / "launch/bringup.launch.py",
     ]
     before = {path: path.read_bytes() for path in protected}

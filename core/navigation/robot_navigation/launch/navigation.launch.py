@@ -20,7 +20,6 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     pkg = get_package_share_directory('robot_navigation')
-    default_params = os.path.join(pkg, 'config', 'nav2_params.yaml')
     default_rviz = os.path.join(pkg, 'config', 'nav2.rviz')
 
     use_sim_time = LaunchConfiguration('use_sim_time')
@@ -45,10 +44,8 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument('use_sim_time', default_value='true'),
-        DeclareLaunchArgument(
-            'map', default_value=os.path.expanduser('~/result/factory_map.yaml'),
-            description='2D 占据栅格 .yaml(pcd_to_occupancy 生成)'),
-        DeclareLaunchArgument('params_file', default_value=default_params),
+        DeclareLaunchArgument('map'),
+        DeclareLaunchArgument('params_file'),
         DeclareLaunchArgument('use_rviz', default_value='true'),
         DeclareLaunchArgument('cmd_vel_output_topic', default_value='/cmd_vel'),
 

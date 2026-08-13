@@ -38,6 +38,13 @@ def _calls(node, name):
     ]
 
 
+def _declarations(tree):
+    return {
+        _string(call.args[0]): call
+        for call in _calls(tree, "DeclareLaunchArgument") if call.args
+    }
+
+
 def _keyword(call, name):
     return next(keyword.value for keyword in call.keywords if keyword.arg == name)
 
@@ -74,6 +81,16 @@ def _assert_clock_parameter(call):
     clock = _dict_value(parameter_dict, "use_sim_time")
     assert isinstance(clock, ast.Name)
     assert clock.id == "use_sim_time"
+
+
+def test_params_file_and_map_are_required():
+    declarations = _declarations(_tree())
+    for name in ("params_file", "map"):
+        assert name in declarations
+        assert not any(
+            keyword.arg == "default_value"
+            for keyword in declarations[name].keywords
+        )
 
 
 def test_navigation_has_no_fast_lio_frame_contract():
