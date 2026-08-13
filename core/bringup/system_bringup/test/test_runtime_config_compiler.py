@@ -1611,6 +1611,8 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
         "web_ui_path",
         "nav2_path",
         "fast_lio_path",
+        "lio_sam_path",
+        "gicp_path",
         *(f"{key}_path" for key in rcc.SENSOR_OUTPUT_FILENAMES[platform]),
         "robot_launch_arguments",
         "fast_lio_body_bridge_arguments",
@@ -1636,6 +1638,8 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
     assert manifest["nav2_path"] == paths["nav2"]
     assert manifest["fast_lio_path"] == paths["fast_lio"]
     assert manifest["fast_lio_path"].name == "fast_lio.generated.yaml"
+    assert manifest["lio_sam_path"].name == "lio_sam.generated.yaml"
+    assert manifest["gicp_path"].name == "gicp.generated.yaml"
     assert manifest["robot_launch_arguments"] == rcc._derive_robot_launch_arguments(
         loaded[0]["effective"]
     )
@@ -1661,7 +1665,26 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
         for key in output_filenames
         if key != "effective_profile"
     }
+    assert set(report["generated_configs"]) == (
+        set(rcc.COMMON_OUTPUT_FILENAMES)
+        | set(rcc.SENSOR_OUTPUT_FILENAMES[platform])
+    )
     assert _temporary_files(output) == []
+
+
+@pytest.mark.parametrize("platform", ["sim", "real"])
+@pytest.mark.parametrize("mode", ["mapping", "navigation"])
+def test_every_platform_mode_generates_the_same_complete_common_set(
+    runtime_tree, tmp_path, platform, mode
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    runtime_tree.set_bringup_value("mode", mode)
+    manifest = rcc.compile_runtime_configs(
+        runtime_tree.config, tmp_path / platform / mode
+    )
+    assert {
+        manifest[f"{key}_path"].name for key in rcc.COMMON_OUTPUT_FILENAMES
+    } == set(rcc.COMMON_OUTPUT_FILENAMES.values())
 
 
 @pytest.mark.parametrize(
@@ -2156,6 +2179,76 @@ def test_fast_lio_staged_reload_failure_precedes_all_replacements(
     monkeypatch.setattr(rcc.os, "replace", record_replace)
 
     with pytest.raises(ValueError, match="generated fast_lio mismatch"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert replaced == []
+    assert marker.read_bytes() == marker_before
+    assert _temporary_files(output) == []
+
+
+def test_gicp_staged_reload_failure_precedes_all_replacements(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    original_load = rcc._load_staged_yaml
+    original_replace = rcc.os.replace
+    replaced = []
+
+    def corrupt_gicp_load(path, label):
+        loaded = original_load(path, label)
+        if label == "gicp":
+            loaded["gicp_localization"]["ros__parameters"][
+                "use_sim_time"
+            ] = None
+        return loaded
+
+    def record_replace(source, destination):
+        replaced.append(Path(destination).name)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(rcc, "_load_staged_yaml", corrupt_gicp_load)
+    monkeypatch.setattr(rcc.os, "replace", record_replace)
+
+    with pytest.raises(
+        ValueError, match="generated gicp does not match template plus overrides"
+    ):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert replaced == []
+    assert marker.read_bytes() == marker_before
+    assert _temporary_files(output) == []
+
+
+def test_lio_sam_staged_reload_failure_precedes_all_replacements(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    original_load = rcc._load_staged_yaml
+    original_replace = rcc.os.replace
+    replaced = []
+
+    def corrupt_lio_sam_load(path, label):
+        loaded = original_load(path, label)
+        if label == "lio_sam":
+            loaded["/**"]["ros__parameters"]["N_SCAN"] = 0
+        return loaded
+
+    def record_replace(source, destination):
+        replaced.append(Path(destination).name)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(rcc, "_load_staged_yaml", corrupt_lio_sam_load)
+    monkeypatch.setattr(rcc.os, "replace", record_replace)
+
+    with pytest.raises(
+        ValueError, match="generated lio_sam does not match template plus overrides"
+    ):
         rcc.compile_runtime_configs(runtime_tree.config, output)
 
     assert replaced == []

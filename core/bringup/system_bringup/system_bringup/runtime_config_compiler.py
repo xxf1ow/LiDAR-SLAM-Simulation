@@ -915,13 +915,23 @@ def _render_runtime_configs(inputs):
     web_ui = _render_web_ui(templates["web_ui"], effective)
     nav2 = _render_nav2(templates["nav2"], effective)
     fast_lio = _render_fast_lio(templates["fast_lio"], effective)
+    lio_sam = _render_lio_sam(
+        templates["lio_sam"], effective, inputs["map_artifacts"]
+    )
+    gicp = _render_gicp(templates["gicp"], effective)
     _validate_generated_configs(effective, controllers, web_ui, nav2)
     _validate_fast_lio_generated(effective, fast_lio)
+    _validate_lio_sam_generated(
+        effective, inputs["map_artifacts"], templates["lio_sam"], lio_sam
+    )
+    _validate_gicp_generated(effective, templates["gicp"], gicp)
     return {
         "controllers": controllers,
         "web_ui": web_ui,
         "nav2": nav2,
         "fast_lio": fast_lio,
+        "lio_sam": lio_sam,
+        "gicp": gicp,
     }
 
 
@@ -998,6 +1008,8 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
         "web_ui_path": paths["web_ui"],
         "nav2_path": paths["nav2"],
         "fast_lio_path": paths["fast_lio"],
+        "lio_sam_path": paths["lio_sam"],
+        "gicp_path": paths["gicp"],
         "robot_launch_arguments": robot_launch_arguments,
         "fast_lio_body_bridge_arguments": fast_lio_body_bridge_arguments,
     }
@@ -1021,6 +1033,17 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
         )
         _validate_fast_lio_generated(
             reloaded["effective_profile"], reloaded["fast_lio"]
+        )
+        _validate_lio_sam_generated(
+            reloaded["effective_profile"],
+            inputs["map_artifacts"],
+            inputs["templates"]["lio_sam"],
+            reloaded["lio_sam"],
+        )
+        _validate_gicp_generated(
+            reloaded["effective_profile"],
+            inputs["templates"]["gicp"],
+            reloaded["gicp"],
         )
         _validate_sensor_generated_configs(
             inputs["platform"],
