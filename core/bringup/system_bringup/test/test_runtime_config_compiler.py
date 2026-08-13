@@ -375,6 +375,15 @@ def test_gicp_template_is_complete_confirmed_real_baseline():
     }
 
 
+def test_retired_package_algorithm_configs_are_absent():
+    core = PACKAGE_ROOT.parents[1]
+    retired = [
+        core / "localization/gicp_localization/config/gicp_localization.yaml",
+        core / "localization/gicp_localization/config/gicp_localization_real.yaml",
+    ]
+    assert all(not path.exists() for path in retired)
+
+
 def test_lio_sam_template_is_complete_confirmed_real_baseline():
     data = _load_yaml(TEMPLATE_DIR / "lio_sam.yaml")
     assert set(data) == {"/**"}

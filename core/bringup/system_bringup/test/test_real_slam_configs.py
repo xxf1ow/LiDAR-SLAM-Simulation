@@ -17,22 +17,6 @@ def _patch_yaml(patch_path, relative_path):
     return yaml.safe_load(cc._patch_added_file(text, relative_path))
 
 
-def test_real_gicp_only_switches_clock_domain():
-    sim = _yaml_file(
-        ROOT / "core/localization/gicp_localization/config/gicp_localization.yaml"
-    )
-    real = _yaml_file(
-        ROOT / "core/localization/gicp_localization/config/gicp_localization_real.yaml"
-    )
-    sim_params = sim["gicp_localization"]["ros__parameters"]
-    real_params = real["gicp_localization"]["ros__parameters"]
-    assert sim_params["use_sim_time"] is True
-    assert real_params["use_sim_time"] is False
-    assert {k: v for k, v in real_params.items() if k != "use_sim_time"} == {
-        k: v for k, v in sim_params.items() if k != "use_sim_time"
-    }
-
-
 def test_real_lio_sam_and_driver_contract_remain_aligned():
     driver = _yaml_file(
         ROOT / "core/robot/drivers/lidar_vanjee_722/"
