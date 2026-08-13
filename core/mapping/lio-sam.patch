@@ -188,7 +188,16 @@ diff --git a/launch/run.launch.py b/launch/run.launch.py
 index cfde01d..ed8f877 100644
 --- a/launch/run.launch.py
 +++ b/launch/run.launch.py
-@@ -30,15 +30,17 @@ def generate_launch_description():
+@@ -16,7 +16,4 @@ def generate_launch_description():
+     params_declare = DeclareLaunchArgument(
+         'params_file',
+-        default_value=os.path.join(
+-            share_dir, 'config', 'params.yaml'),
+-        description='FPath to the ROS2 parameters file to use.')
+-
++        description='Absolute path to the generated ROS2 parameter file.')
+     print("urdf_file_name : {}".format(xacro_path))
+@@ -30,15 +27,17 @@ def generate_launch_description():
              parameters=[parameter_file],
              output='screen'
              ),
