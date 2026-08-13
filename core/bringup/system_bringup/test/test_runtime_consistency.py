@@ -60,15 +60,6 @@ def _mutate_yaml(path, dotted_path, value):
     _write_yaml(path, data)
 
 
-def _delete_yaml(path, dotted_path):
-    data = _load_yaml(path)
-    target = data
-    for key in dotted_path[:-1]:
-        target = target[key]
-    del target[dotted_path[-1]]
-    _write_yaml(path, data)
-
-
 @pytest.fixture
 def runtime_factory(tmp_path, monkeypatch):
     runtime_dirs = []
@@ -128,9 +119,13 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     validations = []
     sensor_validations = []
     fast_lio_validations = []
+    gicp_validations = []
+    lio_sam_validations = []
     validate_generated = rcc._validate_generated_configs
     validate_sensors = rcc._validate_sensor_generated_configs
     validate_fast_lio = rcc._validate_fast_lio_generated
+    validate_gicp = rcc._validate_gicp_generated
+    validate_lio_sam = rcc._validate_lio_sam_generated
 
     def counted_load(stream):
         loads.append(stream)
@@ -148,8 +143,18 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
         fast_lio_validations.append((effective, fast_lio))
         return validate_fast_lio(effective, fast_lio)
 
+    def counted_gicp_validation(*args):
+        gicp_validations.append(args)
+        return validate_gicp(*args)
+
+    def counted_lio_sam_validation(*args):
+        lio_sam_validations.append(args)
+        return validate_lio_sam(*args)
+
     def forbidden(*_args, **_kwargs):
-        raise AssertionError("runtime consistency must be read-only and manifest-only")
+        raise AssertionError(
+            "runtime consistency must remain read-only and must not regenerate"
+        )
 
     monkeypatch.setattr(cc.yaml, "safe_load", counted_load)
     monkeypatch.setattr(cc, "load_bringup_config", forbidden)
@@ -163,18 +168,108 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     monkeypatch.setattr(
         rcc, "_validate_fast_lio_generated", counted_fast_lio_validation
     )
+    monkeypatch.setattr(rcc, "_validate_gicp_generated", counted_gicp_validation)
+    monkeypatch.setattr(
+        rcc, "_validate_lio_sam_generated", counted_lio_sam_validation
+    )
     monkeypatch.setattr(Path, "write_text", forbidden)
     monkeypatch.setattr(Path, "write_bytes", forbidden)
 
     assert cc.run_runtime_consistency(repo_root, manifest) == []
-    assert len(loads) == len(cc._runtime_artifacts(platform))
+    assert len(loads) == len(rcc._output_filenames(platform)) + 2
     assert len(validations) == 1
     assert len(sensor_validations) == 1
     assert len(fast_lio_validations) == 1
+    assert len(gicp_validations) == 1
+    assert len(lio_sam_validations) == 1
     assert fast_lio_validations[0][0] == _load_yaml(
         manifest["effective_profile_path"]
     )
     assert fast_lio_validations[0][1] == _load_yaml(manifest["fast_lio_path"])
+
+
+@pytest.mark.parametrize("artifact_key", ["gicp_path", "lio_sam_path"])
+def test_missing_gicp_or_lio_sam_artifact_is_actionable(
+    runtime_factory, artifact_key
+):
+    repo_root, manifest = runtime_factory()
+    missing = manifest[artifact_key]
+    missing.unlink()
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        artifact_key in failure
+        and "file does not exist" in failure
+        and str(missing) in failure
+        for failure in failures
+    )
+
+
+@pytest.mark.parametrize(
+    "artifact_key,dotted_path,value,label",
+    [
+        (
+            "gicp_path",
+            ("gicp_localization", "ros__parameters", "use_sim_time"),
+            None,
+            "gicp",
+        ),
+        (
+            "lio_sam_path",
+            ("/**", "ros__parameters", "N_SCAN"),
+            0,
+            "lio_sam",
+        ),
+    ],
+)
+def test_malformed_gicp_or_lio_sam_artifact_is_actionable(
+    runtime_factory, artifact_key, dotted_path, value, label
+):
+    repo_root, manifest = runtime_factory()
+    _mutate_yaml(manifest[artifact_key], dotted_path, value)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        f"generated {label} validation failed" in failure
+        for failure in failures
+    )
+
+
+@pytest.mark.parametrize("artifact", ["gicp", "lio_sam"])
+def test_gicp_or_lio_sam_report_reference_drift_is_actionable(
+    runtime_factory, artifact
+):
+    repo_root, manifest = runtime_factory()
+    _mutate_yaml(
+        manifest["effective_profile_path"],
+        ("generated_configs", artifact),
+        f"/tmp/not-{artifact}.yaml",
+    )
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        f"generated_configs.{artifact}" in failure for failure in failures
+    )
+
+
+@pytest.mark.parametrize("artifact", ["gicp", "lio_sam"])
+def test_missing_gicp_or_lio_sam_report_reference_is_actionable(
+    runtime_factory, artifact
+):
+    repo_root, manifest = runtime_factory()
+    report_path = manifest["effective_profile_path"]
+    report = _load_yaml(report_path)
+    del report["generated_configs"][artifact]
+    _write_yaml(report_path, report)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any(
+        f"generated_configs.{artifact}" in failure for failure in failures
+    )
 
 
 def test_missing_artifact_reports_manifest_key_and_path(runtime_factory):
@@ -583,98 +678,18 @@ def test_manifest_robot_launch_arguments_drift_is_reported(runtime_factory):
     assert any("robot_launch_arguments.lidar_scan_lines" in failure for failure in failures)
 
 
-def test_valid_runtime_report_contains_no_retired_compatibility_weld(runtime_factory):
-    repo_root, manifest = runtime_factory("real")
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_fresh_formal_manifest_without_retired_compatibility_metadata_is_valid(
+    runtime_factory, platform
+):
+    repo_root, manifest = runtime_factory(platform)
     report = _load_yaml(manifest["effective_profile_path"])
 
     assert "compatibility_body_weld_arguments" not in manifest
     assert "compatibility" not in report
+    assert "deferred_compatibility" not in report
+    assert "deferred_to_section_9" not in yaml.safe_dump(report)
     assert cc.run_runtime_consistency(repo_root, manifest) == []
-
-
-def test_deferred_nav2_metadata_still_cannot_drift(runtime_factory):
-    repo_root, manifest = runtime_factory("real")
-    _mutate_yaml(
-        manifest["effective_profile_path"],
-        ("deferred_compatibility", 0, "status"),
-        "done",
-    )
-    failures = cc.run_runtime_consistency(repo_root, manifest)
-    assert any(
-        "deferred_compatibility.nav2.behavior_server.status" in item
-        for item in failures
-    )
-
-
-@pytest.mark.parametrize(
-    "dotted_path,value,expected",
-    [
-        (
-            ("deferred_compatibility", 0, "component"),
-            "different.component",
-            "deferred_compatibility.nav2.behavior_server",
-        ),
-        (
-            ("deferred_compatibility", 0, "status"),
-            "done",
-            "deferred_compatibility.nav2.behavior_server.status",
-        ),
-        (
-            (
-                "deferred_compatibility",
-                0,
-                "template_values",
-                "max_rotational_vel",
-            ),
-            99.0,
-            "deferred_compatibility.nav2.behavior_server.template_values.max_rotational_vel",
-        ),
-        (
-            (
-                "deferred_compatibility",
-                0,
-                "profile_values",
-                "max_angular_velocity",
-            ),
-            99.0,
-            "deferred_compatibility.nav2.behavior_server.profile_values.max_angular_velocity",
-        ),
-        (
-            ("deferred_compatibility", 0, "reason"),
-            "none",
-            "deferred_compatibility.nav2.behavior_server.reason",
-        ),
-    ],
-)
-def test_effective_report_required_metadata_drift_is_reported(
-    runtime_factory, dotted_path, value, expected
-):
-    repo_root, manifest = runtime_factory()
-    _mutate_yaml(manifest["effective_profile_path"], dotted_path, value)
-
-    failures = cc.run_runtime_consistency(repo_root, manifest)
-
-    assert any(expected in failure for failure in failures)
-
-
-@pytest.mark.parametrize(
-    "dotted_path,expected",
-    [
-        (
-            ("deferred_compatibility", 0, "reason"),
-            "deferred_compatibility.nav2.behavior_server.reason",
-        ),
-    ],
-)
-def test_effective_report_required_metadata_deletion_is_reported(
-    runtime_factory, dotted_path, expected
-):
-    repo_root, manifest = runtime_factory()
-    _delete_yaml(manifest["effective_profile_path"], dotted_path)
-
-    failures = cc.run_runtime_consistency(repo_root, manifest)
-
-    assert any(expected in failure for failure in failures)
 
 
 def test_malformed_artifact_path_is_aggregated(runtime_factory):

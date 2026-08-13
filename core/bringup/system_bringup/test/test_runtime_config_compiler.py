@@ -1533,6 +1533,20 @@ def _temporary_files(output):
     return sorted(output.glob(".*.tmp"))
 
 
+def test_recursive_typed_tree_equality_checks_shape_container_and_leaf_types():
+    expected = {"mapping": {"enabled": False, "values": [1, 2.0]}}
+
+    assert rcc._same_typed_tree(deepcopy(expected), expected)
+    assert not rcc._same_typed_tree([], {})
+    assert not rcc._same_typed_tree({"mapping": {}}, expected)
+    assert not rcc._same_typed_tree(
+        {"mapping": {"enabled": False, "values": [1]}}, expected
+    )
+    assert not rcc._same_typed_tree(
+        {"mapping": {"enabled": 0, "values": [1, 2]}}, expected
+    )
+
+
 def _yaml_schema(value):
     if isinstance(value, dict):
         return {key: _yaml_schema(child) for key, child in value.items()}
@@ -2303,13 +2317,14 @@ def test_fast_lio_staged_reload_failure_precedes_all_replacements(
     assert _temporary_files(output) == []
 
 
-def test_gicp_staged_reload_failure_precedes_all_replacements(
+def test_gicp_staged_reload_equal_value_wrong_type_precedes_all_replacements(
     runtime_tree, tmp_path, monkeypatch
 ):
     output = tmp_path / "output"
     previous = rcc.compile_runtime_configs(runtime_tree.config, output)
     marker = previous["effective_profile_path"]
     marker_before = marker.read_bytes()
+    runtime_tree.set_bringup_value("platform", "real")
     original_load = rcc._load_staged_yaml
     original_replace = rcc.os.replace
     replaced = []
@@ -2319,7 +2334,7 @@ def test_gicp_staged_reload_failure_precedes_all_replacements(
         if label == "gicp":
             loaded["gicp_localization"]["ros__parameters"][
                 "use_sim_time"
-            ] = None
+            ] = 0
         return loaded
 
     def record_replace(source, destination):
@@ -2339,8 +2354,18 @@ def test_gicp_staged_reload_failure_precedes_all_replacements(
     assert _temporary_files(output) == []
 
 
-def test_lio_sam_staged_reload_failure_precedes_all_replacements(
-    runtime_tree, tmp_path, monkeypatch
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        lambda params: params.__setitem__("N_SCAN", float(params["N_SCAN"])),
+        lambda params: params["extrinsicRot"].__setitem__(
+            0, int(params["extrinsicRot"][0])
+        ),
+    ],
+    ids=["integer-as-equal-float", "double-array-element-as-equal-int"],
+)
+def test_lio_sam_staged_reload_equal_value_wrong_types_precede_all_replacements(
+    runtime_tree, tmp_path, monkeypatch, corrupt
 ):
     output = tmp_path / "output"
     previous = rcc.compile_runtime_configs(runtime_tree.config, output)
@@ -2353,7 +2378,7 @@ def test_lio_sam_staged_reload_failure_precedes_all_replacements(
     def corrupt_lio_sam_load(path, label):
         loaded = original_load(path, label)
         if label == "lio_sam":
-            loaded["/**"]["ros__parameters"]["N_SCAN"] = 0
+            corrupt(loaded["/**"]["ros__parameters"])
         return loaded
 
     def record_replace(source, destination):
@@ -2369,6 +2394,97 @@ def test_lio_sam_staged_reload_failure_precedes_all_replacements(
         rcc.compile_runtime_configs(runtime_tree.config, output)
 
     assert replaced == []
+    assert marker.read_bytes() == marker_before
+    assert _temporary_files(output) == []
+
+
+def test_staged_report_reference_drift_precedes_all_replacements_and_return(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    runtime_tree.set_profile_value(
+        "sim", ("motion", "max_angular_velocity"), 1.7
+    )
+    original_load = rcc._load_staged_yaml
+    original_replace = rcc.os.replace
+    replaced = []
+    returned = []
+
+    def corrupt_report_load(path, label):
+        loaded = original_load(path, label)
+        if label == "effective_profile":
+            loaded["source_profile"] = "/tmp/wrong-profile.yaml"
+        return loaded
+
+    def record_replace(source, destination):
+        replaced.append(Path(destination).name)
+        return original_replace(source, destination)
+
+    def compile_and_record():
+        returned.append(
+            rcc.compile_runtime_configs(runtime_tree.config, output)
+        )
+
+    monkeypatch.setattr(rcc, "_load_staged_yaml", corrupt_report_load)
+    monkeypatch.setattr(rcc.os, "replace", record_replace)
+
+    with pytest.raises(
+        ValueError, match="staged effective_profile does not match in-memory report"
+    ):
+        compile_and_record()
+
+    assert replaced == []
+    assert returned == []
+    assert marker.read_bytes() == marker_before
+    assert _temporary_files(output) == []
+
+
+def test_staged_report_equal_value_wrong_type_precedes_replacements_and_return(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    previous = rcc.compile_runtime_configs(runtime_tree.config, output)
+    marker = previous["effective_profile_path"]
+    marker_before = marker.read_bytes()
+    runtime_tree.set_profile_value(
+        "sim", ("motion", "max_angular_velocity"), 1.7
+    )
+    original_load = rcc._load_staged_yaml
+    original_replace = rcc.os.replace
+    replaced = []
+    returned = []
+
+    def corrupt_report_load(path, label):
+        loaded = original_load(path, label)
+        if label == "effective_profile":
+            motion = loaded["profile"]["motion"]
+            motion["max_linear_velocity"] = int(
+                motion["max_linear_velocity"]
+            )
+        return loaded
+
+    def record_replace(source, destination):
+        replaced.append(Path(destination).name)
+        return original_replace(source, destination)
+
+    def compile_and_record():
+        returned.append(
+            rcc.compile_runtime_configs(runtime_tree.config, output)
+        )
+
+    monkeypatch.setattr(rcc, "_load_staged_yaml", corrupt_report_load)
+    monkeypatch.setattr(rcc.os, "replace", record_replace)
+
+    with pytest.raises(
+        ValueError, match="staged effective_profile does not match in-memory report"
+    ):
+        compile_and_record()
+
+    assert replaced == []
+    assert returned == []
     assert marker.read_bytes() == marker_before
     assert _temporary_files(output) == []
 

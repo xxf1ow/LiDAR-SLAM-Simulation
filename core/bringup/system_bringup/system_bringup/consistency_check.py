@@ -175,35 +175,20 @@ def _yaml(text):
     return yaml.safe_load(text)
 
 
-_COMMON_RUNTIME_ARTIFACTS = {
-    "controllers_path": "controllers",
-    "web_ui_path": "web_ui",
-    "nav2_path": "nav2",
-    "fast_lio_path": "fast_lio",
-}
-_SENSOR_RUNTIME_ARTIFACTS = {
-    "sim": {
-        "lidar_adapter_path": "lidar_adapter",
-        "sensor_gate_path": "sensor_gate",
-    },
-    "real": {
-        "vanjee_lidar_path": "vanjee_lidar",
-        "sensor_gate_path": "sensor_gate",
-    },
-}
+def _runtime_artifacts(platform, runtime_compiler):
+    try:
+        return runtime_compiler.runtime_manifest_artifacts(platform)
+    except (TypeError, ValueError):
+        output_filenames = {
+            **runtime_compiler.COMMON_OUTPUT_FILENAMES,
+            "effective_profile": runtime_compiler.EFFECTIVE_PROFILE_FILENAME,
+        }
+        return {
+            f"{artifact_name}_path": artifact_name
+            for artifact_name in output_filenames
+        }
 
 
-def _runtime_artifacts(platform):
-    sensor = (
-        _SENSOR_RUNTIME_ARTIFACTS.get(platform, {})
-        if isinstance(platform, str)
-        else {}
-    )
-    return {
-        **_COMMON_RUNTIME_ARTIFACTS,
-        **sensor,
-        "effective_profile_path": "effective_profile",
-    }
 _MISSING = object()
 _PATH_ERRORS = (OSError, TypeError, ValueError, RuntimeError)
 
@@ -322,6 +307,35 @@ def _load_runtime_artifacts(manifest, failures, runtime_compiler, artifacts):
         loaded[artifact_name] = data
 
     return paths, loaded
+
+
+def _load_runtime_template(
+    source_path, artifact_name, runtime_compiler, failures
+):
+    if source_path is None or not source_path.is_file():
+        return None
+    template_path = (
+        source_path.parent
+        / "templates"
+        / runtime_compiler.TEMPLATE_FILENAMES[artifact_name]
+    )
+    try:
+        _, template = runtime_compiler._load_template(
+            template_path, artifact_name
+        )
+    except (
+        KeyError,
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        yaml.YAMLError,
+    ) as exc:
+        failures.append(
+            f"cannot load source {artifact_name} template {template_path}: {exc}"
+        )
+        return None
+    return template
 
 
 def _validate_unmigrated_runtime_config(config, platform, failures):
@@ -521,55 +535,6 @@ def _validate_installed_freshness(repo_root, failures):
             )
 
 
-def _validate_report_metadata(report, runtime_compiler, failures):
-    try:
-        expected_report = runtime_compiler._build_runtime_report(report)
-    except (KeyError, TypeError, ValueError) as exc:
-        failures.append(f"effective report metadata cannot be derived: {exc}")
-        return
-
-    expected_deferred = next(
-        entry
-        for entry in expected_report["deferred_compatibility"]
-        if entry.get("component") == "nav2.behavior_server"
-    )
-    actual_entries = report.get("deferred_compatibility")
-    actual_deferred = (
-        next(
-            (
-                entry
-                for entry in actual_entries
-                if isinstance(entry, dict)
-                and entry.get("component") == "nav2.behavior_server"
-            ),
-            None,
-        )
-        if isinstance(actual_entries, list)
-        else None
-    )
-    prefix = "deferred_compatibility.nav2.behavior_server"
-    if actual_deferred is None:
-        failures.append(f"effective report missing {prefix}")
-        return
-
-    for path in (
-        ("status",),
-        ("template_values", "max_rotational_vel"),
-        ("template_values", "min_rotational_vel"),
-        ("template_values", "rotational_acc_lim"),
-        ("profile_values", "max_angular_velocity"),
-        ("profile_values", "max_angular_acceleration"),
-        ("reason",),
-    ):
-        actual = _nested_value(actual_deferred, path)
-        expected = _nested_value(expected_deferred, path)
-        if actual != expected:
-            failures.append(
-                f"effective report {prefix}.{'.'.join(path)} "
-                f"{actual!r} != {expected!r}"
-            )
-
-
 def run_runtime_consistency(repo_root, manifest):
     """Validate one compiled runtime manifest without rereading or regenerating it."""
     failures = []
@@ -646,7 +611,7 @@ def run_runtime_consistency(repo_root, manifest):
                         f"manifest bringup_config_path is outside repo_root: {source_path}"
                     )
 
-    artifacts = _runtime_artifacts(platform)
+    artifacts = _runtime_artifacts(platform, rcc)
     paths, loaded = _load_runtime_artifacts(
         manifest, failures, rcc, artifacts
     )
@@ -778,9 +743,10 @@ def run_runtime_consistency(repo_root, manifest):
                         f"{actual!r} != effective bridge {expected!r}"
                     )
 
-        _validate_report_metadata(report, rcc, failures)
-
-    if all(name in loaded for name in artifacts.values()):
+    if all(
+        name in loaded
+        for name in ("effective_profile", "controllers", "web_ui", "nav2")
+    ):
         try:
             rcc._validate_generated_configs(
                 loaded["effective_profile"],
@@ -788,16 +754,25 @@ def run_runtime_consistency(repo_root, manifest):
                 loaded["web_ui"],
                 loaded["nav2"],
             )
-            rcc._validate_sensor_generated_configs(
-                platform,
-                loaded["effective_profile"],
-                {
-                    key: loaded[key]
-                    for key in rcc.SENSOR_OUTPUT_FILENAMES[platform]
-                },
-            )
         except (KeyError, TypeError, ValueError) as exc:
             failures.append(f"generated runtime config mismatch: {exc}")
+
+    if (
+        isinstance(platform, str)
+        and platform in rcc.SENSOR_OUTPUT_FILENAMES
+    ):
+        sensor_names = rcc.SENSOR_OUTPUT_FILENAMES[platform]
+        if "effective_profile" in loaded and all(
+            name in loaded for name in sensor_names
+        ):
+            try:
+                rcc._validate_sensor_generated_configs(
+                    platform,
+                    loaded["effective_profile"],
+                    {key: loaded[key] for key in sensor_names},
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                failures.append(f"generated runtime config mismatch: {exc}")
 
     if "effective_profile" in loaded and "fast_lio" in loaded:
         try:
@@ -806,6 +781,33 @@ def run_runtime_consistency(repo_root, manifest):
             )
         except (KeyError, TypeError, ValueError) as exc:
             failures.append(f"generated fast_lio validation failed: {exc}")
+
+    if report is not None and "gicp" in loaded:
+        gicp_template = _load_runtime_template(
+            source_path, "gicp", rcc, failures
+        )
+        if gicp_template is not None:
+            try:
+                rcc._validate_gicp_generated(
+                    report, gicp_template, loaded["gicp"]
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                failures.append(f"generated gicp validation failed: {exc}")
+
+    if report is not None and "lio_sam" in loaded:
+        lio_sam_template = _load_runtime_template(
+            source_path, "lio_sam", rcc, failures
+        )
+        if lio_sam_template is not None:
+            try:
+                rcc._validate_lio_sam_generated(
+                    report,
+                    config.get("map_artifacts"),
+                    lio_sam_template,
+                    loaded["lio_sam"],
+                )
+            except (KeyError, TypeError, ValueError) as exc:
+                failures.append(f"generated lio_sam validation failed: {exc}")
 
     if platform in ("sim", "real"):
         _validate_unmigrated_runtime_config(config, platform, failures)

@@ -94,6 +94,13 @@ def _output_filenames(platform):
     }
 
 
+def runtime_manifest_artifacts(platform):
+    return {
+        f"{artifact_name}_path": artifact_name
+        for artifact_name in _output_filenames(platform)
+    }
+
+
 def _validate_mode(config):
     mode = config.get("mode")
     if not isinstance(mode, str) or mode not in SUPPORTED_MODES:
@@ -262,6 +269,21 @@ def _get_existing(mapping, path):
 
 def _same_typed_value(actual, expected):
     return type(actual) is type(expected) and actual == expected
+
+
+def _same_typed_tree(actual, expected):
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            _same_typed_tree(actual[key], expected[key]) for key in expected
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            _same_typed_tree(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected)
+        )
+    return actual == expected
 
 
 def _finite_float_list(value, length, label):
@@ -631,7 +653,7 @@ def _validate_gicp_generated(effective, template, generated):
     _apply_template_overrides(
         "gicp", expected, GICP_ROOT, _gicp_overrides(effective)
     )
-    if generated != expected:
+    if not _same_typed_tree(generated, expected):
         raise ValueError("generated gicp does not match template plus overrides")
 
 
@@ -675,7 +697,7 @@ def _validate_lio_sam_generated(
     )
     rotation = _get_existing(generated, LIO_SAM_ROOT + ("extrinsicRot",))
     _validate_rotation_matrix(rotation, "generated lio_sam extrinsicRot")
-    if generated != expected:
+    if not _same_typed_tree(generated, expected):
         raise ValueError("generated lio_sam does not match template plus overrides")
 
 
@@ -1074,18 +1096,17 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
         "platform": inputs["platform"],
         "mode": inputs["mode"],
         "use_sim_time": effective["derived"]["use_sim_time"],
-        "effective_profile_path": paths["effective_profile"],
-        "controllers_path": paths["controllers"],
-        "web_ui_path": paths["web_ui"],
-        "nav2_path": paths["nav2"],
-        "fast_lio_path": paths["fast_lio"],
-        "lio_sam_path": paths["lio_sam"],
-        "gicp_path": paths["gicp"],
         "robot_launch_arguments": robot_launch_arguments,
         "fast_lio_body_bridge_arguments": fast_lio_body_bridge_arguments,
     }
-    for key in SENSOR_OUTPUT_FILENAMES[inputs["platform"]]:
-        manifest[f"{key}_path"] = paths[key]
+    manifest.update(
+        {
+            manifest_key: paths[artifact_name]
+            for manifest_key, artifact_name in runtime_manifest_artifacts(
+                inputs["platform"]
+            ).items()
+        }
+    )
     staged_data = {**generated, "effective_profile": report}
     staged_paths = {}
     try:
@@ -1096,6 +1117,10 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
             key: _load_staged_yaml(staged_paths[key], key)
             for key in output_filenames
         }
+        if not _same_typed_tree(reloaded["effective_profile"], report):
+            raise ValueError(
+                "staged effective_profile does not match in-memory report"
+            )
         _validate_generated_configs(
             reloaded["effective_profile"],
             reloaded["controllers"],
