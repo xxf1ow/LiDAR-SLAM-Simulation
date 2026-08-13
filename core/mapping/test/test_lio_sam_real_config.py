@@ -87,6 +87,38 @@ def test_lio_sam_patch_applies_to_clean_pinned_git_objects(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
+def test_lio_sam_patch_does_not_add_incremental_lint_failures(tmp_path):
+    source = _clean_patch_source(tmp_path)
+    result = _apply_patch(source, check=False)
+    assert result.returncode == 0, result.stderr
+
+    launch_source = (source / "launch/run.launch.py").read_text(
+        encoding="utf-8"
+    )
+    launch_tree = ast.parse(launch_source)
+    substitution_imports = [
+        item.name
+        for node in launch_tree.body
+        if isinstance(node, ast.ImportFrom)
+        and node.module == "launch.substitutions"
+        for item in node.names
+    ]
+    assert "Command" not in substitution_imports
+    assert "robot_state_publisher" not in launch_source
+
+    mapping_source = (source / "src/mapOptmization.cpp").read_text(
+        encoding="utf-8"
+    )
+    tf_assignments = [
+        line.strip()
+        for line in mapping_source.splitlines()
+        if "trans_odom_to_lidar.child_frame_id" in line
+    ]
+    assert tf_assignments == [
+        'trans_odom_to_lidar.child_frame_id = "velodyne_base_link";'
+    ]
+
+
 def test_lio_sam_launch_requires_one_shared_parameter_file(tmp_path):
     source = _clean_patch_source(tmp_path)
     result = _apply_patch(source, check=False)
