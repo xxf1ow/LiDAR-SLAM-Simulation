@@ -137,18 +137,15 @@ def test_lio_sam_launch_requires_one_shared_parameter_file(tmp_path):
     assert len(declarations) == 1
     assert not any(item.arg == "default_value" for item in declarations[0].keywords)
 
-    parameter_value_imports = [
-        node for node in tree.body
-        if isinstance(node, ast.ImportFrom)
-        and node.module == "launch_ros.parameter_descriptions"
+    assert not any(
+        isinstance(node, ast.ImportFrom)
         and any(item.name == "ParameterValue" for item in node.names)
-    ]
-    assert len(parameter_value_imports) == 1
-    parameter_value_alias = next(
-        item for item in parameter_value_imports[0].names
-        if item.name == "ParameterValue"
+        for node in tree.body
     )
-    assert parameter_value_alias.asname is None
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "ParameterValue"
+        for node in ast.walk(tree)
+    )
 
     parameter_file_assignments = [
         node for node in ast.walk(tree)
@@ -161,20 +158,11 @@ def test_lio_sam_launch_requires_one_shared_parameter_file(tmp_path):
     parameter_file_value = parameter_file_assignments[0].value
     assert isinstance(parameter_file_value, ast.Call)
     assert isinstance(parameter_file_value.func, ast.Name)
-    assert parameter_file_value.func.id == "ParameterValue"
+    assert parameter_file_value.func.id == "LaunchConfiguration"
     assert len(parameter_file_value.args) == 1
-    launch_configuration = parameter_file_value.args[0]
-    assert isinstance(launch_configuration, ast.Call)
-    assert isinstance(launch_configuration.func, ast.Name)
-    assert launch_configuration.func.id == "LaunchConfiguration"
-    assert len(launch_configuration.args) == 1
-    assert not launch_configuration.keywords
-    assert isinstance(launch_configuration.args[0], ast.Constant)
-    assert launch_configuration.args[0].value == "params_file"
-    assert len(parameter_file_value.keywords) == 1
-    assert parameter_file_value.keywords[0].arg == "value_type"
-    assert isinstance(parameter_file_value.keywords[0].value, ast.Name)
-    assert parameter_file_value.keywords[0].value.id == "str"
+    assert not parameter_file_value.keywords
+    assert isinstance(parameter_file_value.args[0], ast.Constant)
+    assert parameter_file_value.args[0].value == "params_file"
 
     nodes = [
         node for node in ast.walk(tree)

@@ -2,18 +2,11 @@ diff --git a/launch/run.launch.py b/launch/run.launch.py
 index cfde01d..ed8f877 100644
 --- a/launch/run.launch.py
 +++ b/launch/run.launch.py
-@@ -4,3 +4,4 @@ from launch import LaunchDescription
+@@ -4,3 +4,3 @@ from launch import LaunchDescription
  from launch.actions import DeclareLaunchArgument
 -from launch.substitutions import LaunchConfiguration, Command
 +from launch.substitutions import LaunchConfiguration
-+from launch_ros.parameter_descriptions import ParameterValue
  from launch_ros.actions import Node
-@@ -11,3 +12,4 @@ def generate_launch_description():
-     share_dir = get_package_share_directory('lio_sam')
--    parameter_file = LaunchConfiguration('params_file')
-+    parameter_file = ParameterValue(
-+        LaunchConfiguration('params_file'), value_type=str)
-     xacro_path = os.path.join(share_dir, 'config', 'robot.urdf.xacro')
 @@ -16,7 +18,4 @@ def generate_launch_description():
      params_declare = DeclareLaunchArgument(
          'params_file',
