@@ -1,34 +1,45 @@
-"""跨模块一致性:对真实仓库源文件跑(纯解析,无 ROS,本机 pytest 可跑)。"""
+"""Cross-module source contracts that do not belong to runtime validation."""
 import os
 from pathlib import Path
 import subprocess
 
 import pytest
+import yaml
 
 from system_bringup import consistency_check as cc
 from system_bringup import runtime_config_compiler as rcc
 
 
-def _root():
-    return cc.find_repo_root(__file__)
+ROOT = Path(__file__).resolve().parents[4]
+FAST_LIO_PATCH = ROOT / "core/localization/fast-lio2.patch"
+
+
+def _load_yaml(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def _patch_file_section(text, relative_path):
+    marker = f"diff --git a/{relative_path} b/{relative_path}"
+    start = text.find(marker)
+    if start < 0:
+        raise ValueError(f"patch missing file: {relative_path}")
+    return text[start:].split("\ndiff --git ", 1)[0]
 
 
 @pytest.fixture
 def sim_adapter_scan_period(tmp_path):
-    config = Path(_root()) / "core/bringup/system_bringup/config/bringup.yaml"
+    config = ROOT / "core/bringup/system_bringup/config/bringup.yaml"
     manifest = rcc.compile_runtime_configs(config, tmp_path / "runtime")
-    adapter = cc._yaml(
-        Path(manifest["lidar_adapter_path"]).read_text(encoding="utf-8")
-    )
+    adapter = _load_yaml(Path(manifest["lidar_adapter_path"]))
     return adapter["lidar_pointcloud_adapter"]["ros__parameters"]["scan_period"]
 
 
-def test_repo_root_found():
-    assert os.path.isdir(os.path.join(_root(), "core", "bringup", "system_bringup"))
+def test_repository_fixture_resolves_from_test_location():
+    assert (ROOT / "core/bringup/system_bringup").is_dir()
 
 
 def test_fast_lio_patch_contains_only_the_imu_qos_source_change():
-    patch = cc._read(_root(), cc.F_FASTLIO_PATCH)
+    patch = FAST_LIO_PATCH.read_text(encoding="utf-8")
     headers = [
         line for line in patch.splitlines() if line.startswith("diff --git ")
     ]
@@ -37,7 +48,7 @@ def test_fast_lio_patch_contains_only_the_imu_qos_source_change():
     ]
     assert "config/gazebo_velodyne.yaml" not in patch
     assert "config/vanjee_722.yaml" not in patch
-    section = cc._patch_file_section(patch, "src/laserMapping.cpp")
+    section = _patch_file_section(patch, "src/laserMapping.cpp")
     hunks = [line for line in section.splitlines() if line.startswith("@@ ")]
     assert hunks == ["@@ -926,7 +926,7 @@ public:"]
     removed = [
@@ -82,7 +93,7 @@ def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
             "--check",
             "--no-index",
             "--verbose",
-            str(Path(_root()) / cc.F_FASTLIO_PATCH),
+            str(FAST_LIO_PATCH),
         ],
         cwd=tmp_path,
         capture_output=True,
