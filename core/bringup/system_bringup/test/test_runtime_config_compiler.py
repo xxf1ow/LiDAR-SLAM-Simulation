@@ -461,6 +461,23 @@ def test_fast_lio_template_is_complete_native_parameter_schema():
         "cube_side_length", "runtime_pos_log_enable", "map_file_path",
         "common", "preprocess", "mapping", "publish", "pcd_save",
     }
+    assert all(
+        type(params[key]) is bool
+        for key in ("feature_extract_enable", "runtime_pos_log_enable")
+    )
+    assert all(
+        type(params[key]) is int
+        for key in ("point_filter_num", "max_iteration")
+    )
+    assert all(
+        type(params[key]) is float
+        for key in (
+            "filter_size_corner", "filter_size_surf", "filter_size_map",
+            "cube_side_length",
+        )
+    )
+    assert type(params["map_file_path"]) is str
+
     common = params["common"]
     assert set(common) == {
         "lid_topic", "imu_topic", "time_sync_en",
@@ -470,15 +487,33 @@ def test_fast_lio_template_is_complete_native_parameter_schema():
     assert common["imu_topic"] == "/imu/data"
     assert type(common["time_sync_en"]) is bool
     assert type(common["time_offset_lidar_to_imu"]) is float
-    assert set(params["preprocess"]) == {
+    preprocess = params["preprocess"]
+    assert set(preprocess) == {
         "lidar_type", "scan_line", "scan_rate", "timestamp_unit", "blind"
     }
-    assert set(params["mapping"]) == {
+    assert all(
+        type(preprocess[key]) is int
+        for key in ("lidar_type", "scan_line", "scan_rate", "timestamp_unit")
+    )
+    assert type(preprocess["blind"]) is float
+
+    mapping = params["mapping"]
+    assert set(mapping) == {
         "acc_cov", "gyr_cov", "b_acc_cov", "b_gyr_cov", "fov_degree",
         "det_range", "extrinsic_est_en", "extrinsic_T", "extrinsic_R",
     }
-    assert len(params["mapping"]["extrinsic_T"]) == 3
-    assert len(params["mapping"]["extrinsic_R"]) == 9
+    assert all(
+        type(mapping[key]) is float
+        for key in (
+            "acc_cov", "gyr_cov", "b_acc_cov", "b_gyr_cov", "fov_degree",
+            "det_range",
+        )
+    )
+    assert type(mapping["extrinsic_est_en"]) is bool
+    for key, length in (("extrinsic_T", 3), ("extrinsic_R", 9)):
+        assert len(mapping[key]) == length
+        assert all(type(value) is float for value in mapping[key])
+
     assert set(params["publish"]) == {
         "path_en", "effect_map_en", "map_en", "scan_publish_en",
         "dense_publish_en", "scan_bodyframe_pub_en",
@@ -486,7 +521,7 @@ def test_fast_lio_template_is_complete_native_parameter_schema():
     assert all(type(value) is bool for value in params["publish"].values())
     assert set(params["pcd_save"]) == {"pcd_save_en", "interval"}
     assert type(params["pcd_save"]["pcd_save_en"]) is bool
-    assert isinstance(params["map_file_path"], str)
+    assert type(params["pcd_save"]["interval"]) is int
 
 
 @pytest.mark.parametrize(
@@ -499,6 +534,15 @@ def test_fast_lio_template_is_complete_native_parameter_schema():
         (("publish", "unexpected"), "set", True),
         (("publish", "path_en"), "delete", None),
         (("publish", "path_en"), "set", 1),
+        (("feature_extract_enable",), "set", 1),
+        (("point_filter_num",), "set", True),
+        (("preprocess", "scan_line"), "set", True),
+        (("preprocess", "blind"), "set", "0.3"),
+        (("mapping", "extrinsic_est_en"), "set", 1),
+        (("mapping", "acc_cov"), "set", "0.1"),
+        (("mapping", "extrinsic_T", 1), "set", True),
+        (("mapping", "extrinsic_R", 4), "set", True),
+        (("pcd_save", "interval"), "set", False),
     ],
 )
 def test_fast_lio_nested_schema_assertion_rejects_drift(
@@ -2172,18 +2216,15 @@ def test_sim_and_real_sensor_generation_stays_platform_isolated(
     }
     before = {path: path.read_bytes() for path in protected}
 
-    runtime_tree.set_profile_value(
-        "sim", ("sensors", "lidar", "scan_lines"), 7
-    )
-    runtime_tree.set_profile_value(
-        "sim", ("sensors", "lidar", "columns_per_scan"), 311
-    )
-    runtime_tree.set_profile_value(
-        "real", ("sensors", "lidar", "scan_lines"), 11
-    )
-    runtime_tree.set_profile_value(
-        "real", ("sensors", "lidar", "columns_per_scan"), 347
-    )
+    synthetic_scan_shapes = {
+        "sim": {"scan_lines": 7, "columns_per_scan": 311},
+        "real": {"scan_lines": 11, "columns_per_scan": 347},
+    }
+    for platform, shape in synthetic_scan_shapes.items():
+        for key, value in shape.items():
+            runtime_tree.set_profile_value(
+                platform, ("sensors", "lidar", key), value
+            )
 
     sim_manifest = rcc.compile_runtime_configs(
         runtime_tree.config, tmp_path / "sim"
@@ -2240,14 +2281,25 @@ def test_sim_and_real_sensor_generation_stays_platform_isolated(
     )
     assert vanjee["end_angle"] == degrees(real_lidar["horizontal_end_angle"])
 
-    for manifest in (sim_manifest, real_manifest):
-        effective = _load_yaml(manifest["effective_profile_path"])
-        lidar = effective["profile"]["sensors"]["lidar"]
-        expected_points = lidar["scan_lines"] * lidar["columns_per_scan"]
+    platform_results = {
+        "sim": (sim_manifest, sim_report),
+        "real": (real_manifest, real_report),
+    }
+    for platform, (manifest, report) in platform_results.items():
+        shape = synthetic_scan_shapes[platform]
+        other_platform = "real" if platform == "sim" else "sim"
+        lidar = report["profile"]["sensors"]["lidar"]
+        assert lidar["scan_lines"] == shape["scan_lines"]
+        assert lidar["columns_per_scan"] == shape["columns_per_scan"]
+        other_shape = synthetic_scan_shapes[other_platform]
+        assert lidar["scan_lines"] != other_shape["scan_lines"]
+        assert lidar["columns_per_scan"] != other_shape["columns_per_scan"]
         gate = _load_yaml(manifest["sensor_gate_path"])[
             "sensor_contract_gate"
         ]["ros__parameters"]
-        assert gate["expected_points_per_scan"] == expected_points
+        assert gate["expected_points_per_scan"] == (
+            shape["scan_lines"] * shape["columns_per_scan"]
+        )
         assert "expected_height" not in gate
         assert "expected_width" not in gate
 
