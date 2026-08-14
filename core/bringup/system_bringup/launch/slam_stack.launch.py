@@ -111,8 +111,8 @@ def _stack(context, *args, **kwargs):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument("mode", default_value="navigation"),
-        DeclareLaunchArgument("use_sim_time", default_value="true"),
+        DeclareLaunchArgument("mode"),
+        DeclareLaunchArgument("use_sim_time"),
         DeclareLaunchArgument("lio_sam_params_file"),
         DeclareLaunchArgument("fast_lio_params_file"),
         DeclareLaunchArgument("gicp_config_file"),
@@ -127,6 +127,6 @@ def generate_launch_description():
         DeclareLaunchArgument("fast_lio_body_bridge_qy"),
         DeclareLaunchArgument("fast_lio_body_bridge_qz"),
         DeclareLaunchArgument("fast_lio_body_bridge_qw"),
-        DeclareLaunchArgument("settling", default_value="20.0"),
+        DeclareLaunchArgument("settling"),
         OpaqueFunction(function=_stack),
     ])

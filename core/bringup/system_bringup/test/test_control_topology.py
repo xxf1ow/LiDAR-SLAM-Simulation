@@ -528,6 +528,12 @@ def test_slam_stack_declares_cmd_vel_output_topic_with_legacy_default():
     assert _declaration_default(_tree(SLAM_STACK), "cmd_vel_output_topic") == "/cmd_vel"
 
 
+@pytest.mark.parametrize("argument", ("mode", "use_sim_time", "settling"))
+def test_slam_stack_generated_runtime_selections_are_required(argument):
+    declaration = _declaration(_tree(SLAM_STACK), argument)
+    assert not any(keyword.arg == "default_value" for keyword in declaration.keywords)
+
+
 def test_slam_stack_passes_cmd_vel_output_topic_to_navigation():
     function = _function(_tree(SLAM_STACK), "_stack")
     assert _launch_configuration_assignment(
@@ -539,6 +545,15 @@ def test_slam_stack_passes_cmd_vel_output_topic_to_navigation():
     output_topic = _dict_value(arguments, "cmd_vel_output_topic")
     assert isinstance(output_topic, ast.Name)
     assert output_topic.id == "cmd_vel_output_topic"
+
+
+def test_slam_stack_passes_generated_clock_to_navigation():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    arguments = _include_arguments(
+        function, "robot_navigation", "launch/navigation.launch.py"
+    )
+    use_sim_time = _dict_value(arguments, "use_sim_time")
+    assert isinstance(use_sim_time, ast.Name) and use_sim_time.id == "use_sim"
 
 
 def test_slam_stack_declares_profile_parameter_files():
@@ -607,6 +622,20 @@ def test_slam_stack_passes_generated_parameter_files_to_includes():
     nav2_params = _dict_value(nav2, "params_file")
     assert isinstance(nav2_params, ast.Name)
     assert nav2_params.id == "nav2_params"
+
+
+def test_formal_bringup_passes_generated_slam_runtime_selections():
+    function = _function(_tree(BRINGUP), "_bringup")
+    arguments = _include_arguments(
+        function, "system_bringup", "launch/slam_stack.launch.py"
+    )
+    mode = _dict_value(arguments, "mode")
+    assert _subscript_path(mode) == ("manifest", ("mode",))
+    use_sim_time = _dict_value(arguments, "use_sim_time")
+    assert isinstance(use_sim_time, ast.Name) and use_sim_time.id == "use_sim"
+    settling = _dict_value(arguments, "settling")
+    assert isinstance(settling, ast.Call) and settling.func.id == "str"
+    assert isinstance(settling.args[0], ast.Name) and settling.args[0].id == "settling"
 
 
 def test_gicp_launch_requires_config_and_map_without_clock_override():

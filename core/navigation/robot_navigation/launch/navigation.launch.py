@@ -43,7 +43,7 @@ def generate_launch_description():
         )]
 
     return LaunchDescription([
-        DeclareLaunchArgument('use_sim_time', default_value='true'),
+        DeclareLaunchArgument('use_sim_time'),
         DeclareLaunchArgument('map'),
         DeclareLaunchArgument('params_file'),
         DeclareLaunchArgument('use_rviz', default_value='true'),

@@ -93,6 +93,13 @@ def test_params_file_and_map_are_required():
         )
 
 
+def test_navigation_use_sim_time_is_generated_and_required():
+    declaration = _declarations(_tree())["use_sim_time"]
+    assert not any(
+        keyword.arg == "default_value" for keyword in declaration.keywords
+    )
+
+
 def test_navigation_has_no_fast_lio_frame_contract():
     tree = _tree()
     declared = {
