@@ -24,28 +24,28 @@ std::string expandUser(const std::string& path) {
 
 GicpLocalizationNode::GicpLocalizationNode() : rclcpp::Node("gicp_localization") {
   // ---- 参数 ----
-  map_frame_ = declare_parameter<std::string>("map_frame", "map");
-  odom_frame_ = declare_parameter<std::string>("odom_frame", "camera_init");
-  base_frame_ = declare_parameter<std::string>("base_frame", "body");
-  const std::string cloud_topic = declare_parameter<std::string>("cloud_topic", "/cloud_registered");
-  const std::string odom_topic = declare_parameter<std::string>("odom_topic", "/Odometry");
+  map_frame_ = declare_parameter<std::string>("map_frame");
+  odom_frame_ = declare_parameter<std::string>("odom_frame");
+  base_frame_ = declare_parameter<std::string>("base_frame");
+  const std::string cloud_topic = declare_parameter<std::string>("cloud_topic");
+  const std::string odom_topic = declare_parameter<std::string>("odom_topic");
   const std::string prior_map_path = expandUser(
-      declare_parameter<std::string>("prior_map_path", "~/result/GlobalMap.pcd"));
-  fitness_threshold_ = declare_parameter<double>("fitness_threshold", 0.8);
-  min_scan_points_ = declare_parameter<int>("min_scan_points", 100);
-  const double localization_freq = declare_parameter<double>("localization_freq", 0.5);
-  const double tf_pub_freq = declare_parameter<double>("tf_pub_freq", 50.0);
+      declare_parameter<std::string>("prior_map_path"));
+  fitness_threshold_ = declare_parameter<double>("fitness_threshold");
+  min_scan_points_ = declare_parameter<int>("min_scan_points");
+  const double localization_freq = declare_parameter<double>("localization_freq");
+  const double tf_pub_freq = declare_parameter<double>("tf_pub_freq");
 
   GicpParams gp;
-  gp.map_voxel_size = declare_parameter<double>("map_voxel_size", 0.4);
-  gp.scan_voxel_size = declare_parameter<double>("scan_voxel_size", 0.1);
-  gp.max_corr_dist = declare_parameter<double>("gicp_max_corr_dist", 1.0);
-  gp.num_neighbors = declare_parameter<int>("gicp_num_neighbors", 20);
-  gp.num_threads = declare_parameter<int>("gicp_num_threads", 4);
-  gp.max_iterations = declare_parameter<int>("gicp_max_iterations", 20);
+  gp.map_voxel_size = declare_parameter<double>("map_voxel_size");
+  gp.scan_voxel_size = declare_parameter<double>("scan_voxel_size");
+  gp.max_corr_dist = declare_parameter<double>("gicp_max_corr_dist");
+  gp.num_neighbors = declare_parameter<int>("gicp_num_neighbors");
+  gp.num_threads = declare_parameter<int>("gicp_num_threads");
+  gp.max_iterations = declare_parameter<int>("gicp_max_iterations");
 
   const auto init = declare_parameter<std::vector<double>>(
-      "initial_pose", std::vector<double>{0, 0, 0, 0, 0, 0});
+      "initial_pose");
   if (init.size() == 6) {
     T_map_odom_ = poseParamToIsometry(init[0], init[1], init[2], init[3], init[4], init[5]);
   }

@@ -9,12 +9,12 @@
 namespace gicp_localization {
 
 struct GicpParams {
-  double map_voxel_size = 0.4;
-  double scan_voxel_size = 0.1;
-  double max_corr_dist = 1.0;
-  int num_neighbors = 20;
-  int num_threads = 4;
-  int max_iterations = 20;
+  double map_voxel_size;
+  double scan_voxel_size;
+  double max_corr_dist;
+  int num_neighbors;
+  int num_threads;
+  int max_iterations;
 };
 
 struct AlignOutcome {

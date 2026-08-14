@@ -30,8 +30,8 @@ private:
 
   // 参数
   std::string map_frame_, odom_frame_, base_frame_;
-  double fitness_threshold_{0.8};
-  int min_scan_points_{100};
+  double fitness_threshold_;
+  int min_scan_points_;
 
   std::unique_ptr<GicpAligner> aligner_;
   std::unique_ptr<Diagnostics> diag_;

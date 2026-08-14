@@ -12,6 +12,10 @@ from system_bringup import runtime_config_compiler as rcc
 
 ROOT = Path(__file__).resolve().parents[4]
 FAST_LIO_PATCH = ROOT / "core/localization/fast-lio2.patch"
+GICP_TEMPLATE = ROOT / "core/bringup/system_bringup/config/templates/gicp.yaml"
+GICP_NODE_SOURCE = ROOT / "core/localization/gicp_localization/src/gicp_localization_node.cpp"
+GICP_ALIGNER_HEADER = ROOT / "core/localization/gicp_localization/include/gicp_localization/gicp_aligner.hpp"
+GICP_NODE_HEADER = ROOT / "core/localization/gicp_localization/include/gicp_localization/gicp_localization_node.hpp"
 
 
 def _load_yaml(path):
@@ -24,6 +28,42 @@ def _patch_file_section(text, relative_path):
     if start < 0:
         raise ValueError(f"patch missing file: {relative_path}")
     return text[start:].split("\ndiff --git ", 1)[0]
+
+
+def _calls_named(source, marker):
+    calls = []
+    start = 0
+    while True:
+        index = source.find(marker, start)
+        if index < 0:
+            return calls
+        open_index = source.find("(", index + len(marker))
+        depth = 0
+        for end in range(open_index, len(source)):
+            if source[end] == "(":
+                depth += 1
+            elif source[end] == ")":
+                depth -= 1
+                if depth == 0:
+                    calls.append(source[index:end + 1])
+                    start = end + 1
+                    break
+        else:
+            raise AssertionError(f"unterminated call: {marker}")
+
+
+def _top_level_argument_count(call):
+    inner = call[call.find("(") + 1:-1]
+    depth = 0
+    count = 1
+    for char in inner:
+        if char in "(<[{":
+            depth += 1
+        elif char in ")>]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            count += 1
+    return count
 
 
 @pytest.fixture
@@ -117,3 +157,33 @@ def test_retired_legacy_source_interfaces_are_absent():
     assert not hasattr(cc, "FASTLIO_CONFIG")
     assert not hasattr(cc, "F_NAV_LAUNCH")
     assert not hasattr(cc, "_launch_floats")
+
+
+def test_gicp_template_parameters_are_declared_once_without_defaults():
+    template_keys = set(
+        _load_yaml(GICP_TEMPLATE)["gicp_localization"]["ros__parameters"]
+    ) - {"use_sim_time"}
+    calls = _calls_named(GICP_NODE_SOURCE.read_text(encoding="utf-8"), "declare_parameter")
+    declared_names = [call.split('"')[1] for call in calls]
+
+    assert set(declared_names) == template_keys
+    assert len(declared_names) == len(template_keys)
+    assert all(call.startswith("declare_parameter<") for call in calls)
+    assert all(_top_level_argument_count(call) == 1 for call in calls)
+
+
+def test_gicp_source_structs_and_members_have_no_tuning_fallbacks():
+    aligner_header = GICP_ALIGNER_HEADER.read_text(encoding="utf-8")
+    node_header = GICP_NODE_HEADER.read_text(encoding="utf-8")
+
+    for field in (
+        "map_voxel_size",
+        "scan_voxel_size",
+        "max_corr_dist",
+        "num_neighbors",
+        "num_threads",
+        "max_iterations",
+    ):
+        assert f"{field} =" not in aligner_header
+    assert "fitness_threshold_{" not in node_header
+    assert "min_scan_points_{" not in node_header
