@@ -116,6 +116,14 @@ def test_launch_contract_test_is_registered_with_ament():
     assert "ament_cmake_pytest" in test_dependencies
 
 
+def test_package_does_not_depend_on_retired_robot_bringup_package():
+    root = ElementTree.parse(PACKAGE_XML_PATH).getroot()
+    exec_dependencies = {
+        element.text for element in root.findall("exec_depend")
+    }
+    assert "robot_bringup" not in exec_dependencies
+
+
 def test_xacro_receives_generated_controller_and_all_runtime_geometry():
     tree = _tree()
     command = _assigned_value(tree, "robot_description_content")

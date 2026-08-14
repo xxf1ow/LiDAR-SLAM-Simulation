@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 from pathlib import Path
+import re
 from xml.etree import ElementTree
 
 from launch import LaunchContext
@@ -19,6 +20,7 @@ ROBOT_LAUNCH_PATH = LAUNCH_PATH.parent / "robot.launch.py"
 PACKAGE_ROOT = LAUNCH_PATH.parents[1]
 PACKAGE_CMAKE_PATH = PACKAGE_ROOT / "CMakeLists.txt"
 PACKAGE_XML_PATH = Path(__file__).resolve().parents[1] / "package.xml"
+HARDWARE_CHAIN_PATH = PACKAGE_ROOT / "test" / "test_real_hardware_chain.launch.py"
 VENDOR_LAUNCH_PATH = (
     Path(__file__).resolve().parents[2]
     / "drivers"
@@ -150,9 +152,23 @@ def test_package_retires_controller_yaml_and_source_fixture():
 
     cmake = PACKAGE_CMAKE_PATH.read_text(encoding="utf-8")
     assert "DIRECTORY launch" in cmake
-    assert "DIRECTORY config launch" not in cmake
+    assert not re.search(r"DIRECTORY\s+config\b", cmake)
     assert "robot_controllers_config" not in cmake
     assert "test_robot_controllers.py" not in cmake
+
+
+def test_real_hardware_chain_cleans_temporary_controller_file_after_shutdown():
+    tree = ast.parse(HARDWARE_CHAIN_PATH.read_text(encoding="utf-8"))
+    shutdown = next(
+        node for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "TestShutdown"
+    )
+    assert any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "unlink"
+        for node in ast.walk(shutdown)
+    )
 
 
 def test_package_declares_direct_launch_and_test_dependencies():

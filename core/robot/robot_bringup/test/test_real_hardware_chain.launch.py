@@ -26,6 +26,7 @@ CONTROLLERS_TEMPLATE = (
     Path(__file__).resolve().parents[3]
     / "bringup/system_bringup/config/templates/robot_controllers.yaml"
 )
+TEMPORARY_CONTROLLER_FILES = []
 
 
 def _real_controllers_file():
@@ -36,7 +37,9 @@ def _real_controllers_file():
         delete=False, suffix=".yaml", mode="w", encoding="utf-8"
     ) as stream:
         yaml.safe_dump(controllers, stream, sort_keys=False)
-        return stream.name
+        path = Path(stream.name)
+    TEMPORARY_CONTROLLER_FILES.append(path)
+    return str(path)
 
 
 @pytest.mark.rostest
@@ -203,5 +206,10 @@ class TestRealHardwareChain(unittest.TestCase):
 
 @launch_testing.post_shutdown_test()
 class TestShutdown(unittest.TestCase):
+    def test_temporary_controller_files_are_removed(self):
+        for path in TEMPORARY_CONTROLLER_FILES:
+            path.unlink()
+            self.assertFalse(path.exists())
+
     def test_exit_codes(self, proc_info):
         launch_testing.asserts.assertExitCodes(proc_info)

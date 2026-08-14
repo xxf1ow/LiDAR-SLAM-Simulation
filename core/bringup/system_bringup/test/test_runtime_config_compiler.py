@@ -520,8 +520,23 @@ def test_controller_template_contains_all_owned_target_leaves():
     assert set(template) == {"controller_manager", "base_controller"}
     manager = template["controller_manager"]["ros__parameters"]
     controller = template["base_controller"]["ros__parameters"]
-    assert {"joint_state_broadcaster", "base_controller"} <= set(manager)
-    assert {"left_wheel_names", "right_wheel_names"} <= set(controller)
+    controller_names = {"joint_state_broadcaster", "base_controller"}
+    assert controller_names <= set(manager)
+    assert all(
+        set(manager[name]) == {"type"} and isinstance(manager[name]["type"], str)
+        for name in controller_names
+    )
+    wheel_names = {"left_wheel_names", "right_wheel_names"}
+    assert wheel_names <= set(controller)
+    assert all(
+        isinstance(controller[name], list)
+        and len(controller[name]) == 1
+        and isinstance(controller[name][0], str)
+        for name in wheel_names
+    )
+    assert controller["open_loop"] is False
+    assert controller["position_feedback"] is False
+    assert controller["enable_odom_tf"] is False
 
 
 def test_web_ui_template_is_a_complete_native_parameter_file():
