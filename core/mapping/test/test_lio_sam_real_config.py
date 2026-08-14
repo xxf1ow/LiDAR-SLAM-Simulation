@@ -1,4 +1,5 @@
 import ast
+import importlib.util
 import os
 import re
 import subprocess
@@ -117,6 +118,23 @@ def test_lio_sam_patch_does_not_add_incremental_lint_failures(tmp_path):
     assert tf_assignments == [
         'trans_odom_to_lidar.child_frame_id = "velodyne_base_link";'
     ]
+
+
+def test_patched_lio_sam_launch_constructs_with_humble_api(tmp_path):
+    source = _clean_patch_source(tmp_path)
+    result = _apply_patch(source, check=False)
+    assert result.returncode == 0, result.stderr
+
+    launch_path = source / "launch/run.launch.py"
+    spec = importlib.util.spec_from_file_location("patched_lio_sam_launch", launch_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.get_package_share_directory = lambda _package: str(source)
+
+    from launch import LaunchDescription
+
+    assert isinstance(module.generate_launch_description(), LaunchDescription)
 
 
 def test_lio_sam_launch_requires_one_shared_parameter_file(tmp_path):
