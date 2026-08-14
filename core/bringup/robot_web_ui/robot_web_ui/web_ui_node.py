@@ -8,6 +8,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import (
     DurabilityPolicy,
     HistoryPolicy,
@@ -37,13 +38,13 @@ class WebUiNode(Node):
         self._http_thread = None
 
         max_linear = self.declare_parameter(
-            "max_linear_speed", 1.5
+            "max_linear_speed", Parameter.Type.DOUBLE
         ).value
         max_angular = self.declare_parameter(
-            "max_angular_speed", 2.0
+            "max_angular_speed", Parameter.Type.DOUBLE
         ).value
-        host = self.declare_parameter("host", "0.0.0.0").value
-        port = self.declare_parameter("port", 8080).value
+        host = self.declare_parameter("host", Parameter.Type.STRING).value
+        port = self.declare_parameter("port", Parameter.Type.INTEGER).value
         self._max_linear = float(max_linear)
         self._max_angular = float(max_angular)
         self._gate_mode = None

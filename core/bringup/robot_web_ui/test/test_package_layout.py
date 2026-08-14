@@ -100,18 +100,29 @@ def test_node_has_exact_ros_contract_and_parameters():
     parameters = {
         (
             ast.literal_eval(call.args[0]),
-            ast.literal_eval(call.args[1]),
+            ast.unparse(call.args[1]),
+            len(call.args),
+            len(call.keywords),
         )
         for call in calls
         if isinstance(call.func, ast.Attribute)
         and call.func.attr == "declare_parameter"
     }
     assert parameters == {
-        ("max_linear_speed", 1.5),
-        ("max_angular_speed", 2.0),
-        ("host", "0.0.0.0"),
-        ("port", 8080),
+        ("max_linear_speed", "Parameter.Type.DOUBLE", 2, 0),
+        ("max_angular_speed", "Parameter.Type.DOUBLE", 2, 0),
+        ("host", "Parameter.Type.STRING", 2, 0),
+        ("port", "Parameter.Type.INTEGER", 2, 0),
     }
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "rclpy.parameter"
+        and any(
+            alias.name == "Parameter" and alias.asname is None
+            for alias in node.names
+        )
+        for node in tree.body
+    )
 
 
 def test_node_stamps_manual_messages_and_bounds_service_wait():
