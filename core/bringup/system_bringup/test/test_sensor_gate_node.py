@@ -40,11 +40,11 @@ class FakeLogger:
 def node_module(monkeypatch):
     clock = FakeClock(10.0)
     generated = {
-        "expected_points_per_scan": 16 * 1800,
-        "expected_point_hz": 20.0,
-        "expected_imu_hz": 300.0,
-        "minimum_point_rate_ratio": 0.8,
-        "minimum_imu_rate_ratio": 0.5,
+        "expected_points_per_scan": 17 * 1700,
+        "expected_point_hz": 37.5,
+        "expected_imu_hz": 275.0,
+        "minimum_point_rate_ratio": 0.64,
+        "minimum_imu_rate_ratio": 0.44,
         "max_stamp_age": 0.25,
         "rate_window": 1.5,
         "stable_duration": 1.0,
@@ -184,8 +184,12 @@ def test_node_loads_generated_contract_parameters_and_uses_neutral_name(node_mod
     assert [name for name, _default in node.declared_parameters] == list(generated)
     assert node.timeout == generated["timeout"]
     assert node.state.expected_points_per_scan == generated["expected_points_per_scan"]
-    assert node.state.minimum_point_hz == 16.0
-    assert node.state.minimum_imu_hz == 150.0
+    assert node.state.minimum_point_hz == pytest.approx(
+        generated["expected_point_hz"] * generated["minimum_point_rate_ratio"]
+    )
+    assert node.state.minimum_imu_hz == pytest.approx(
+        generated["expected_imu_hz"] * generated["minimum_imu_rate_ratio"]
+    )
     assert node.state.max_stamp_age == generated["max_stamp_age"]
     assert node.state.point_rate.window == generated["rate_window"]
     assert node.state.stable_duration == generated["stable_duration"]
