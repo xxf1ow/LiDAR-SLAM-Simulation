@@ -14,6 +14,12 @@ def node_module(monkeypatch):
                 getattr(self, "base_destroy_calls", 0) + 1
             )
 
+    class FakeParameter:
+        class Type:
+            DOUBLE = object()
+            STRING = object()
+            INTEGER = object()
+
     class FakeTwistStamped:
         def __init__(self):
             self.header = types.SimpleNamespace(stamp=None, frame_id="")
@@ -42,6 +48,8 @@ def node_module(monkeypatch):
     rclpy = types.ModuleType("rclpy")
     rclpy_node = types.ModuleType("rclpy.node")
     rclpy_node.Node = FakeNode
+    rclpy_parameter = types.ModuleType("rclpy.parameter")
+    rclpy_parameter.Parameter = FakeParameter
     rclpy_qos = types.ModuleType("rclpy.qos")
     rclpy_qos.QoSProfile = object
     rclpy_qos.HistoryPolicy = types.SimpleNamespace(KEEP_LAST=object())
@@ -68,6 +76,7 @@ def node_module(monkeypatch):
     modules = {
         "rclpy": rclpy,
         "rclpy.node": rclpy_node,
+        "rclpy.parameter": rclpy_parameter,
         "rclpy.qos": rclpy_qos,
         "ament_index_python": ament,
         "ament_index_python.packages": ament_packages,
