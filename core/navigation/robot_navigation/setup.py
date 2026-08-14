@@ -21,7 +21,7 @@ setup(
     zip_safe=True,
     maintainer='xxf1ow',
     maintainer_email='20twenty.degree@gmail.com',
-    description='5e Nav2 最小打通：先验图 2D 化、twist_stamper、nav2 参数与 bringup',
+    description='Nav2 planning, control, PCD map conversion, and Twist adaptation for the robot navigation stack.',
     license='MIT',
     entry_points={
         'console_scripts': [

@@ -46,8 +46,8 @@ ros2 launch system_bringup bringup.launch.py
 ```
 
 启动顺序为底层平台、关节状态 settling、shared sensor contract gate、LIO-SAM。sim 使用
-adapter generated YAML，real 使用 Vanjee generated YAML；LIO-SAM 参数文件由
-`bringup.yaml` 的平台分支选择。
+adapter generated YAML，real 使用 Vanjee generated YAML；正式 bringup 传入 manifest
+`lio_sam_path` 的绝对路径。
 
 手机访问 `http://<主机IP>:8080`，进入“人工接管”后驾驶建图。完整 bringup 中不要直接
 发布 `/cmd_vel`。

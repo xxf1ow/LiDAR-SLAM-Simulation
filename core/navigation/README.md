@@ -27,8 +27,9 @@ map_server ──> global costmap ──> Smac planner
 core/bringup/system_bringup/config/templates/nav2.yaml
 ```
 
-runtime compiler 从 Profile 注入 footprint 和运动限制，生成 `nav2.generated.yaml`。平台几何
-只改 `profiles/sim.yaml` 或 `profiles/real.yaml`；不要在多个 Nav2 文件重复维护车体尺寸。
+runtime compiler 从 Profile 注入 footprint 和运动限制，生成 `nav2.generated.yaml`。
+`templates/nav2.yaml` 保持算法配置所有权；平台几何只改 `profiles/sim.yaml` 或
+`profiles/real.yaml`，不要在多个 Nav2 文件重复维护车体尺寸。
 
 MPPI 必须满足：
 
@@ -49,7 +50,7 @@ ros2 run robot_navigation pcd_to_occupancy \
   --resolution 0.05 --z-min 0.1 --z-max 2.0 --min-pts 2
 ```
 
-该工具需要 Open3D。地图路径由 `bringup.yaml` 选择，不应写死到 launch 源码。
+该工具需要 Open3D。`map_artifacts.nav2_map` 是运行时地图覆盖；不要把路径写死到 launch 源码。
 
 ## 正式运行
 

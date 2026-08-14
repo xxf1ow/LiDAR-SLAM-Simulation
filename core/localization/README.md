@@ -73,7 +73,7 @@ ros2 launch system_bringup bringup.launch.py
 shared sensor gate 通过后启动 FAST-LIO；随后 GICP 和底盘里程计 gate 放行 Nav2。
 formal bringup 从 manifest 传入 `fast_lio.generated.yaml` 的绝对路径；`slam_stack` 将其拆为
 上游 FAST-LIO 的 `config_path`/`config_file`，并永久发布 `body -> base_footprint` bridge。
-GICP 配置和地图路径仍由 `bringup.yaml` 选择。
+`gicp.generated.yaml` 拥有算法参数；`map_artifacts.prior_pcd` 提供运行时先验地图覆盖。
 
 ## Vanjee 逐点时间检查
 
@@ -92,7 +92,9 @@ ros2 run system_bringup compile_runtime_configs \
   --output-dir "$runtime_dir"
 ros2 launch fast_lio mapping.launch.py \
   config_path:="$runtime_dir" config_file:=fast_lio.generated.yaml use_sim_time:=true
-ros2 launch gicp_localization localization.launch.py
+ros2 launch gicp_localization localization.launch.py \
+  config_file:="$runtime_dir/gicp.generated.yaml" \
+  prior_map_path:="$HOME/result/GlobalMap.pcd"
 ```
 
 ```bash

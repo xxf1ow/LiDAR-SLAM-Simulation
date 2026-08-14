@@ -40,8 +40,8 @@ colcon test-result --all --verbose
 ```
 
 `colcon_defaults.yaml` skips vendor/upstream packages during the default test run. Test them
-explicitly only on a compatible platform; these package exclusions are not skipped test cases. The
-latest verified WSL baseline is 768 tests with zero errors, failures, and skips.
+explicitly only on a compatible platform; these package exclusions are not skipped test cases. Use
+the latest WSL acceptance report and require zero errors, failures, and unexpected skips.
 
 The Web asset tests require a `node` executable. This machine currently exposes Node 22.21.0 to WSL
 through `/home/lxx/.local/bin/node`, linked to the existing Windows Node installation. Verify
@@ -71,14 +71,18 @@ ros2 launch system_bringup bringup.launch.py
 ```
 
 `core/bringup/system_bringup/config/bringup.yaml` selects `platform: sim|real` and
-`mode: mapping|navigation`. The runtime compiler combines the selected Profile with centralized
-templates and writes generated YAML to a unique `/tmp/system_bringup-runtime-*` directory.
+`mode: mapping|navigation`. The runtime compiler combines the selected Profile, shared native
+templates, and runtime-only inputs; it writes generated YAML to a unique
+`/tmp/system_bringup-runtime-*` directory and records their absolute paths in a manifest.
 
 - `bringup.yaml`: run selection and resource paths.
 - `config/profiles/{sim,real}.yaml`: platform facts, geometry, sensors, backends, and shared limits.
-- `config/templates/*.yaml`: complete native configs owned by system_bringup, including FAST-LIO.
-- Formal FAST-LIO parameters are rendered as `fast_lio.generated.yaml` and passed by absolute path
-  through the manifest. GICP and LIO-SAM remain in their owning upstream/package configuration files.
+- `config/templates/*.yaml`: complete native configs owned by system_bringup, including controllers,
+  Web UI, Nav2, FAST-LIO, GICP, LIO-SAM, sensor gate, and the selected sensor backend.
+- FAST-LIO, GICP, LIO-SAM, Nav2, controllers, Web UI, sensor gate, and the selected sensor backend
+  consume manifest-referenced generated YAML.
+- Untracked upstream source defaults are not rewritten; generated configuration overrides them at
+  runtime.
 - Generated `/tmp` files and effective reports are never source files and never enter Git.
 
 The source config tree selected by `bringup.yaml` is the only active template source. Installed

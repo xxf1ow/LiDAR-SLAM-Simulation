@@ -8,12 +8,14 @@
   `config/bringup.yaml`，读取一次并调用一次 `compile_runtime_configs()`。platform、mode、
   `use_sim_time`、几何和生成配置路径随后全部来自同一 manifest；无命令行覆盖。
 - **共享完整 templates**：sim/real 共用 `config/templates/` 下的 controller、Web UI、Nav2、
-  FAST-LIO 和 sensor gate 原生 YAML；sensor backend 按平台选择 adapter 或 Vanjee template。
-  每个平台一次生成 7 份 YAML 到唯一 `/tmp/system_bringup-runtime-*` 目录：
-  `robot_controllers.generated.yaml`、`robot_web_ui.generated.yaml`、`nav2.generated.yaml`、
-  `fast_lio.generated.yaml`、`sensor_gate.generated.yaml`、当前平台的
-  `lidar_adapter.generated.yaml` 或 `vanjee_lidar.generated.yaml`，以及
-  `effective_profile.generated.yaml`。进程内 manifest 保存这些绝对路径；源码和 install 均不被改写。
+  FAST-LIO、LIO-SAM、GICP 和 sensor gate 原生 YAML；sensor backend 按平台选择 adapter 或
+  Vanjee template。每个平台一次生成八份模块 YAML 到唯一
+  `/tmp/system_bringup-runtime-*` 目录：`robot_controllers.generated.yaml`、
+  `robot_web_ui.generated.yaml`、`nav2.generated.yaml`、`fast_lio.generated.yaml`、
+  `lio_sam.generated.yaml`、`gicp.generated.yaml`、`sensor_gate.generated.yaml`，以及当前平台的
+  `lidar_adapter.generated.yaml` 或 `vanjee_lidar.generated.yaml`。
+  `effective_profile.generated.yaml` 是单独的完成报告。进程内 manifest 保存这些绝对路径；源码和
+  install 均不被改写。
 - **传感器配置单一来源**：sim adapter、real Vanjee 和两平台共享的
   `sensor_contract_gate` 分别只加载 manifest 指定的一份完整 generated YAML，不叠加 clock、
   timeout 或旧 backend 配置。主动接口固定为 `/points_raw`、`/imu/data`、`velodyne`、
@@ -82,10 +84,10 @@ launch/YAML 或下游包时，仍须先构建对应包。
 
 ### 真机几何参数
 
-真机尺寸只维护 `config/profiles/real.yaml`。启动 real Profile 时会在系统临时目录生成
-controller、Web UI、Nav2、`fast_lio.generated.yaml`、Vanjee、sensor gate 和 effective report，并把同一 manifest 的
-几何传给 URDF 和由 `slam_stack` 发布的 `body → base_footprint` bridge；不会修改源码或
-install。以后复测尺寸只改该 Profile。
+真机尺寸只维护 `config/profiles/real.yaml`。启动 real Profile 时会在系统临时目录生成前述
+八份模块 YAML 和单独的 effective report，并把同一 manifest 的几何传给 URDF 和由
+`slam_stack` 发布的 `body → base_footprint` bridge；不会修改源码或 install。以后复测尺寸
+只改该 Profile。
 
 | 参数 | 当前值 | 状态/派生用途 |
 |---|---:|---|
@@ -144,8 +146,8 @@ echo $?
 `mode: mapping` 或 `mode: navigation`，启动 `ros2 launch system_bringup bringup.launch.py`。
 验收后必须恢复仓库默认 `platform: sim`、`mode: navigation`；该切换不需要 rebuild。
 
-建图模式应复验真实底盘、Vanjee、control gate、Web 与 LIO-SAM real 均启动，日志选用
-`params_real.yaml`，`/lio_sam/mapping/odometry` 持续发布，且 `map → base_footprint`
+建图模式应复验真实底盘、Vanjee、control gate、Web 与 LIO-SAM real 均启动，正式参数使用
+`lio_sam.generated.yaml`，`/lio_sam/mapping/odometry` 持续发布，且 `map → base_footprint`
 可查询。这是既有 LIO-SAM 真机集成的静态复验，非重新调参。
 
 车身静止、雷达节点和 `robot_state_publisher` 正常运行时，录约 30 秒回归 bag 到仓库外：
@@ -170,8 +172,9 @@ bag 保留在 `~/result/rosbag/`，不提交 `.db3` 或 metadata；可用 `ros2 
 4. **闸门有效性**：`test_runtime_consistency.py` 覆盖 manifest/产物/report 不一致、缺失文件和
    源码/安装态陈旧等失败路径；正式入口在创建任何节点前中止。拓扑精确断言由
    `test_control_topology.py` 等静态测试负责，不进入生产闸门。
-5. 仿真 bridge 保持 `z=-0.556`；真机由 real Profile 派生
-   `body→base_footprint=[-0.443,0,-0.905]`，`tf2_echo body base_footprint` 应与其一致。
+5. sim/real 的 `body→base_footprint` bridge 均由本次 selected Profile 派生；
+   `tf2_echo body base_footprint` 必须与本次 `effective_profile.generated.yaml` 中对应的派生变换一致，
+   不以本文档中的某组历史数值作为 PASS 常量。
 6. `platform: real` 时 bringup 启动真实 8030D 底盘和 generated Vanjee 722，经 shared sensor
    contract gate 后选择
    real SLAM/Nav2 参数。静态/fake/mock 链已验收；无人看护的真机动态运动未执行。
@@ -181,11 +184,11 @@ bag 保留在 `~/result/rosbag/`，不提交 `.db3` 或 metadata；可用 `ros2 
   **`config/bringup.yaml`**。正式 launch 固定读取工作区源码文件，修改后不用 rebuild。
 - 平台事实（车体/车轮/雷达安装几何、运动上限、传感器和后端选择）：
   **`config/profiles/sim.yaml`** 或 **`config/profiles/real.yaml`**。
-- controller、Web UI、Nav2、FAST-LIO、sensor gate 及 sensor backend 的完整原生参数：
+- controller、Web UI、Nav2、FAST-LIO、LIO-SAM、GICP、sensor gate 及 sensor backend 的完整原生参数：
   **`config/templates/*.yaml`**。共享模块由 sim/real 共用 template；adapter/Vanjee 按当前
   backend 选择，Profile 字段只覆盖编译器明确负责的值。
-- 正式 FAST-LIO 参数由上述 source template 渲染成 manifest 指定的绝对
-  `fast_lio.generated.yaml`；安装副本仅证明打包，GICP 和 LIO-SAM 仍在各自模块 YAML。
+- 正式 real mapping 使用 manifest 指定的 `lio_sam.generated.yaml`；正式 navigation 使用
+  `fast_lio.generated.yaml`、`gicp.generated.yaml` 和 `nav2.generated.yaml`。安装副本仅证明打包。
 - 雷达设备协议和厂家标定仍归驱动/设备配置；Profile 维护跨模块需要共享的平台事实。
 
 > `bringup.yaml` 与 Profiles 是运行时源码事实，不复制到 install；launch 从已安装 package share

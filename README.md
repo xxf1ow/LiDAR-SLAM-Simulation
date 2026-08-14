@@ -24,8 +24,9 @@ ros2 launch system_bringup bringup.launch.py
 ```
 
 它读取 `core/bringup/system_bringup/config/bringup.yaml`，选择 `sim|real` 和
-`mapping|navigation`，把 Profile 和集中维护的 FAST-LIO template 编译为临时 YAML，完成
-一致性检查后再启动节点。
+`mapping|navigation`，把 Profile、共享完整 native templates 和 runtime-only 输入编译为
+generated YAML，再写入 manifest；一致性检查通过后才按 manifest 启动节点。每次编译产生
+八份模块 YAML，以及单独的 `effective_profile.generated.yaml` 完成报告。
 
 ## 运行时拓扑
 
@@ -101,7 +102,8 @@ colcon test-result --all --verbose
 ```
 
 `core/colcon_defaults.yaml` 会在默认测试中跳过上游 clone 和 aarch64 厂商包；这些包
-需要时单独测试。5B 最终 WSL 回归为 `768 tests, 0 errors, 0 failures, 0 skipped`。
+需要时单独测试。验收以最新 WSL acceptance report 的零 errors、failures 和 unexpected
+skips 为准。
 
 ## 选择并启动运行模式
 
@@ -176,10 +178,10 @@ bash mapping/save_map.sh
 |---|---|---|---|
 | `robot/` | gz/mock/real URDF、ros2_control 和控制 gate 已完成 | 8030D、Web、轮速反馈和静态链路已接入 | 物理急停状态、速度平滑、失联/故障安全策略和完整动态验收 |
 | `simulation/` | 工厂世界、LiDAR/IMU、桥接、点云适配和控制器已完成 | 不适用 | 动态障碍、退化场景和故障注入场景 |
-| `mapping/` | LIO-SAM 建图、保存 PCD 和二维地图转换已完成 | Vanjee real 配置和正式入口已接入 | 最终 LiDAR/IMU 外参、真机动态建图与地图质量验收 |
-| `localization/` | FAST-LIO 配置已集中化；FAST-LIO + GICP 先验图定位已完成 | real 参数和静态链路已接入 | GICP 配置集中化、首次有效配准 readiness、`/initialpose` 帧语义、动态标定、退化检测和全局重定位 |
-| `navigation/` | Smac Hybrid-A*、MPPI、STVL 和控制仲裁可运行 | real Profile 与静态 Nav2 链已接入 | 真机动态导航、近场盲区防撞、运动障碍、waypoint 和恢复策略加固 |
-| `bringup/` | sim mapping/navigation 统一入口、runtime gate 和 FAST-LIO 生成产物已完成 | real mapping/navigation 四组合已接线 | GICP/LIO-SAM 配置继续集中化、lifecycle、优雅停机和全局 diagnostics |
+| `mapping/` | LIO-SAM 配置集中化、建图、保存 PCD 和二维地图转换已完成 | Vanjee real 配置和正式入口已接入 | 最终 LiDAR/IMU 外参、真机动态建图与地图质量验收 |
+| `localization/` | FAST-LIO 与 GICP 配置集中化；FAST-LIO + GICP 先验图定位已完成 | real 参数和静态链路已接入 | 首次有效配准 readiness、`/initialpose` 帧语义、动态标定、退化检测和全局重定位 |
+| `navigation/` | Nav2 配置集中化，Smac Hybrid-A*、MPPI、STVL 和控制仲裁可运行 | real Profile 与静态 Nav2 链已接入 | 真机动态导航、近场盲区防撞、运动障碍、waypoint 和恢复策略加固 |
+| `bringup/` | sim mapping/navigation 统一入口、runtime gate 和八份模块生成产物已完成 | real mapping/navigation 四组合已接线 | lifecycle、优雅停机和全局 diagnostics |
 
 **当前结论**：不存在尚未创建的主链功能目录；缺口集中在安全模块、定位增强、动态场景、
 真机动态闭环和运维交付能力。
@@ -226,7 +228,7 @@ bash mapping/save_map.sh
 - [ ] 完成有人看护的真机 mapping 动态验收和地图质量评估。
 - [ ] 完成有人看护的真机 navigation 动态验收和路径跟踪评估。
 - [ ] 验证急停、失联停车、传感器掉线、定位丢失和长时间运行。
-- [ ] 将验收后的参数写回 real Profile，并删除剩余兼容字段和旧配置路径。
+- [ ] 将后续实机标定或动态调参确认的参数写回 real Profile。
 
 #### F. 交付与集成
 

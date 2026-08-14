@@ -1,517 +1,69 @@
-# 参数 Profile 化改造进度
+# Profile 配置迁移进度
 
-## 目标
+## 最终架构
 
-用两套中央 Profile 隔离仿真与真实平台差异，用集中在 `system_bringup` 的各模块原生
-YAML template 保留算法配置，由 `system_bringup` 在启动前结构化生成 `/tmp` 下的最终
-配置。用户只需要选择 `platform:=sim|real`；bringup config 根据该值选择 Profile 路径，
-`use_sim_time` 等底层参数由选择结果派生。
+正式运行只有 `ros2 launch system_bringup bringup.launch.py`。所选 Profile、共享完整 native
+templates 与 runtime-only 输入共同编译为 generated YAML；manifest 记录其绝对路径，formal
+launch 只消费 manifest。每次运行在唯一 `/tmp/system_bringup-runtime-*` 目录生成 controllers、
+web_ui、nav2、fast_lio、lio_sam、gicp、sensor_gate 和恰好一个平台传感器后端的八份模块 YAML；
+`effective_profile.generated.yaml` 是独立的完成报告。生成文件只存在于 `/tmp`，绝不进入 Git。
 
-本工作不一次性设计或修改全部链路。以下小节必须逐节完成：先讨论边界和验收条件，
-再实现、验证，经确认后才进入下一节。
+## 配置所有权与明确边界
 
-## 已确认原则
+- sim 和 real 是两份完整、同 schema 的 Profile，维护平台事实、几何、传感器、后端和共享限制。
+- `system_bringup/config/templates/` 是共享 native 模板的唯一来源；Profile 仅覆盖编译器明确
+  负责的平台事实，不在 acceptance 中固定可调算法值。
+- `map_artifacts.lio_sam_work_dir`、`map_artifacts.prior_pcd` 和 `map_artifacts.nav2_map` 是
+  runtime-only 输入，分别供 LIO-SAM 工作目录、GICP 先验图和 Nav2 地图覆盖使用。
+- 未跟踪的上游源码默认值不重写；正式运行由 manifest 引用的 generated 配置在运行时覆盖。
+- Windows 是权威编辑 checkout；测试只在 WSL 执行，验收依赖最新 WSL acceptance report。
 
-- 第一版只建立 `sim`、`real` 两套中央 Profile，二者完整、自包含并使用相同 schema。
-- Profile 文件不保存版本号或平台名；bringup config 保存 sim/real Profile 的相对路径。
-- Profile 路径相对于 `bringup.yaml` 所在目录解析，不依赖进程当前工作目录。
-- Profile 只保存机器人事实、平台差异和必须跨模块一致的策略。
-- 本机器人使用的模块原生 YAML template 集中放在 `system_bringup`；模块内部算法细节
-  归对应 template 所有，不复制进中央 Profile。
-- 同一模块使用同一可执行程序和同一原生 schema 时，默认只保留一份共享完整 template，
-  不按 sim/real 拆分；平台事实和跨模块统一值由 Profile/compiler 注入。只有 backend 或
-  原生 schema 确实不同，才允许分开 template。
-- 固定 topic/frame、驱动协议换算和设备内部极限不是可调 Profile 字段。
-- Profile 中的运动参数就是系统实际采用的统一限制，不重复维护“实际值/硬上限”两套值；
-  Web UI 只允许用户在此范围内运行时调速。
-- Profile 每个字段必须用简短注释说明含义、单位和必要的坐标约定。
-- 不引入 Jinja2。使用 `yaml.safe_load()`、结构化字典修改和 `yaml.safe_dump()`。
-- URDF 继续使用 Xacro；Launch 继续使用 ROS 2 Python Launch。
-- 最终配置生成到 `/tmp`，不跟踪、不回写源码、不修改安装目录。
-- `platform:=sim|real` 负责选择 Profile；`mode:=mapping|navigation` 保持独立。
-- `use_sim_time` 是派生的 ROS 参数，不作为平台选择开关。
-- 源码 `system_bringup/config/bringup.yaml` 继续是正式运行时选择入口；修改选择后无需
-  rebuild，Profile 和 templates 均相对该文件解析。
-- real 配置迁移不顺带试验新参数；sim 参数只要不造成重大行为影响，可以为架构一致性
-  调整，不要求机械保持旧默认值。
-- 每个迁移小节都必须保持未迁移模块的现有行为。
-- 允许实施过程中的中间提交暂时不可运行；每个验收单元结束时必须方向完整、主动路径唯一
-  且通过该单元 gate。Git 历史用于回退，不作为保留旧 runtime fallback 的理由。
-- 严禁使用 git worktree。
+## 阶段状态
 
-## 状态说明
+### [x] 1–5. Profile、控制、传感器与 FAST-LIO
 
-- `[ ]` 未开始
-- `[~]` 正在讨论或实现
-- `[x]` 已实现并通过本节验收
-- `[!]` 已知阻塞，需先解决记录的问题
+完成 Profile 基础 schema、控制器和 Web UI 配置生成、传感器契约 gate、FAST-LIO 生成配置及
+sim/real 正式入口。安全、动态标定和真机动态运行不因此完成。
 
-## 当前基线
+### [x] 6A. 生成能力完整化
 
-- 已完成分支：`feat/vanjee-722-full-stack-integration`
-- 功能完成提交：`8b091dd fix(system_bringup): exit real sensor gate cleanly`
-- 主分支合并提交：`61c3abe merge: 合并 Vanjee 722 真实全链路适配`
-- Profile 化工作分支：`feat/profile-template-config`
-- 已有 `build_real_runtime_configs()` 是结构化生成的原型，但不是最终边界。
+完成 GICP、LIO-SAM、Nav2 的共享模板、全量生成、manifest 和 effective report；四种
+platform/mode 组合生成同构公共产物。
 
-### 已撤销的临时实机调参记录
+### [x] 6B. 消费者切换与旧配置退役
 
-以下数值曾在真机导航中验证，可以明显减弱猛烈转向、左右摆动和危险恢复动作；它们原先
-只存在于暂存区，现已从源码撤销，不属于已完成的雷达/全链路适配基线。后续分别在底盘与
-Nav2 小节讨论后，通过新 Profile 正式恢复，不能直接照抄回旧 `bringup.yaml`：
+formal bringup 与包级 launch 切换为 manifest 指定的 generated YAML，运行时地图输入成为必传，
+旧 selector、重复地图路径和旧 YAML/patch 配置段已退役。
 
-- 底盘最大角速度：`0.4 rad/s`
-- 底盘最大角加速度：`0.3 rad/s²`
-- MPPI 最小线速度：`-0.1 m/s`
-- MPPI 角速度采样标准差：`0.2 rad/s`
-- MPPI 最大角速度：与底盘上限统一为 `0.4 rad/s`
-- 保留 Spin 恢复动作；最大/最小旋转速度为 `0.2/0.1 rad/s`
-- Spin 旋转加速度上限：`0.2 rad/s²`
+### [x] 6C-1. Legacy checker/CLI 退役
 
-实机现象记录：原始配置会在障碍恢复和接近终点时出现突然猛烈转向；仅降低角速度后仍会
-反复过冲和修正。上述组合限制后，正常路径跟踪和恢复转向明显柔和，受阻场景也能正常结束。
-这些结论只证明当前车辆上的可用性，不代表 sim 与 real 应共享同一组数值。
+生产 consistency checker 仅检查 manifest、generated 产物、effective report 和运行时新鲜度，
+不再维护旧 generator、旧 YAML/patch 解析或生产 launch AST 拓扑。
 
-## 分节进度
+### [x] 6C-2. 配置所有权收口
 
-### [x] 1. Profile 职责与 schema
+生成器、manifest、formal launch 和模块边界已收口到同一 Profile + shared template 合同；
+上游 defaults 保持未跟踪并在运行时被覆盖。
 
-目的：确定中央 Profile 管什么、不管什么，以及 `sim.yaml`、`real.yaml` 的共同字段结构。
+### [x] 6C-3. 文档与最终自动化验收
 
-本节已确定：
+架构与模块文档、最终自动化验收和状态审计已完成。以下仅记录本轮实际观测，不作为未来固定门槛：
 
-- 机器人几何与运动能力
-- 传感器物理契约
-- 硬件能力与安全边界
-- 跨模块导航、建图、定位策略
-- 参数是直接事实、人工调参还是派生值
+- source pytest 为 826 passed、0 skipped；explicit matrix 为 8 passed、0 skipped，覆盖 4/4 generation 与 4/4 consistency。
+- full workspace 首次并行构建因 host OOM 失败；唯一环境调度调整为 sequential 后 16 packages build 通过。default-policy test 执行 11 packages，`colcon test-result` 为 926 tests、0 errors、0 failures、0 skipped。
+- metadata parse 与 stale-document scan 通过；独立预提交审查最终为 Ready Yes（0 Critical、0 Important，最后一个 Minor 已修复）。
 
-本节只形成最小 schema、字段归属表和派生关系表；尚不迁移任何模块。
+### [ ] 6D. 真机 mapping/navigation 统一验收
 
-#### 1.1 三层职责
+在 6C-3 完成后，按 tracked 6D runbook 分别执行有人在场的真机 mapping/navigation 静态与
+运行观察；不下发导航目标，不把动态调参或长期稳定性验收混入该 gate。
 
-| 层级 | 负责回答 | 典型内容 |
-|---|---|---|
-| bringup config / launch 参数 | 本次启动什么 | `platform`、`mode`、Profile 路径、地图、world、GUI、RViz |
-| Profile | 当前平台实际是什么 | 几何、安装位姿、连接参数、传感器事实、统一运动限制、障碍高度带 |
-| module template | 各算法如何工作 | FAST-LIO、GICP、LIO-SAM、Nav2、ros2_control 的完整原生 YAML |
+## 当前已知边界与后续产品工作
 
-bringup config 不是第三套模块参数覆盖层，只负责选择和编排。运行时按以下顺序生成：
-
-```text
-bringup config 选择 platform
-            -> 取得 profiles[platform] 的相对路径
-            -> 读取 Profile + 中央 module templates
-            -> 结构化生成 /tmp 下的模块原生 YAML
-            -> launch 将绝对路径传给各模块
-```
-
-算法模块不主动寻找 `/tmp`，也不因本改造修改算法代码；只允许调整我们拥有的 launch
-包装层，使其接收最终配置的绝对路径。
-
-#### 1.2 bringup config 的 Profile 选择
-
-```yaml
-platform: real  # 当前平台：sim 或 real
-
-profiles:
-  sim: profiles/sim.yaml    # 相对 bringup.yaml 所在目录解析
-  real: profiles/real.yaml  # 相对 bringup.yaml 所在目录解析
-```
-
-Profile 自身不保存 `schema_version` 或 `platform`。schema 由编译器代码和测试定义；
-`use_sim_time` 由 bringup config 中被选中的 `platform` 派生。
-
-#### 1.3 最小 Profile schema
-
-下列示例展示 real 的结构和当前已确认值。`null` 只表示数值留到对应实施小节确认；最终
-可运行 Profile 的必填字段不得为 `null`。sim 使用完全相同的字段结构，不适用的真机
-连接字段明确写 `null`，不填写伪造值。
-
-```yaml
-hardware:
-  chassis:
-    backend: can_8030d  # 底盘驱动后端；仿真使用 gazebo
-
-  lidar:
-    backend: vanjee              # 雷达驱动后端；仿真使用 gazebo
-    model: vanjee_722            # 驱动支持的雷达型号
-    host_address: 192.168.2.88   # 本机雷达网口 IPv4；仿真填 null
-    device_address: 192.168.2.86 # 雷达设备 IPv4；仿真填 null
-    host_msop_port: 3001         # 本机接收 MSOP 的 UDP 端口；仿真填 null
-    device_msop_port: 3333       # 雷达发送 MSOP 的 UDP 端口；仿真填 null
-
-robot:
-  body:
-    front_extent: 0.480     # base_footprint 到车体最前端，单位 m
-    rear_extent: 0.480      # base_footprint 到车体最后端，单位 m
-    left_extent: 0.305      # base_footprint 到车体最左侧，单位 m
-    right_extent: 0.305     # base_footprint 到车体最右侧，单位 m
-    height: 0.377           # 车体外壳高度，单位 m
-    ground_clearance: 0.143 # 地面到车体外壳最下沿，单位 m
-
-  drive:
-    wheel_radius: 0.1025    # 驱动轮有效半径，单位 m
-    wheel_width: 0.101      # 单个驱动轮宽度，单位 m
-    wheel_separation: 0.463 # 左右驱动轮中心距，单位 m
-
-  mounts:
-    # 以下安装位姿均以 base_footprint 为父坐标系，采用 REP-103：x 前、y 左、z 上。
-    lidar:
-      x: 0.443   # 雷达原点相对父坐标系向前距离，单位 m
-      y: 0.0     # 雷达原点相对父坐标系向左距离，单位 m
-      z: 0.905   # 雷达原点相对父坐标系向上距离，单位 m
-      roll: 0.0  # 绕 x 轴旋转，单位 rad
-      pitch: 0.0 # 绕 y 轴旋转，单位 rad
-      yaw: 0.0   # 绕 z 轴旋转，单位 rad
-
-    # 当前按厂商 LIO-SAM 的零平移、单位旋转外参填写；逻辑上仍与雷达独立建模。
-    imu:
-      x: 0.443   # IMU 逻辑原点相对父坐标系向前距离，单位 m
-      y: 0.0     # IMU 逻辑原点相对父坐标系向左距离，单位 m
-      z: 0.905   # IMU 逻辑原点相对父坐标系向上距离，单位 m
-      roll: 0.0  # 绕 x 轴旋转，单位 rad
-      pitch: 0.0 # 绕 y 轴旋转，单位 rad
-      yaw: 0.0   # 绕 z 轴旋转，单位 rad
-
-sensors:
-  lidar:
-    scan_lines: 32                   # 垂直扫描线数
-    columns_per_scan: 1200           # 每帧每线的水平点数
-    scan_rate_hz: 10.0               # 完整点云帧频率，单位 Hz
-    min_range: 0.05                  # 驱动输出的最小距离，单位 m
-    max_range: 70.0                  # 驱动输出的最大距离，单位 m
-    horizontal_start_angle: 0.0      # 水平输出起始角，单位 rad
-    horizontal_end_angle: 6.2831853  # 水平输出终止角，单位 rad
-    point_time_field: time           # PointCloud2 逐点相对时间字段名
-    point_time_unit: seconds         # 逐点时间字段数值单位
-    point_time_reference: scan_start # 逐点时间相对本帧起始时刻
-
-  imu:
-    rate_hz: 200.0 # IMU 标称发布频率，单位 Hz
-
-motion:
-  max_linear_velocity: null     # 系统采用的最大线速度绝对值，单位 m/s；第 3 节确认
-  max_angular_velocity: null    # 系统采用的最大角速度绝对值，单位 rad/s；第 3 节确认
-  max_linear_acceleration: null # 系统采用的最大线加速度绝对值，单位 m/s²；第 3 节确认
-  max_angular_acceleration: null # 系统采用的最大角加速度绝对值，单位 rad/s²；第 3 节确认
-
-perception:
-  obstacle_height:
-    min: null # 纳入障碍物处理的最低离地高度，单位 m；第 8 节确认
-    max: null # 纳入障碍物处理的最高离地高度，单位 m；第 8 节确认
-```
-
-所有长度使用 m，角度使用 rad，时间使用 s，频率使用 Hz，线速度/加速度使用 m/s、
-m/s²，角速度/加速度使用 rad/s、rad/s²。驱动要求其他单位时由编译器转换。
-
-#### 1.4 字段所有权
-
-| 参数类别 | 唯一所有者 | 示例 |
-|---|---|---|
-| 本次启动选择 | bringup config | `platform`、`mode`、sim/real Profile 路径 |
-| 启动资源与交互 | bringup config / launch 参数 | 地图、先验 PCD、world、GUI、RViz |
-| 硬件连接 | Profile | 底盘/雷达后端、雷达型号、IP、UDP 端口 |
-| 机器人几何 | Profile | 车体边界、车高、离地间隙、轮径、轮宽、轮距 |
-| 传感器安装 | Profile | LiDAR/IMU 相对 `base_footprint` 的 `xyz+rpy` |
-| 传感器数据事实 | Profile | 32×1200、10 Hz、200 Hz、量程、逐点时间单位 |
-| 系统采用的运动限制 | Profile | 最大线/角速度和加速度；Web UI 在范围内运行时调速 |
-| 跨模块障碍高度带 | Profile | 以地面为基准的最低/最高障碍高度 |
-| 模块算法与行为参数 | 对应中央 module template | voxel、噪声、GICP 阈值、MPPI critic、Spin、倒车限制、膨胀参数 |
-| 驱动行为参数 | 对应中央 module template | `wait_for_difop`、时间戳策略、dense points |
-| 固定接口契约 | 代码、URDF 和 template 约束 | `/points_raw`、`camera_init`、`base_footprint` 等 |
-| 设备协议实现 | 驱动代码 | CAN 报文、RPM 换算、左右轮符号、设备内部限幅 |
-| 运行时模块配置 | `/tmp` 生成物 | Nav2、FAST-LIO、GICP、LIO-SAM、驱动 YAML |
-
-固定 topic/frame 中部分目前是参数、部分由 FAST-LIO/URDF 写死，但都不是正常调参入口。
-第一版不实现全链路任意改名；中央 templates 保持现有接口，一致性检查负责防止漂移。
-
-#### 1.5 派生规则
-
-| 派生值 | 规则 |
-|---|---|
-| 选中的 Profile | `bringup.profiles[platform]`，路径相对 `bringup.yaml` 解析 |
-| `use_sim_time` | `platform == sim` |
-| 车体长度/宽度 | `front+rear` / `left+right` extent |
-| 车体中心偏移 | `x=(front-rear)/2`，`y=(left-right)/2` |
-| `base_link` 离地高度 | `ground_clearance + body.height/2` |
-| Nav2 footprint | `[[front,left],[front,-right],[-rear,-right],[-rear,left]]` |
-| URDF 轮子位置 | 由轮距、轮径和 `base_link` 高度计算 |
-| LiDAR/IMU 相对 `base_link` 位姿 | 从各自相对 `base_footprint` 的位姿转换 |
-| LiDAR↔IMU 外参 | 两个独立安装位姿之间的相对变换 |
-| 单帧点数 | `scan_lines * columns_per_scan`，不在 Profile 重复保存 |
-| 扫描周期与逐点时间跨度 | `1/scan_rate_hz`；实际跨度应约等于一个扫描周期 |
-| FAST-LIO `timestamp_unit` | 从 `point_time_unit` 映射为模块要求的枚举 |
-| Vanjee 水平角度 | Profile 的 rad 转换为驱动参数要求的 degree |
-| readiness 频率下限 | Profile 标称频率乘 gate template 中的容差比例 |
-| 地图裁剪高度 | 使用以地面为基准的障碍高度带 |
-| 传感器相对高度过滤 | 目标模块需要传感器相对值时，用障碍高度减安装高度 |
-| 通用运动限制 | Profile 值写入语义相同的 ros2_control、Web UI 和 Nav2 通用上限 |
-
-当前底盘通过厂商 USB-CAN SDK 连接，并不使用 Linux SocketCAN `can0`。因此 Profile
-不设置 `can_interface`；`can_device_type/index/channel/timing` 等已调通且不需日常切换的
-驱动细节继续归底盘驱动 template 所有。
-
-Spin 速度、倒车速度、MPPI 采样标准差等不是通用运动限制的重复表达，继续由 Nav2
-template 独立拥有。人工驾驶速度由用户在 Web UI 中运行时选择，不另建人工驾驶 Profile。
-
-### [x] 2. Profile 编译器最小骨架
-
-目的：建立读取 Profile、校验、派生并在 `/tmp` 报告有效配置的最小流程。
-
-已批准设计：新增独立 `profile_compiler.py`、完整同 schema 且逐字段注释的 sim/real
-Profile，以及 `compile_profile` CLI。本节只严格启用几何校验，尚未讨论的 motion/
-perception 值允许为 `null`；生成 `effective_profile.generated.yaml` 供检查。
-
-边界：不接入正式 `bringup.launch.py`，不修改旧 `derive_real_geometry()` /
-`build_real_runtime_configs()`，不生成任何模块 YAML，也不迁移后续参数。
-
-完成条件：sim/real 都能生成有效报告；缺字段、类型错误和非法几何明确失败；real 已确认
-几何与旧原型等价；原有测试通过且现有启动行为不变。
-
-本节已实现：
-
-- `sim.yaml` 与 `real.yaml` 两份完整、同 schema 且逐字段注释的 Profile。
-- 独立 `profile_compiler.py`，提供严格 schema/几何校验、派生值和
-  `effective_profile.generated.yaml` 报告；可通过 `ros2 run system_bringup
-  compile_profile --bringup-config PATH [--output-dir DIR]` 调用。
-- 正式 bringup 未接入该编译器，仍使用既有 real 几何派生与运行时生成路径，原启动行为
-  保持不变。
-
-实现提交后的审查发现并已补齐两项 hardening：
-
-- Profile 相对路径校验增加与宿主无关的 Windows drive/anchor 检测，避免 Ubuntu 将
-  `C:profile.yaml` 当成普通相对文件名。
-- 数值叶节点统一拒绝无法安全参与浮点派生的超大整数；CLI 对极大正整数返回既有单行
-  validation error，不泄漏 `OverflowError` traceback。
-
-两项修复不改变第 2 节架构和正常 sim/real 结果；对应回归和完整 `system_bringup` 测试
-已通过。后续 3A 验收已在 Ubuntu/Humble 完成全工作区 colcon 回归：`556 tests, 0 errors,
-0 failures, 0 skipped`。
-
-本地设计产物：`docs/superpowers/specs/2026-08-06-profile-compiler-skeleton-design.md`
-（按用户要求不加入 Git 提交）。
-
-### [x] 3. 底盘、ros2_control 与手动控制
-
-目的：统一轮径、轮宽、轮距和系统实际采用的速度/加速度限制；Web UI 允许用户在该
-范围内运行时调速。设备协议换算、左右轮符号和设备内部极限继续归驱动代码所有。
-
-本节拆成两个顺序验收单元。3A 严格依赖第 2 节审查修正完成；3B 严格依赖 3A。中间提交
-可以不可运行，但不得把旧路径保留为失败 fallback。
-
-#### [x] 3A. Profile runtime 配置生成
-
-目的：只完成生成层，不接入正式 `bringup.launch.py`。
-
-- 将两份 Profile 的 motion 固定为：
-  - sim：线速度 `1.0 m/s`、角速度 `1.8 rad/s`、线加速度 `1.0 m/s²`、角加速度
-    `1.0 rad/s²`；
-  - real：线速度 `1.0 m/s`、角速度 `0.4 rad/s`、线加速度 `1.0 m/s²`、角加速度
-    `0.3 rad/s²`。
-- 在 `system_bringup/config/templates/` 建立共享完整的 controller、Web UI、Nav2 原生
-  templates；不区分 sim/real，不使用 overlay/Jinja2/字符串替换。
-- 保持第 2 节 `compile_profile()` 和原 CLI 的 report-only 契约；新增独立
-  `compile_runtime_configs()` 与单独 CLI。
-- 一次编译当前 platform，在唯一 `/tmp/system_bringup-runtime-*` 目录生成 controller、
-  Web UI、Nav2 和 runtime effective report 四份文件；Python manifest 作为进程内接口，
-  不增加第五份文件。effective report 最后写入并作为完整生成标记。
-- controller 注入轮径、轮距和对称正负线/角速度、加速度；轮宽只进入 Xacro manifest，
-  不虚构 controller 字段。
-- Web UI 的最大线/角速度来自 Profile，100% 对应 Profile 上限。
-- 目标 ROS 2 Humble MPPI 只注入其实际读取的 `vx_max/wz_max`；不写
-  `ax_max/ax_min/az_max`。Profile 加速度由 ros2_control 最终执行，目标机构建版本能力与
-  规划—执行偏差留到第 9 节。
-- global/local costmap footprint 由 Profile extents 派生，并保持当前 Nav2 原生字符串
-  参数类型；障碍高度、STVL、inflation 和 `consider_footprint` 仍留到第 8 节。
-- 生成临时 `compatibility.body_to_base_footprint`：在“FAST-LIO `body` 与 LiDAR 原点
-  重合”假设下，对 `base_footprint -> lidar` 做完整 SE(3) 求逆，输出 translation +
-  quaternion，不把它混入已确认的 `derived.geometry`。
-- real 的旧 Spin/behavior server 数值暂时保留并作为跨节 debt 报告，不在配置迁移中
-  顺带调参；`cmd_vel_gate` 仍只负责路由和 timeout，不新增第二层 limiter。
-
-3A 完成条件：正式 bringup 及旧配置字节不变；sim/real 均从同一组三份 templates 生成
-四份可加载产物；第 2 节接口回归、字段精确映射、跨平台隔离、非零 weld 逆变换和静态
-一致性测试全部通过。
-
-验收记录：3A 源码实现和最终修复截至 `3c41858`；本地 `system_bringup` 纯 Python 回归
-`375 passed`，runtime smoke 生成且加载恰好四份 YAML；Ubuntu/Humble 全工作区最终回归为
-`556 tests, 0 errors, 0 failures, 0 skipped`。正式 bringup 和 3B launch 路径未在 3A 接入。
-
-#### [x] 3B. 正式 bringup 切换
-
-目的：只消费 3A 已验收的 runtime manifest，重写主动 bringup 编排并完成动态验收。
-
-- 正式 launch 只读取一次源码 `bringup.yaml`、只调用一次 runtime compiler；后续 platform、
-  mode、配置路径和几何全部读取同一 manifest，不重新寻找仓库或读取 config。
-- 主动流程重写为“编译并校验 → shared control layer → shared SLAM stack → sim/real backend
-  → 原 readiness gate”，不再先建 sim 默认再在 real 分支复制覆盖。
-- Web UI/Nav2 直接加载 generated YAML；sim/real robot launch 都接收同一 manifest 的
-  controller 绝对路径和对应 Profile 几何。Gazebo ros2_control plugin 允许直接读取
-  `/tmp` controller 文件。
-- `manifest["use_sim_time"]` 是整次启动唯一的时钟选择事实：生成 YAML 已包含的节点不再
-  接收重复 overlay，未模板化节点只接收同源值；任何模块不得从 platform、backend、mode
-  或文件名重新推断时钟。
-- `cmd_vel_gate` 只接收标准 `use_sim_time` 参数，命令接收时间、timer 和 source timeout
-  全部使用同一个 `node.get_clock()`；gate 业务逻辑不读取 platform，也不识别、选择或分支
-  判断当前是仿真时钟还是系统时钟。
-- 功能新鲜度、频率、稳定窗口和功能 timeout 使用各节点自己的同一 node clock；graph-only
-  `ready_gate` 的墙钟只约束必需 topic discovery，topic 出现后的 settling 只按 node clock
-  累计。仿真暂停或低 RTF 时保持等待并在恢复后继续，不实现双时钟 fallback。
-- 生产启动的一致性闸门只检查 manifest、生成产物、effective report、所选配置和源码/安装态
-  新鲜度；精确节点数、参数字典、launch 表达式和旧路径不可达等拓扑断言只放在测试中，
-  生产代码不解析 launch 源码 AST，也不维护第二份拓扑。
-- `navigation.launch.py` 的临时 weld 改用 `qx/qy/qz/qw`；正式 bringup 总是显式传值，
-  launch 独立调用时保留当前 sim 默认。
-- 新主动路径不得导入或调用 `derive_real_geometry()`、`build_real_runtime_configs()`、
-  `write_real_runtime_configs()`、`real_geometry_launch_arguments()`；旧代码和旧配置暂不删除，
-  只作为第 10 节删除审查对象，不是 fallback。
-- mapping/navigation 的模块顺序、topic/frame、自动/人工 gate、settling 和退出语义保持现状；
-  `ready_gate` 的 `discovery_timeout` 只处理必需 topic 始终未出现，所有编译/一致性失败发生在
-  创建运动节点前。
-
-3B 完成条件：静态拓扑证明 compiler 只调用一次且旧 generator 不可达；sim
-navigation/mapping 动态冒烟通过；real generated 配置、fake/mock hardware 与既有链回归
-通过；无人看护 real 动态运动不属于本节。
-
-验收记录：3B 主实现及最终审查修复截至 `6119a7b`。最终修复将 graph-only readiness 的
-墙钟范围收窄到 topic discovery，并从生产一致性闸门移除 AST 拓扑解释器；本地
-`system_bringup` 回归 `443 passed`，相关 `cmd_vel_gate` / Web UI 契约回归 `13 passed`。
-用户在 Ubuntu/Humble 完成全工作区 `colcon build` 与 `colcon test`，均全部通过；无人看护
-real 动态运动仍不属于本节。第 3 节至此结束。
-
-### [x] 4. 雷达、IMU 与传感器契约
-
-目的：统一雷达型号、线数、水平分辨率、频率、量程、视场角、时间语义和安装位姿；
-固定 topic/frame 契约由中央 templates 保持并由一致性检查验证。
-
-完成条件：驱动、仿真适配器、TF 和 gate 使用同一平台事实；厂商标定文件继续作为
-设备数据管理，不被模板生成。
-
-#### [x] 4A. 传感器 runtime 配置生成
-
-4A 在 `785aeb7..598dfc9` 完成：sim/real 从同一 Profile pair 生成当前平台所需的完整
-adapter 或 Vanjee YAML、共享 sensor gate YAML、既有 controller/Web UI/Nav2 YAML、
-effective report 和进程内 manifest。生成、reload、schema/cross-validation、事务替换及
-源码不回写均已验收；Ubuntu/Humble 全工作区为 `706 tests, 0 errors, 0 failures, 0 skipped`，
-其中 `system_bringup` 为 `515 passed`。
-
-#### [x] 4B. 正式消费与 shared sensor contract gate
-
-4B 提交范围为 `598dfc9..d6dc1a4`，最终 HEAD `d6dc1a4`。正式 sim adapter、real Vanjee
-和两平台共享的 `sensor_contract_gate` 各只加载 manifest 指定的一份完整 generated YAML；
-主动 topic 统一为 `/points_raw` 与 `/imu/data`。同一 `robot_launch_arguments` mapping 投影
-LiDAR/IMU 两组独立 mount 和 Gazebo sensor facts，URDF 分别发布两条固定 TF；gate 使用
-SensorData QoS 与唯一 `node.get_clock()`，`/clock` 冻结时预期保持等待。FAST-LIO/LIO-SAM
-仅同步 sim IMU topic，算法参数、算法外参和 3A compatibility weld 仍留给第 5 节。
-
-验收记录：Windows `system_bringup` 最终回归 `526 passed`。WSL 在 `cc483fa` 的 24 文件
-cutover 实现态逐一匹配 Windows HEAD 后完成 16-package 全工作区 build；4B 与 real
-fake/mock targeted 为
-`600 tests, 0 errors, 0 failures, 0 skipped`，全工作区为
-`717 tests, 0 errors, 0 failures, 11 skipped`。这 11 项均为缺少 Node.js 的无关
-`robot_web_ui` 浏览器场景，已由用户接受为环境例外。最终 freshness 修复同步后又完成
-`system_bringup` 单包 build（无 warning）及 `526 tests, 0 errors, 0 failures, 0 skipped`，
-五个关键安装模块均与源码逐字节一致。
-
-轻量生成验收对 sim/real 各实际编译并解析 6 份 `.generated.yaml`，内建 reload/schema/
-cross-validation 及内容检查均为 `YAML_VALIDATION_PASS`，源码 `bringup.yaml` 未改变。
-sim navigation/mapping 动态冒烟、运行时 topic 观察、低 RTF/暂停恢复和冻结时钟现场观察均为
-`USER_BOUNDARY_NOT_RUN`，不记为通过；无人看护真机运动也未执行。整个 4B 未创建 Git
-worktree，未执行 push 或其他 remote-changing action。用户已接受上述边界，第 4 节完成。
-
-### [x] 5. FAST-LIO 配置迁移
-
-5A 建立共享完整 FAST-LIO template、严格 renderer、相对变换、runtime artifact，以及
-manifest/report 接口。5B 将正式 navigation 切换为 `fast_lio.generated.yaml`，由
-`slam_stack` 永久拥有 `body -> base_footprint` bridge，并删除 `robot_navigation` 的临时
-weld、两个 bringup selector 与 patch 曾新增的两份 YAML。`fast-lio2.patch` 最终仅保留 IMU
-`SensorDataQoS` 修改。
-
-自动化验收（Task 4 repeat，HEAD
-`2dbdd09183291bf0141c407060fca4c42e0f01e3`）：16-package `colcon build` 完成；
-`sim/real × mapping/navigation` 四种组合均生成 `fast_lio.generated.yaml` 并通过 runtime
-consistency；41 topology tests passed；`colcon test-result --all --verbose` 为
-`Summary: 768 tests, 0 errors, 0 failures, 0 skipped`。Windows 与 WSL HEAD 对齐；pinned clone
-最终只含预期的 QoS source modification。
-
-真机静态验收（Task 5 repeat，2026-08-13）：传感器门释放后完成了要求的至少 30 秒连续
-观察；用户摘要未提供更精确时长。16-package build 完成；实际 FAST-LIO 节点
-`/laser_mapping` 的参数为 `scan_line=32`、`scan_rate=10`、`timestamp_unit=0`，topics 为
-`/points_raw`、`/imu/data`；point `time` 为 `0.0..0.099954 s`；`/Odometry` 与
-`/cloud_registered` 约 10 Hz。`camera_init -> body -> base_footprint` 全链连通，后段 translation
-为 `[-0.443, 0, -0.905]`、quaternion 为 `[0, 0, 0, 1]`；
-`InvalidParameterTypeException=0`，日志没有 generated-config/fallback/package-YAML 路径问题。
-停止、还原后 tracked worktree clean。headless RViz 因无 X display 崩溃是环境限制，不影响本节
-验收契约。
-
-无人看护的真机动态运动未运行，也不是第 5 节完成条件。
-
-### [ ] 6. GICP 配置迁移
-
-目的：将 GICP 原生配置迁入中央 template，并注入已确认的平台事实；地图路径继续归
-bringup config / launch 参数，固定坐标系与输入契约不提升为 Profile 可调字段。
-
-完成条件：保持现有已验证的 `fitness_threshold` 和配准行为；已记录的 readiness 与
-`/initialpose` 问题不在本节顺带修复。
-
-### [ ] 7. LIO-SAM 与地图产物
-
-目的：统一传感器事实和二维地图转换使用的障碍高度带，明确厂商 IMU 参数与算法内部
-参数的所有权；地图输出目录和保存目标继续归 bringup config / launch 参数。
-
-完成条件：建图、PCD 保存、GICP 先验图和 Nav2 地图路径一致；地图转换参数可从所选
-Profile 获取，现有地图不会被测试过程覆盖。
-
-### [ ] 8. Nav2 障碍感知与代价地图
-
-目的：由 Profile 派生 footprint、雷达安装高度和统一障碍高度带；局部窗口、膨胀和
-完整车体碰撞等 Nav2 行为继续归中央 Nav2 template。
-
-完成条件：明确 `inflation_radius`、`cost_scaling_factor` 与
-`consider_footprint` 的安全关系；sim/real 使用各自传感器模型；先做静态验收，再安排
-有人看护的动态验收。
-
-### [ ] 9. Nav2 规划、控制与恢复
-
-目的：3A 已注入通用速度限制，本节不重复迁移。先记录目标构建机
-`nav2_mppi_controller` 的实际版本和参数能力，再审查 Humble MPPI 缺少加速度建模时与
-ros2_control 最终限幅的偏差；MPPI `vx_min`/采样、倒车、Spin 恢复、Critic 等不同语义
-的行为参数继续归中央 Nav2 template。
-
-完成条件：规划器、MPPI、底盘和恢复动作不存在互相矛盾的运动能力；保留当前已经实机
-验证的柔和转向与受阻行为。real 应恢复并有人看护验证已记录的 `vx_min=-0.1`、
-`wz_std=0.2`、Spin `max/min=0.2/0.1 rad/s`、Spin `acc=0.2 rad/s²`；不得仅依靠
-controller clamp 掩盖 behavior server 或规划器的语义冲突。
-
-### [ ] 10. 全链路切换、验收与文档收尾
-
-目的：让唯一平台选择贯穿 mapping/navigation 两种模式，删除完成迁移后失去用途的
-重复 real/sim 参数文件或旧注入路径，并更新操作文档。
-
-完成条件：
-
-- `platform:=sim|real` 可生成并启动对应完整链路。
-- 能查看每个模块最终使用的有效配置。
-- 仿真回归通过，真机按静态、有人看护动态、长时间稳定三层验收。
-- 无源码配置被运行时生成物覆盖，`/tmp` 产物不进入 Git。
-- 重复参数和旧路径的删除单独审查，不与功能迁移混在同一小节。
-
-## 执行规则
-
-每一节按以下顺序推进：
-
-1. 盘点本节参数及当前来源。
-2. 讨论 Profile 边界、派生规则和不迁移项。
-3. 确认本节设计与验收条件。
-4. 只实现本节范围。
-5. 执行针对性测试，并检查 sim/real 未发生意外串扰。
-6. 自审遗漏、未确认假设和兼容风险。
-7. 经用户确认后更新本文件状态，再进入下一节。
-
-任何小节发现跨节依赖时，只记录依赖；除非它阻塞当前验收，否则不提前实现后续小节。
+首次有效 GICP 配准 readiness 与 `/initialpose` 的帧语义尚未完成；LiDAR/IMU 动态标定、物理
+安全链、碰撞与失联保护、lifecycle、全局 diagnostics 和真实动态操作仍需产品级工作与验收。
+这些边界不通过增加 Profile 字段或在 acceptance 中冻结可调值来掩盖。
 
 ## 下一步
 
-第 5 节已完成。下一步按执行规则讨论第 6 节 GICP 配置迁移的边界和验收条件；本次收尾
-不提前规划或实现第 6 节。
+按 tracked `docs/acceptance/profile-migration-real-acceptance.md` 执行 6D 真机 mapping/navigation 统一验收。
