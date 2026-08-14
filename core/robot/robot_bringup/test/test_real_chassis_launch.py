@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 from xml.etree import ElementTree
 
+import pytest
 from launch import LaunchContext
 from launch.actions import (
     DeclareLaunchArgument,
@@ -80,6 +81,32 @@ def _declarations(path):
         and isinstance(call.args[0], ast.Constant)
         and isinstance(call.args[0].value, str)
     }
+
+
+def _install_directory_sources(source):
+    uncommented = re.sub(r"#.*", "", source)
+    blocks = re.finditer(
+        r"\binstall\s*\(\s*DIRECTORY\b(?P<directories>.*?)\bDESTINATION\b",
+        uncommented,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return [
+        token.strip("\"'")
+        for block in blocks
+        for token in re.findall(
+            r'"[^"]*"|[^\s()]+', block.group("directories")
+        )
+    ]
+
+
+def _assert_no_config_directory_install(source):
+    directories = _install_directory_sources(source)
+    assert directories, "missing install(DIRECTORY ... DESTINATION ...) block"
+    for directory in directories:
+        path_parts = directory.replace("\\", "/").rstrip("/").split("/")
+        assert "config" not in {part.lower() for part in path_parts}, (
+            f"retired config directory is installed: {directory}"
+        )
 
 
 def include_for_filename(includes, filename):
@@ -162,9 +189,23 @@ def test_package_retires_controller_yaml_and_source_fixture():
 
     cmake = PACKAGE_CMAKE_PATH.read_text(encoding="utf-8")
     assert "DIRECTORY launch" in cmake
-    assert not re.search(r"DIRECTORY\s+config\b", cmake)
+    _assert_no_config_directory_install(cmake)
     assert "robot_controllers_config" not in cmake
     assert "test_robot_controllers.py" not in cmake
+
+
+def test_robot_retirement_guard_rejects_multiline_multi_directory_config():
+    source = """\
+install(
+  DIRECTORY launch
+            test_assets
+            config
+  DESTINATION share/${PROJECT_NAME}
+)
+"""
+
+    with pytest.raises(AssertionError, match="retired config directory"):
+        _assert_no_config_directory_install(source)
 
 
 def test_real_hardware_chain_cleans_temporary_controller_file_after_shutdown():

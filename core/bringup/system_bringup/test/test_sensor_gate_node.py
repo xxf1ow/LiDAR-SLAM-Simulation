@@ -4,10 +4,27 @@ import types
 from pathlib import Path
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).parents[1]
 NODE_PATH = ROOT / "system_bringup" / "sensor_gate_node.py"
+TEMPLATE_PATH = ROOT / "config" / "templates" / "sensor_gate.yaml"
+
+
+def _template_parameter_types(module):
+    parameters = yaml.safe_load(TEMPLATE_PATH.read_text(encoding="utf-8"))[
+        "sensor_contract_gate"
+    ]["ros__parameters"]
+    native_types = {
+        int: module.Parameter.Type.INTEGER,
+        float: module.Parameter.Type.DOUBLE,
+    }
+    return {
+        name: native_types[type(value)]
+        for name, value in parameters.items()
+        if name != "use_sim_time"
+    }
 
 
 class FakeClock:
@@ -198,21 +215,14 @@ def test_node_loads_generated_contract_parameters_and_uses_neutral_name(node_mod
 
 
 def test_node_declares_only_typed_required_generated_parameters(node_module):
-    module, _clock, generated = node_module
+    module, _clock, _generated = node_module
     node = module.SensorGateNode()
 
-    assert {name for name, _parameter_type in node.declared_parameters} == set(
-        generated
-    )
-    assert (
-        dict(node.declared_parameters)["expected_points_per_scan"]
-        is module.Parameter.Type.INTEGER
-    )
-    assert all(
-        parameter_type is module.Parameter.Type.DOUBLE
-        for name, parameter_type in node.declared_parameters
-        if name != "expected_points_per_scan"
-    )
+    expected = _template_parameter_types(module)
+    names = [name for name, _parameter_type in node.declared_parameters]
+    assert len(node.declared_parameters) == len(expected)
+    assert len(names) == len(set(names))
+    assert dict(node.declared_parameters) == expected
 
 
 def test_node_subscribes_to_the_stable_sensor_protocol_topics(node_module):

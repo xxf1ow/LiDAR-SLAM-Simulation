@@ -4,6 +4,7 @@ from pathlib import Path
 import re
 import subprocess
 
+import pytest
 import yaml
 
 from system_bringup import consistency_check as cc
@@ -70,6 +71,91 @@ def _top_level_argument_count(call):
         elif char == "," and depth == 0:
             count += 1
     return count
+
+
+def _native_cpp_parameter_type(value):
+    if type(value) is list:
+        assert value and all(type(item) is float for item in value)
+        return "std::vector<double>"
+    return {
+        bool: "bool",
+        int: "int",
+        float: "double",
+        str: "std::string",
+    }[type(value)]
+
+
+def _template_cpp_parameter_types(path, node_name):
+    parameters = _load_yaml(path)[node_name]["ros__parameters"]
+    return {
+        name: _native_cpp_parameter_type(value)
+        for name, value in parameters.items()
+        if name != "use_sim_time"
+    }
+
+
+def _cpp_parameter_declarations(source):
+    declarations = []
+    for call in _calls_named(source, "declare_parameter"):
+        match = re.match(
+            r'^declare_parameter<(?P<type>.+)>\s*\(\s*"(?P<name>[^"]+)"',
+            call,
+            flags=re.DOTALL,
+        )
+        assert match is not None, f"untyped parameter declaration: {call}"
+        declarations.append(
+            (
+                match.group("name"),
+                match.group("type"),
+                _top_level_argument_count(call),
+            )
+        )
+    return declarations
+
+
+def _assert_cpp_parameter_contract(source, expected_types):
+    declarations = _cpp_parameter_declarations(source)
+    names = [name for name, _type, _arguments in declarations]
+    assert len(declarations) == len(expected_types), (
+        "declaration count differs"
+    )
+    assert len(names) == len(set(names)), "duplicate parameter declaration"
+    assert set(names) == set(expected_types), "parameter keys differ"
+    actual_types = {
+        name: parameter_type
+        for name, parameter_type, _arguments in declarations
+    }
+    assert actual_types == expected_types, "native declaration types differ"
+    assert all(
+        argument_count == 1
+        for _name, _type, argument_count in declarations
+    ), "parameter declaration has a usable default"
+
+
+def _install_directory_sources(source):
+    uncommented = re.sub(r"#.*", "", source)
+    blocks = re.finditer(
+        r"\binstall\s*\(\s*DIRECTORY\b(?P<directories>.*?)\bDESTINATION\b",
+        uncommented,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return [
+        token.strip("\"'")
+        for block in blocks
+        for token in re.findall(
+            r'"[^"]*"|[^\s()]+', block.group("directories")
+        )
+    ]
+
+
+def _assert_no_config_directory_install(source):
+    directories = _install_directory_sources(source)
+    assert directories, "missing install(DIRECTORY ... DESTINATION ...) block"
+    for directory in directories:
+        path_parts = directory.replace("\\", "/").rstrip("/").split("/")
+        assert "config" not in {part.lower() for part in path_parts}, (
+            f"retired config directory is installed: {directory}"
+        )
 
 
 def test_repository_fixture_resolves_from_test_location():
@@ -154,16 +240,28 @@ def test_retired_legacy_source_interfaces_are_absent():
 
 
 def test_gicp_template_parameters_are_declared_once_without_defaults():
-    template_keys = set(
-        _load_yaml(GICP_TEMPLATE)["gicp_localization"]["ros__parameters"]
-    ) - {"use_sim_time"}
-    calls = _calls_named(GICP_NODE_SOURCE.read_text(encoding="utf-8"), "declare_parameter")
-    declared_names = [call.split('"')[1] for call in calls]
+    expected = _template_cpp_parameter_types(
+        GICP_TEMPLATE, "gicp_localization"
+    )
+    _assert_cpp_parameter_contract(
+        GICP_NODE_SOURCE.read_text(encoding="utf-8"), expected
+    )
 
-    assert set(declared_names) == template_keys
-    assert len(declared_names) == len(template_keys)
-    assert all(call.startswith("declare_parameter<") for call in calls)
-    assert all(_top_level_argument_count(call) == 1 for call in calls)
+
+def test_cpp_parameter_contract_oracle_rejects_wrong_native_type():
+    source = GICP_NODE_SOURCE.read_text(encoding="utf-8")
+    wrong_type = source.replace(
+        'declare_parameter<std::string>("map_frame")',
+        'declare_parameter<bool>("map_frame")',
+        1,
+    )
+    assert wrong_type != source
+    expected = _template_cpp_parameter_types(
+        GICP_TEMPLATE, "gicp_localization"
+    )
+
+    with pytest.raises(AssertionError, match="native declaration types differ"):
+        _assert_cpp_parameter_contract(wrong_type, expected)
 
 
 def test_gicp_source_structs_and_members_have_no_tuning_fallbacks():
@@ -184,18 +282,10 @@ def test_gicp_source_structs_and_members_have_no_tuning_fallbacks():
 
 
 def test_vanjee_template_parameters_are_declared_once_without_defaults():
-    template_keys = set(
-        _load_yaml(VANJEE_TEMPLATE)["vanjee_lidar"]["ros__parameters"]
-    ) - {"use_sim_time"}
-    calls = _calls_named(
-        VANJEE_NODE_SOURCE.read_text(encoding="utf-8"), "declare_parameter"
+    expected = _template_cpp_parameter_types(VANJEE_TEMPLATE, "vanjee_lidar")
+    _assert_cpp_parameter_contract(
+        VANJEE_NODE_SOURCE.read_text(encoding="utf-8"), expected
     )
-    declared_names = [call.split('"')[1] for call in calls]
-
-    assert set(declared_names) == template_keys
-    assert len(declared_names) == len(template_keys)
-    assert all(call.startswith("declare_parameter<") for call in calls)
-    assert all(_top_level_argument_count(call) == 1 for call in calls)
 
 
 def test_vanjee_launch_requires_an_explicit_generated_config_file():
@@ -211,9 +301,23 @@ def test_vanjee_launch_requires_an_explicit_generated_config_file():
 def test_vanjee_retired_package_config_is_not_protected_or_installed():
     assert not RETIRED_VANJEE_CONFIG.exists()
     assert "vanjee_722.yaml" not in Path(rcc.__file__).read_text(encoding="utf-8")
-    assert "install(DIRECTORY config" not in VANJEE_CMAKE.read_text(
-        encoding="utf-8"
+    _assert_no_config_directory_install(
+        VANJEE_CMAKE.read_text(encoding="utf-8")
     )
+
+
+def test_vanjee_retirement_guard_rejects_multiline_multi_directory_config():
+    source = """\
+install(
+  DIRECTORY launch
+            doc
+            config/
+  DESTINATION share/${PROJECT_NAME}
+)
+"""
+
+    with pytest.raises(AssertionError, match="retired config directory"):
+        _assert_no_config_directory_install(source)
 
 
 def test_vanjee_driver_config_has_only_empty_or_zero_unconfigured_members():

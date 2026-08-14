@@ -608,6 +608,11 @@ def test_controller_template_contains_all_owned_target_leaves():
     assert controller["open_loop"] is False
     assert controller["position_feedback"] is False
     assert controller["enable_odom_tf"] is False
+    assert type(controller["cmd_vel_timeout"]) is float
+    assert math.isfinite(controller["cmd_vel_timeout"])
+    assert controller["cmd_vel_timeout"] > 0.0
+    assert "use_stamped_vel" not in controller
+    assert "velocity_rolling_window_size" not in controller
 
 
 def test_web_ui_template_is_a_complete_native_parameter_file():
