@@ -54,6 +54,16 @@ def load_launch_module():
     return module
 
 
+def load_hardware_chain_module():
+    spec = importlib.util.spec_from_file_location(
+        "real_hardware_chain_launch", HARDWARE_CHAIN_PATH
+    )
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
 def launch_arguments(action):
     return {name: str(value) for name, value in action.launch_arguments}
 
@@ -168,6 +178,33 @@ def test_real_hardware_chain_cleans_temporary_controller_file_after_shutdown():
         and isinstance(node.func, ast.Attribute)
         and node.func.attr == "unlink"
         for node in ast.walk(shutdown)
+    )
+
+
+def test_real_hardware_chain_uses_one_complete_synthetic_fixture():
+    module = load_hardware_chain_module()
+    fixture = module.SYNTHETIC_HARDWARE_CHAIN_FIXTURE
+    launch_arguments = module._synthetic_robot_launch_arguments()
+    fixture_arguments = fixture["robot_launch_arguments"]
+    expected_fixture_arguments = RUNTIME_ARGUMENTS - {
+        "controllers_file",
+        "use_sim_time",
+    }
+
+    assert set(fixture_arguments) == expected_fixture_arguments
+    assert {
+        name: launch_arguments[name] for name in fixture_arguments
+    } == {
+        name: str(value) for name, value in fixture_arguments.items()
+    }
+    assert module._expected_motor_command() == [
+        -fixture["motor_rpm"],
+        -fixture["motor_rpm"],
+    ]
+    expected_wheel_velocity = fixture["motor_rpm"] * 2.0 * module.math.pi / 60.0
+    assert module._expected_wheel_velocity() == expected_wheel_velocity
+    assert module._expected_odom_linear_x() == (
+        fixture_arguments["wheel_radius"] * expected_wheel_velocity
     )
 
 

@@ -35,8 +35,8 @@ def generate_launch_description():
             default_value=os.path.expanduser("~/LiDAR-SLAM-Simulation/models/factory_model"),
             description="model:// 资产父目录(.../models/factory_model)的绝对路径;"
                         "默认 ~/LiDAR-SLAM-Simulation/models/factory_model,可覆盖或置空。"),
-        DeclareLaunchArgument("spawn_x", default_value="4.0", description="机器人 spawn X(避开原点 workcell)。"),
-        DeclareLaunchArgument("spawn_y", default_value="0.0", description="机器人 spawn Y。"),
+        DeclareLaunchArgument("spawn_x", description="机器人 spawn X。"),
+        DeclareLaunchArgument("spawn_y", description="机器人 spawn Y。"),
         DeclareLaunchArgument("spawn_z",
                               description="机器人 spawn Z(根=base_footprint 在地面，留 5cm 落地余量)。"),
         DeclareLaunchArgument("controllers_file"),

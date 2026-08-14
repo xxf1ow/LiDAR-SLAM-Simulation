@@ -10,6 +10,8 @@ CMAKE_PATH = PACKAGE_ROOT / "CMakeLists.txt"
 PACKAGE_XML_PATH = PACKAGE_ROOT / "package.xml"
 RUNTIME_ARGUMENTS = {
     "world",
+    "spawn_x",
+    "spawn_y",
     "spawn_z",
     "controllers_file",
     "lidar_adapter_config",
@@ -25,7 +27,15 @@ RUNTIME_ARGUMENTS = {
     "imu_rate_hz",
     "use_sim_time",
 }
-XACRO_ARGUMENTS = RUNTIME_ARGUMENTS - {"world", "spawn_z", "controllers_file", "lidar_adapter_config", "use_sim_time"}
+XACRO_ARGUMENTS = RUNTIME_ARGUMENTS - {
+    "world",
+    "spawn_x",
+    "spawn_y",
+    "spawn_z",
+    "controllers_file",
+    "lidar_adapter_config",
+    "use_sim_time",
+}
 
 
 def _tree():
@@ -93,7 +103,7 @@ def test_manifest_owned_inputs_are_required_launch_arguments():
             keyword.arg == "default_value" for keyword in declarations[name].keywords
         )
 
-    for name in ("gui", "rviz", "prefix", "factory_models_path", "spawn_x", "spawn_y"):
+    for name in ("gui", "rviz", "prefix", "factory_models_path"):
         assert any(
             keyword.arg == "default_value" for keyword in declarations[name].keywords
         )
