@@ -8,10 +8,15 @@ from system_bringup.sensor_gate_logic import (
 )
 
 
+SYNTHETIC_SCAN_LINES = 7
+SYNTHETIC_COLUMNS_PER_SCAN = 313
+SYNTHETIC_POINTS_PER_SCAN = SYNTHETIC_SCAN_LINES * SYNTHETIC_COLUMNS_PER_SCAN
+
+
 @pytest.fixture
 def state():
     return SensorGateState(
-        expected_points_per_scan=16 * 1800,
+        expected_points_per_scan=SYNTHETIC_POINTS_PER_SCAN,
         minimum_point_hz=8.0,
         minimum_imu_hz=150.0,
         max_stamp_age=0.5,
@@ -36,8 +41,8 @@ def feed_healthy(state, duration, point_hz=10.0, imu_hz=200.0, start=0.0):
                 stamp=100.0 + received,
                 now_ros=100.1 + received,
                 frame_id=POINT_FRAME,
-                height=16,
-                width=1800,
+                height=SYNTHETIC_SCAN_LINES,
+                width=SYNTHETIC_COLUMNS_PER_SCAN,
                 fields=POINT_FIELDS,
             )
         else:
@@ -56,7 +61,13 @@ def test_healthy_streams_become_ready_after_two_stable_seconds(state):
     assert ready, reason
 
 
-@pytest.mark.parametrize("height, width", [(1, 28800), (16, 1800)])
+@pytest.mark.parametrize(
+    "height, width",
+    [
+        (1, SYNTHETIC_POINTS_PER_SCAN),
+        (SYNTHETIC_SCAN_LINES, SYNTHETIC_COLUMNS_PER_SCAN),
+    ],
+)
 def test_expected_total_points_accepts_organized_or_unorganized_clouds(state, height, width):
     state.observe_point(
         received=0.0,
@@ -76,14 +87,16 @@ def test_wrong_total_points_never_becomes_ready_without_fixed_shape_assumption(s
         stamp=100.0,
         now_ros=100.1,
         frame_id="velodyne",
-        height=16,
-        width=1799,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN - 1,
         fields=POINT_FIELDS,
     )
     ready, reason = state.status(0.1)
     assert not ready
-    assert "28800" in reason
-    assert "32x1200" not in reason
+    assert str(SYNTHETIC_POINTS_PER_SCAN) in reason
+    assert (
+        f"{SYNTHETIC_SCAN_LINES}x{SYNTHETIC_COLUMNS_PER_SCAN}" not in reason
+    )
 
 
 def test_wrong_frames_are_reported(state):
@@ -92,8 +105,8 @@ def test_wrong_frames_are_reported(state):
         stamp=100.0,
         now_ros=100.1,
         frame_id="wrong_lidar",
-        height=16,
-        width=1800,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=POINT_FIELDS,
     )
     state.observe_imu(
@@ -150,8 +163,8 @@ def test_identical_received_timestamps_are_unhealthy_without_crashing(state):
             stamp=101.0,
             now_ros=101.1,
             frame_id=POINT_FRAME,
-            height=16,
-            width=1800,
+            height=SYNTHETIC_SCAN_LINES,
+            width=SYNTHETIC_COLUMNS_PER_SCAN,
             fields=POINT_FIELDS,
         )
         state.observe_imu(
@@ -172,8 +185,8 @@ def test_invalid_contract_resets_stability_before_a_fresh_two_seconds(state):
         stamp=101.05,
         now_ros=101.15,
         frame_id="wrong_lidar",
-        height=16,
-        width=1800,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=POINT_FIELDS,
     )
     assert not state.status(1.05)[0]
@@ -197,8 +210,8 @@ def test_wrong_or_reordered_point_fields_are_reported(state, fields):
         stamp=100.0,
         now_ros=100.1,
         frame_id=POINT_FRAME,
-        height=16,
-        width=1800,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=fields,
     )
     ready, reason = state.status(0.0)
@@ -216,8 +229,8 @@ def test_stale_or_future_point_headers_are_reported(state, stamp, now_ros):
         stamp=stamp,
         now_ros=now_ros,
         frame_id=POINT_FRAME,
-        height=16,
-        width=1800,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=POINT_FIELDS,
     )
     ready, reason = state.status(0.0)
@@ -227,7 +240,7 @@ def test_stale_or_future_point_headers_are_reported(state, stamp, now_ros):
 
 def test_custom_rate_window_stable_duration_and_stamp_age_change_results():
     state = SensorGateState(
-        expected_points_per_scan=16 * 1800,
+        expected_points_per_scan=SYNTHETIC_POINTS_PER_SCAN,
         minimum_point_hz=20.0,
         minimum_imu_hz=300.0,
         max_stamp_age=0.1,
@@ -245,8 +258,8 @@ def test_custom_rate_window_stable_duration_and_stamp_age_change_results():
         stamp=100.5,
         now_ros=100.7,
         frame_id=POINT_FRAME,
-        height=16,
-        width=1800,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=POINT_FIELDS,
     )
     assert "outside [0, 0.1]s" in state.point_problem
@@ -254,7 +267,7 @@ def test_custom_rate_window_stable_duration_and_stamp_age_change_results():
 
 def test_custom_rate_window_and_stable_duration_change_ready_timing():
     state = SensorGateState(
-        expected_points_per_scan=16 * 1800,
+        expected_points_per_scan=SYNTHETIC_POINTS_PER_SCAN,
         minimum_point_hz=8.0,
         minimum_imu_hz=150.0,
         max_stamp_age=10.0,

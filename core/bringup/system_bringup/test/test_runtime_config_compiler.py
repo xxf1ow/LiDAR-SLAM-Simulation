@@ -356,6 +356,11 @@ def test_gicp_template_is_complete_native_parameter_schema():
             "odom_topic", "prior_map_path",
         )
     )
+    assert params["map_frame"] == "map"
+    assert params["odom_frame"] == "camera_init"
+    assert params["base_frame"] == "body"
+    assert params["cloud_topic"] == "/cloud_registered"
+    assert params["odom_topic"] == "/Odometry"
     assert all(
         type(params[key]) is float
         for key in (
@@ -413,14 +418,39 @@ def test_lio_sam_template_is_complete_native_parameter_schema():
     }
     assert params["pointCloudTopic"] == "/points_raw"
     assert params["imuTopic"] == "/imu/data"
+    assert params["odomTopic"] == "odometry/imu"
+    assert params["gpsTopic"] == "odometry/gpsz"
     assert params["lidarFrame"] == "velodyne"
     assert params["baselinkFrame"] == "base_footprint"
+    assert params["odometryFrame"] == "odom"
     assert params["mapFrame"] == "map"
-    assert type(params["use_sim_time"]) is bool
-    assert isinstance(params["savePCDDirectory"], str)
-    assert len(params["extrinsicTrans"]) == 3
-    assert len(params["extrinsicRot"]) == 9
-    assert len(params["extrinsicRPY"]) == 9
+    bool_keys = {
+        "use_sim_time", "useImuHeadingInitialization", "useGpsElevation",
+        "savePCD", "loopClosureEnableFlag",
+    }
+    string_keys = {
+        "pointCloudTopic", "imuTopic", "odomTopic", "gpsTopic",
+        "lidarFrame", "baselinkFrame", "odometryFrame", "mapFrame",
+        "savePCDDirectory", "sensor",
+    }
+    int_keys = {
+        "N_SCAN", "Horizon_SCAN", "downsampleRate",
+        "edgeFeatureMinValidNum", "surfFeatureMinValidNum", "numberOfCores",
+        "surroundingKeyframeSize", "historyKeyframeSearchNum",
+    }
+    array_lengths = {
+        "extrinsicTrans": 3, "extrinsicRot": 9, "extrinsicRPY": 9,
+    }
+    float_keys = set(params) - (
+        bool_keys | string_keys | int_keys | set(array_lengths)
+    )
+    assert all(type(params[key]) is bool for key in bool_keys)
+    assert all(type(params[key]) is str for key in string_keys)
+    assert all(type(params[key]) is int for key in int_keys)
+    assert all(type(params[key]) is float for key in float_keys)
+    for key, length in array_lengths.items():
+        assert len(params[key]) == length
+        assert all(type(value) is float for value in params[key])
 
 
 def test_fast_lio_template_is_complete_native_parameter_schema():
@@ -431,8 +461,15 @@ def test_fast_lio_template_is_complete_native_parameter_schema():
         "cube_side_length", "runtime_pos_log_enable", "map_file_path",
         "common", "preprocess", "mapping", "publish", "pcd_save",
     }
-    assert params["common"]["lid_topic"] == "/points_raw"
-    assert params["common"]["imu_topic"] == "/imu/data"
+    common = params["common"]
+    assert set(common) == {
+        "lid_topic", "imu_topic", "time_sync_en",
+        "time_offset_lidar_to_imu",
+    }
+    assert common["lid_topic"] == "/points_raw"
+    assert common["imu_topic"] == "/imu/data"
+    assert type(common["time_sync_en"]) is bool
+    assert type(common["time_offset_lidar_to_imu"]) is float
     assert set(params["preprocess"]) == {
         "lidar_type", "scan_line", "scan_rate", "timestamp_unit", "blind"
     }
@@ -442,10 +479,66 @@ def test_fast_lio_template_is_complete_native_parameter_schema():
     }
     assert len(params["mapping"]["extrinsic_T"]) == 3
     assert len(params["mapping"]["extrinsic_R"]) == 9
+    assert set(params["publish"]) == {
+        "path_en", "effect_map_en", "map_en", "scan_publish_en",
+        "dense_publish_en", "scan_bodyframe_pub_en",
+    }
     assert all(type(value) is bool for value in params["publish"].values())
     assert set(params["pcd_save"]) == {"pcd_save_en", "interval"}
     assert type(params["pcd_save"]["pcd_save_en"]) is bool
     assert isinstance(params["map_file_path"], str)
+
+
+@pytest.mark.parametrize(
+    "path,operation,value",
+    [
+        (("common", "unexpected"), "set", True),
+        (("common", "time_sync_en"), "delete", None),
+        (("common", "time_sync_en"), "set", 1),
+        (("common", "time_offset_lidar_to_imu"), "set", "0.0"),
+        (("publish", "unexpected"), "set", True),
+        (("publish", "path_en"), "delete", None),
+        (("publish", "path_en"), "set", 1),
+    ],
+)
+def test_fast_lio_nested_schema_assertion_rejects_drift(
+    tmp_path, monkeypatch, path, operation, value
+):
+    copied_templates = tmp_path / "templates"
+    shutil.copytree(TEMPLATE_DIR, copied_templates)
+    template_path = copied_templates / "fast_lio.yaml"
+    template = _load_yaml(template_path)
+    target = template["/**"]["ros__parameters"]
+    for key in path[:-1]:
+        target = target[key]
+    if operation == "delete":
+        del target[path[-1]]
+    else:
+        target[path[-1]] = value
+    template_path.write_text(
+        yaml.safe_dump(template, sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "TEMPLATE_DIR", copied_templates)
+
+    with pytest.raises(AssertionError):
+        test_fast_lio_template_is_complete_native_parameter_schema()
+
+
+def test_lio_sam_schema_assertion_rejects_wrong_parameter_type(
+    tmp_path, monkeypatch
+):
+    copied_templates = tmp_path / "templates"
+    shutil.copytree(TEMPLATE_DIR, copied_templates)
+    template_path = copied_templates / "lio_sam.yaml"
+    template = _load_yaml(template_path)
+    template["/**"]["ros__parameters"]["N_SCAN"] = True
+    template_path.write_text(
+        yaml.safe_dump(template, sort_keys=False), encoding="utf-8"
+    )
+    monkeypatch.setattr(sys.modules[__name__], "TEMPLATE_DIR", copied_templates)
+
+    with pytest.raises(AssertionError):
+        test_lio_sam_template_is_complete_native_parameter_schema()
 
 
 def test_controller_template_contains_all_owned_target_leaves():
@@ -533,6 +626,8 @@ def test_sensor_templates_are_complete_native_parameter_files():
         "use_lidar_clock", "ts_first_point", "dense_points", "lidar_frame",
         "imu_frame", "point_cloud_topic", "imu_topic",
     }
+    assert vanjee_params["lidar_frame"] == "velodyne"
+    assert vanjee_params["imu_frame"] == "imu_link"
     assert vanjee_params["point_cloud_topic"] == "/points_raw"
     assert vanjee_params["imu_topic"] == "/imu/data"
 
@@ -575,7 +670,7 @@ def test_sim_sensor_renderer_maps_profile_period_and_preserves_template_fields(
     runtime_tree,
 ):
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
-    source = inputs["sensor_templates"]["lidar_adapter"]
+    source = deepcopy(inputs["sensor_templates"]["lidar_adapter"])
 
     generated = rcc._render_sensor_configs(inputs)
 
@@ -587,7 +682,7 @@ def test_sim_sensor_renderer_maps_profile_period_and_preserves_template_fields(
         "scan_period"
     ]
     assert generated["lidar_adapter"] == expected
-    assert source == inputs["sensor_templates"]["lidar_adapter"]
+    assert inputs["sensor_templates"]["lidar_adapter"] == source
 
 
 def test_real_sensor_renderer_maps_vanjee_profile_values(runtime_tree):
@@ -659,22 +754,65 @@ def test_sensor_renderer_normalizes_ros_double_parameters(
             platform, ("sensors", "lidar", "max_range"), 89
         )
 
-    generated = rcc._render_sensor_configs(
-        rcc._load_runtime_inputs(runtime_tree.config)
-    )
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    source_templates = deepcopy(inputs["sensor_templates"])
+    generated = rcc._render_sensor_configs(inputs)
 
     gate = generated["sensor_gate"]["sensor_contract_gate"]["ros__parameters"]
+    assert gate["expected_point_hz"] == 13.0
+    assert gate["expected_imu_hz"] == 211.0
     assert type(gate["expected_point_hz"]) is float
     assert type(gate["expected_imu_hz"]) is float
     if platform == "sim":
         adapter = generated["lidar_adapter"]["lidar_pointcloud_adapter"][
             "ros__parameters"
         ]
+        assert adapter["scan_period"] == pytest.approx(1.0 / 13.0)
         assert type(adapter["scan_period"]) is float
     else:
         vanjee = generated["vanjee_lidar"]["vanjee_lidar"]["ros__parameters"]
+        assert vanjee["min_distance"] == 2.0
+        assert vanjee["max_distance"] == 89.0
         for key in ("start_angle", "end_angle", "min_distance", "max_distance"):
             assert type(vanjee[key]) is float
+    assert inputs["sensor_templates"] == source_templates
+
+    expected = deepcopy(source_templates)
+    effective = inputs["effective"]
+    expected_gate = expected["sensor_gate"]["sensor_contract_gate"][
+        "ros__parameters"
+    ]
+    expected_gate.update(
+        use_sim_time=effective["derived"]["use_sim_time"],
+        expected_points_per_scan=effective["derived"]["sensor_contract"][
+            "points_per_scan"
+        ],
+        expected_point_hz=13.0,
+        expected_imu_hz=211.0,
+    )
+    if platform == "sim":
+        expected["lidar_adapter"]["lidar_pointcloud_adapter"][
+            "ros__parameters"
+        ].update(
+            use_sim_time=effective["derived"]["use_sim_time"],
+            scan_period=1.0 / 13.0,
+        )
+    else:
+        profile = effective["profile"]
+        hardware = profile["hardware"]["lidar"]
+        lidar = profile["sensors"]["lidar"]
+        expected["vanjee_lidar"]["vanjee_lidar"]["ros__parameters"].update(
+            lidar_type=hardware["model"],
+            host_address=hardware["host_address"],
+            lidar_address=hardware["device_address"],
+            host_msop_port=hardware["host_msop_port"],
+            lidar_msop_port=hardware["device_msop_port"],
+            start_angle=degrees(lidar["horizontal_start_angle"]),
+            end_angle=degrees(lidar["horizontal_end_angle"]),
+            min_distance=2.0,
+            max_distance=89.0,
+        )
+    assert generated == expected
 
 
 @pytest.mark.parametrize(
@@ -1604,21 +1742,13 @@ def _yaml_schema(value):
     return type(value)
 
 
-def _profile_owned_runtime_values(manifest):
+def _synthetic_profile_target_values(manifest):
     controllers = _load_yaml(manifest["controllers_path"])
     base = controllers["base_controller"]["ros__parameters"]
     web_ui_config = _load_yaml(manifest["web_ui_path"])
     web_ui = web_ui_config["robot_web_ui"]["ros__parameters"]
     nav2 = _load_yaml(manifest["nav2_path"])
     follow_path = nav2["controller_server"]["ros__parameters"]["FollowPath"]
-    footprints = [
-        nav2["global_costmap"]["global_costmap"]["ros__parameters"][
-            "footprint"
-        ],
-        nav2["local_costmap"]["local_costmap"]["ros__parameters"][
-            "footprint"
-        ],
-    ]
     return {
         "controllers": {
             "wheel_radius": base["wheel_radius"],
@@ -1639,53 +1769,37 @@ def _profile_owned_runtime_values(manifest):
         "nav2": {
             "vx_max": follow_path["vx_max"],
             "wz_max": follow_path["wz_max"],
-            "footprints": [json.loads(value) for value in footprints],
-        },
-        "use_sim_time": {
-            "controllers": [
-                _path_value(controllers, path)
-                for path in rcc.CONTROLLER_TIME_PATHS
-            ],
-            "web_ui": [
-                _path_value(web_ui_config, path)
-                for path in rcc.WEB_UI_TIME_PATHS
-            ],
-            "nav2": [_path_value(nav2, path) for path in rcc.NAV2_TIME_PATHS],
         },
     }
 
 
-def _expected_profile_owned_runtime_values(manifest):
-    effective = _load_yaml(manifest["effective_profile_path"])
-    geometry = effective["derived"]["geometry"]
-    motion = effective["profile"]["motion"]
-    use_sim_time = effective["derived"]["use_sim_time"]
+def _expected_synthetic_profile_targets(facts):
+    wheel_radius = facts[("robot", "drive", "wheel_radius")]
+    wheel_separation = facts[("robot", "drive", "wheel_separation")]
+    max_linear_velocity = facts[("motion", "max_linear_velocity")]
+    max_angular_velocity = facts[("motion", "max_angular_velocity")]
+    max_linear_acceleration = facts[("motion", "max_linear_acceleration")]
+    max_angular_acceleration = facts[("motion", "max_angular_acceleration")]
     return {
         "controllers": {
-            "wheel_radius": geometry["drive"]["wheel_radius"],
-            "wheel_separation": geometry["drive"]["wheel_separation"],
-            "max_linear_velocity": motion["max_linear_velocity"],
-            "min_linear_velocity": -motion["max_linear_velocity"],
-            "max_linear_acceleration": motion["max_linear_acceleration"],
-            "min_linear_acceleration": -motion["max_linear_acceleration"],
-            "max_angular_velocity": motion["max_angular_velocity"],
-            "min_angular_velocity": -motion["max_angular_velocity"],
-            "max_angular_acceleration": motion["max_angular_acceleration"],
-            "min_angular_acceleration": -motion["max_angular_acceleration"],
+            "wheel_radius": wheel_radius,
+            "wheel_separation": wheel_separation,
+            "max_linear_velocity": max_linear_velocity,
+            "min_linear_velocity": -max_linear_velocity,
+            "max_linear_acceleration": max_linear_acceleration,
+            "min_linear_acceleration": -max_linear_acceleration,
+            "max_angular_velocity": max_angular_velocity,
+            "min_angular_velocity": -max_angular_velocity,
+            "max_angular_acceleration": max_angular_acceleration,
+            "min_angular_acceleration": -max_angular_acceleration,
         },
         "web_ui": {
-            "max_linear_speed": motion["max_linear_velocity"],
-            "max_angular_speed": motion["max_angular_velocity"],
+            "max_linear_speed": max_linear_velocity,
+            "max_angular_speed": max_angular_velocity,
         },
         "nav2": {
-            "vx_max": motion["max_linear_velocity"],
-            "wz_max": motion["max_angular_velocity"],
-            "footprints": [geometry["footprint"], geometry["footprint"]],
-        },
-        "use_sim_time": {
-            "controllers": [use_sim_time] * len(rcc.CONTROLLER_TIME_PATHS),
-            "web_ui": [use_sim_time] * len(rcc.WEB_UI_TIME_PATHS),
-            "nav2": [use_sim_time] * len(rcc.NAV2_TIME_PATHS),
+            "vx_max": max_linear_velocity,
+            "wz_max": max_angular_velocity,
         },
     }
 
@@ -1696,10 +1810,30 @@ def _path_value(mapping, path):
     return mapping
 
 
-def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
-    runtime_tree, tmp_path
-):
-    synthetic_profile_facts = {
+def _changed_leaf_paths(before, after, prefix=()):
+    assert type(before) is type(after)
+    if isinstance(before, dict):
+        assert set(before) == set(after)
+        changed = set()
+        for key in before:
+            changed.update(
+                _changed_leaf_paths(before[key], after[key], prefix + (key,))
+            )
+        return changed
+    if isinstance(before, list):
+        assert len(before) == len(after)
+        changed = set()
+        for index, value in enumerate(before):
+            changed.update(
+                _changed_leaf_paths(value, after[index], prefix + (index,))
+            )
+        return changed
+    return {prefix} if before != after else set()
+
+
+@pytest.fixture
+def synthetic_profile_facts():
+    return {
         "sim": {
             ("robot", "drive", "wheel_radius"): 0.17,
             ("robot", "drive", "wheel_separation"): 0.73,
@@ -1717,6 +1851,24 @@ def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
             ("motion", "max_angular_acceleration"): 3.8,
         },
     }
+
+
+def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
+    runtime_tree, tmp_path, synthetic_profile_facts
+):
+    baseline = {platform: {} for platform in ("sim", "real")}
+    for platform in ("sim", "real"):
+        for mode in ("mapping", "navigation"):
+            runtime_tree.set_bringup_value("platform", platform)
+            runtime_tree.set_bringup_value("mode", mode)
+            manifest = rcc.compile_runtime_configs(
+                runtime_tree.config, tmp_path / "baseline" / platform / mode
+            )
+            baseline[platform][mode] = {
+                name: _load_yaml(manifest[f"{name}_path"])
+                for name in ("controllers", "web_ui", "nav2")
+            }
+
     for platform, facts in synthetic_profile_facts.items():
         for path, value in facts.items():
             runtime_tree.set_profile_value(platform, path, value)
@@ -1750,14 +1902,54 @@ def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
             generated["real"]["navigation"][name]
         )
 
+    declared_mutation_targets = {
+        "controllers": {
+            ("base_controller", "ros__parameters", key)
+            for key in (
+                "wheel_radius", "wheel_separation",
+                "linear.x.max_velocity", "linear.x.min_velocity",
+                "linear.x.max_acceleration", "linear.x.min_acceleration",
+                "angular.z.max_velocity", "angular.z.min_velocity",
+                "angular.z.max_acceleration", "angular.z.min_acceleration",
+            )
+        },
+        "web_ui": {
+            ("robot_web_ui", "ros__parameters", "max_linear_speed"),
+            ("robot_web_ui", "ros__parameters", "max_angular_speed"),
+        },
+        "nav2": {
+            (
+                "controller_server", "ros__parameters", "FollowPath",
+                "vx_max",
+            ),
+            (
+                "controller_server", "ros__parameters", "FollowPath",
+                "wz_max",
+            ),
+        },
+    }
     for platform in ("sim", "real"):
+        other_platform = "real" if platform == "sim" else "sim"
+        facts = synthetic_profile_facts[platform]
+        for mode in ("mapping", "navigation"):
+            effective_profile = generated[platform][mode]["effective_profile"][
+                "profile"
+            ]
+            for path, expected in facts.items():
+                assert _path_value(effective_profile, path) == expected
+                assert expected != synthetic_profile_facts[other_platform][path]
+            for name, declared_paths in declared_mutation_targets.items():
+                assert _changed_leaf_paths(
+                    baseline[platform][mode][name], generated[platform][mode][name]
+                ) == declared_paths
+
         manifest = manifests[platform]["navigation"]
-        assert _profile_owned_runtime_values(manifest) == (
-            _expected_profile_owned_runtime_values(manifest)
+        assert _synthetic_profile_target_values(manifest) == (
+            _expected_synthetic_profile_targets(facts)
         )
-    assert _profile_owned_runtime_values(manifests["sim"]["navigation"]) != (
-        _profile_owned_runtime_values(manifests["real"]["navigation"])
-    )
+    assert _synthetic_profile_target_values(
+        manifests["sim"]["navigation"]
+    ) != _synthetic_profile_target_values(manifests["real"]["navigation"])
 
     legacy_report_keys = {"platform", "source_profile", "profile", "derived"}
     runtime_only_keys = {"generated_configs"}
@@ -1980,6 +2172,19 @@ def test_sim_and_real_sensor_generation_stays_platform_isolated(
     }
     before = {path: path.read_bytes() for path in protected}
 
+    runtime_tree.set_profile_value(
+        "sim", ("sensors", "lidar", "scan_lines"), 7
+    )
+    runtime_tree.set_profile_value(
+        "sim", ("sensors", "lidar", "columns_per_scan"), 311
+    )
+    runtime_tree.set_profile_value(
+        "real", ("sensors", "lidar", "scan_lines"), 11
+    )
+    runtime_tree.set_profile_value(
+        "real", ("sensors", "lidar", "columns_per_scan"), 347
+    )
+
     sim_manifest = rcc.compile_runtime_configs(
         runtime_tree.config, tmp_path / "sim"
     )
@@ -2035,10 +2240,10 @@ def test_sim_and_real_sensor_generation_stays_platform_isolated(
     )
     assert vanjee["end_angle"] == degrees(real_lidar["horizontal_end_angle"])
 
-    for manifest, expected_points in (
-        (sim_manifest, 16 * 1800),
-        (real_manifest, 32 * 1200),
-    ):
+    for manifest in (sim_manifest, real_manifest):
+        effective = _load_yaml(manifest["effective_profile_path"])
+        lidar = effective["profile"]["sensors"]["lidar"]
+        expected_points = lidar["scan_lines"] * lidar["columns_per_scan"]
         gate = _load_yaml(manifest["sensor_gate_path"])[
             "sensor_contract_gate"
         ]["ros__parameters"]
