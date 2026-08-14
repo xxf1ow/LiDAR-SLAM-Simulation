@@ -82,7 +82,7 @@ def test_rviz_inherits_use_sim_time_from_selected_params_file():
     assert "+            parameters=[{'use_sim_time': True}]" not in patch_text
 
 
-def test_lio_sam_patch_applies_to_clean_pinned_git_objects(tmp_path):
+def test_lio_sam_patch_applies_to_clean_current_nested_head_objects(tmp_path):
     source = _clean_patch_source(tmp_path)
     result = _apply_patch(source, check=True)
     assert result.returncode == 0, result.stderr
