@@ -25,7 +25,7 @@ def generate_launch_description():
                                           "通常多余;单独验机器人模型时传 rviz:=true。"),
         DeclareLaunchArgument("prefix", default_value="",
                               description="link/joint 名前缀。"),
-        DeclareLaunchArgument("world", default_value="factory.sdf",
+        DeclareLaunchArgument("world",
                               description="worlds/ 下的世界文件名(factory.sdf=工厂; test_world.sdf=冒烟回退)。"),
         DeclareLaunchArgument(
             "factory_models_path",
@@ -37,7 +37,7 @@ def generate_launch_description():
                         "默认 ~/LiDAR-SLAM-Simulation/models/factory_model,可覆盖或置空。"),
         DeclareLaunchArgument("spawn_x", default_value="4.0", description="机器人 spawn X(避开原点 workcell)。"),
         DeclareLaunchArgument("spawn_y", default_value="0.0", description="机器人 spawn Y。"),
-        DeclareLaunchArgument("spawn_z", default_value="0.05",
+        DeclareLaunchArgument("spawn_z",
                               description="机器人 spawn Z(根=base_footprint 在地面，留 5cm 落地余量)。"),
         DeclareLaunchArgument("controllers_file"),
         DeclareLaunchArgument("lidar_adapter_config"),

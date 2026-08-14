@@ -9,6 +9,8 @@ PACKAGE_ROOT = LAUNCH_PATH.parents[1]
 CMAKE_PATH = PACKAGE_ROOT / "CMakeLists.txt"
 PACKAGE_XML_PATH = PACKAGE_ROOT / "package.xml"
 RUNTIME_ARGUMENTS = {
+    "world",
+    "spawn_z",
     "controllers_file",
     "lidar_adapter_config",
     "base_length", "base_width", "base_height", "base_link_height",
@@ -23,6 +25,7 @@ RUNTIME_ARGUMENTS = {
     "imu_rate_hz",
     "use_sim_time",
 }
+XACRO_ARGUMENTS = RUNTIME_ARGUMENTS - {"world", "spawn_z", "controllers_file", "lidar_adapter_config", "use_sim_time"}
 
 
 def _tree():
@@ -90,6 +93,11 @@ def test_manifest_owned_inputs_are_required_launch_arguments():
             keyword.arg == "default_value" for keyword in declarations[name].keywords
         )
 
+    for name in ("gui", "rviz", "prefix", "factory_models_path", "spawn_x", "spawn_y"):
+        assert any(
+            keyword.arg == "default_value" for keyword in declarations[name].keywords
+        )
+
 
 def test_launch_contract_test_is_registered_with_ament():
     cmake = CMAKE_PATH.read_text(encoding="utf-8")
@@ -126,9 +134,7 @@ def test_xacro_receives_generated_controller_and_all_runtime_geometry():
     assert _is_launch_configuration(
         _assigned_value(tree, "controllers_file"), "controllers_file"
     )
-    for name in RUNTIME_ARGUMENTS - {
-        "controllers_file", "lidar_adapter_config", "use_sim_time"
-    }:
+    for name in XACRO_ARGUMENTS:
         assert _is_launch_configuration(configured[name], name)
 
 

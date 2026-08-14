@@ -1,12 +1,15 @@
 import os
 import sys
+import tempfile
 import time
 import unittest
+from pathlib import Path
 
 import launch_testing
 import launch_testing.markers
 import pytest
 import rclpy
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from controller_manager.test_utils import check_controllers_running
 from geometry_msgs.msg import TwistStamped
@@ -17,6 +20,23 @@ from launch_testing.actions import ReadyToTest
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Int16MultiArray
+
+
+CONTROLLERS_TEMPLATE = (
+    Path(__file__).resolve().parents[3]
+    / "bringup/system_bringup/config/templates/robot_controllers.yaml"
+)
+
+
+def _real_controllers_file():
+    controllers = yaml.safe_load(CONTROLLERS_TEMPLATE.read_text(encoding="utf-8"))
+    for section in ("controller_manager", "base_controller"):
+        controllers[section]["ros__parameters"]["use_sim_time"] = False
+    with tempfile.NamedTemporaryFile(
+        delete=False, suffix=".yaml", mode="w", encoding="utf-8"
+    ) as stream:
+        yaml.safe_dump(controllers, stream, sort_keys=False)
+        return stream.name
 
 
 @pytest.mark.rostest
@@ -39,6 +59,35 @@ def generate_test_description():
         launch_arguments={
             "gui": "false",
             "use_mock_hardware": "false",
+            "controllers_file": _real_controllers_file(),
+            "use_sim_time": "false",
+            "base_length": "0.75",
+            "base_width": "0.55",
+            "base_height": "0.40",
+            "base_link_height": "0.32",
+            "wheel_radius": "0.12",
+            "wheel_width": "0.06",
+            "wheel_separation": "0.55",
+            "lidar_x": "0.0",
+            "lidar_y": "0.0",
+            "lidar_z": "0.236",
+            "lidar_roll": "0.0",
+            "lidar_pitch": "0.0",
+            "lidar_yaw": "0.0",
+            "imu_x": "0.0",
+            "imu_y": "0.0",
+            "imu_z": "0.236",
+            "imu_roll": "0.0",
+            "imu_pitch": "0.0",
+            "imu_yaw": "0.0",
+            "lidar_scan_lines": "16",
+            "lidar_columns_per_scan": "1800",
+            "lidar_scan_rate_hz": "10",
+            "lidar_min_range": "0.9",
+            "lidar_max_range": "100.0",
+            "lidar_horizontal_start_angle": "-3.14159",
+            "lidar_horizontal_end_angle": "3.14159",
+            "imu_rate_hz": "200",
         }.items(),
     )
     return LaunchDescription([fake, robot, ReadyToTest()])

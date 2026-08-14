@@ -15,6 +15,9 @@ from launch_ros.substitutions import FindPackageShare
 LAUNCH_PATH = (
     Path(__file__).resolve().parents[1] / "launch" / "real_chassis.launch.py"
 )
+ROBOT_LAUNCH_PATH = LAUNCH_PATH.parent / "robot.launch.py"
+PACKAGE_ROOT = LAUNCH_PATH.parents[1]
+PACKAGE_CMAKE_PATH = PACKAGE_ROOT / "CMakeLists.txt"
 PACKAGE_XML_PATH = Path(__file__).resolve().parents[1] / "package.xml"
 VENDOR_LAUNCH_PATH = (
     Path(__file__).resolve().parents[2]
@@ -38,6 +41,7 @@ RUNTIME_ARGUMENTS = {
     "imu_rate_hz",
     "use_sim_time",
 }
+OPERATOR_ARGUMENTS = {"gui", "use_mock_hardware", "prefix"}
 
 
 def load_launch_module():
@@ -50,6 +54,20 @@ def load_launch_module():
 
 def launch_arguments(action):
     return {name: str(value) for name, value in action.launch_arguments}
+
+
+def _declarations(path):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    return {
+        call.args[0].value: call
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "DeclareLaunchArgument"
+        and call.args
+        and isinstance(call.args[0], ast.Constant)
+        and isinstance(call.args[0].value, str)
+    }
 
 
 def include_for_filename(includes, filename):
@@ -110,6 +128,31 @@ def test_real_chassis_includes_vendor_and_real_robot_with_single_owner_settings(
         perform_substitutions(LaunchContext(), gui_arguments[0].default_value)
         == "false"
     )
+
+
+def test_robot_launch_requires_generated_inputs_and_keeps_operator_defaults():
+    declarations = _declarations(ROBOT_LAUNCH_PATH)
+
+    assert RUNTIME_ARGUMENTS <= set(declarations)
+    for name in RUNTIME_ARGUMENTS:
+        assert not any(
+            keyword.arg == "default_value" for keyword in declarations[name].keywords
+        )
+    for name in OPERATOR_ARGUMENTS:
+        assert any(
+            keyword.arg == "default_value" for keyword in declarations[name].keywords
+        )
+
+
+def test_package_retires_controller_yaml_and_source_fixture():
+    assert not (PACKAGE_ROOT / "config" / "robot_controllers.yaml").exists()
+    assert not (PACKAGE_ROOT / "test" / "test_robot_controllers.py").exists()
+
+    cmake = PACKAGE_CMAKE_PATH.read_text(encoding="utf-8")
+    assert "DIRECTORY launch" in cmake
+    assert "DIRECTORY config launch" not in cmake
+    assert "robot_controllers_config" not in cmake
+    assert "test_robot_controllers.py" not in cmake
 
 
 def test_package_declares_direct_launch_and_test_dependencies():

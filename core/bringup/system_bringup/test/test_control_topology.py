@@ -422,6 +422,11 @@ def test_robot_launch_accepts_runtime_geometry_and_controller_file():
     }
     assert ROBOT_GEOMETRY_ARGUMENTS <= declared
     assert not any(name.startswith("sensor_") for name in declared)
+    for name in {"controllers_file", "use_sim_time", *ROBOT_GEOMETRY_ARGUMENTS}:
+        declaration = _declaration(tree, name)
+        assert not any(
+            keyword.arg == "default_value" for keyword in declaration.keywords
+        )
 
     function = _function(tree, "generate_launch_description")
     control_node = _node_call(function, "controller_manager", "ros2_control_node")
