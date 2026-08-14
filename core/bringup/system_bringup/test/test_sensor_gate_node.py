@@ -58,9 +58,11 @@ def node_module(monkeypatch):
             self._logger = FakeLogger()
             self.declared_parameters = []
 
-        def declare_parameter(self, name, default):
-            self.declared_parameters.append((name, default))
-            return types.SimpleNamespace(value=generated.get(name, default))
+        def declare_parameter(self, name, parameter_type):
+            self.declared_parameters.append((name, parameter_type))
+            if name not in generated:
+                raise RuntimeError(f"missing required parameter: {name}")
+            return types.SimpleNamespace(value=generated[name])
 
         def create_subscription(self, *args, **kwargs):
             return types.SimpleNamespace(args=args, kwargs=kwargs)
@@ -81,6 +83,14 @@ def node_module(monkeypatch):
         pass
 
     rclpy = types.ModuleType("rclpy")
+
+    class FakeParameter:
+        class Type:
+            INTEGER = object()
+            DOUBLE = object()
+
+    rclpy_parameter = types.ModuleType("rclpy.parameter")
+    rclpy_parameter.Parameter = FakeParameter
     rclpy_node = types.ModuleType("rclpy.node")
     rclpy_node.Node = FakeNode
     rclpy_qos = types.ModuleType("rclpy.qos")
@@ -92,6 +102,7 @@ def node_module(monkeypatch):
 
     for name, module in {
         "rclpy": rclpy,
+        "rclpy.parameter": rclpy_parameter,
         "rclpy.node": rclpy_node,
         "rclpy.qos": rclpy_qos,
         "sensor_msgs": sensor_msgs,
@@ -178,6 +189,24 @@ def test_node_loads_generated_contract_parameters_and_uses_neutral_name(node_mod
     assert node.state.max_stamp_age == generated["max_stamp_age"]
     assert node.state.point_rate.window == generated["rate_window"]
     assert node.state.stable_duration == generated["stable_duration"]
+
+
+def test_node_declares_only_typed_required_generated_parameters(node_module):
+    module, _clock, generated = node_module
+    node = module.SensorGateNode()
+
+    assert {name for name, _parameter_type in node.declared_parameters} == set(
+        generated
+    )
+    assert (
+        dict(node.declared_parameters)["expected_points_per_scan"]
+        is module.Parameter.Type.INTEGER
+    )
+    assert all(
+        parameter_type is module.Parameter.Type.DOUBLE
+        for name, parameter_type in node.declared_parameters
+        if name != "expected_points_per_scan"
+    )
 
 
 def test_startup_and_samples_use_one_ros_clock_domain(node_module):

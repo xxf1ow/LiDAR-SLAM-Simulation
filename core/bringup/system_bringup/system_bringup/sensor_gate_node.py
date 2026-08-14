@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, PointCloud2
 
@@ -10,28 +11,42 @@ class SensorGateNode(Node):
     def __init__(self):
         super().__init__("sensor_contract_gate")
         expected_points_per_scan = int(
-            self.declare_parameter("expected_points_per_scan", 38400).value
+            self.declare_parameter(
+                "expected_points_per_scan", Parameter.Type.INTEGER
+            ).value
         )
         expected_point_hz = float(
-            self.declare_parameter("expected_point_hz", 10.0).value
+            self.declare_parameter(
+                "expected_point_hz", Parameter.Type.DOUBLE
+            ).value
         )
         expected_imu_hz = float(
-            self.declare_parameter("expected_imu_hz", 200.0).value
+            self.declare_parameter("expected_imu_hz", Parameter.Type.DOUBLE).value
         )
         minimum_point_rate_ratio = float(
-            self.declare_parameter("minimum_point_rate_ratio", 0.8).value
+            self.declare_parameter(
+                "minimum_point_rate_ratio", Parameter.Type.DOUBLE
+            ).value
         )
         minimum_imu_rate_ratio = float(
-            self.declare_parameter("minimum_imu_rate_ratio", 0.75).value
+            self.declare_parameter(
+                "minimum_imu_rate_ratio", Parameter.Type.DOUBLE
+            ).value
         )
         max_stamp_age = float(
-            self.declare_parameter("max_stamp_age", 0.5).value
+            self.declare_parameter("max_stamp_age", Parameter.Type.DOUBLE).value
         )
-        rate_window = float(self.declare_parameter("rate_window", 2.0).value)
+        rate_window = float(
+            self.declare_parameter("rate_window", Parameter.Type.DOUBLE).value
+        )
         stable_duration = float(
-            self.declare_parameter("stable_duration", 2.0).value
+            self.declare_parameter(
+                "stable_duration", Parameter.Type.DOUBLE
+            ).value
         )
-        self.timeout = float(self.declare_parameter("timeout", 300.0).value)
+        self.timeout = float(
+            self.declare_parameter("timeout", Parameter.Type.DOUBLE).value
+        )
         self.state = SensorGateState(
             expected_points_per_scan=expected_points_per_scan,
             minimum_point_hz=expected_point_hz * minimum_point_rate_ratio,
