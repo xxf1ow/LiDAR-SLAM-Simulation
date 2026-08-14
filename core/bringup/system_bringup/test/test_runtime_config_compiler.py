@@ -2040,8 +2040,6 @@ def test_sim_and_real_sensor_generation_stays_platform_isolated(
             for filenames in rcc.SENSOR_TEMPLATE_FILENAMES.values()
             for filename in filenames.values()
         ),
-        core_dir
-        / "robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/config/vanjee_722.yaml",
         core_dir / "simulation/robot_gz_bringup/config/bridge.yaml",
         PACKAGE_ROOT / "launch/bringup.launch.py",
     }

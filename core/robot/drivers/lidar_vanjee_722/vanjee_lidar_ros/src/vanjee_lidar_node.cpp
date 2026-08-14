@@ -82,59 +82,46 @@ public:
 
 private:
   void read_parameters() {
-    config_.lidar_type =
-        declare_parameter<std::string>("lidar_type", config_.lidar_type);
-    config_.host_address =
-        declare_parameter<std::string>("host_address", config_.host_address);
-    config_.lidar_address =
-        declare_parameter<std::string>("lidar_address", config_.lidar_address);
-    const int64_t host_msop_port =
-        declare_parameter<int64_t>("host_msop_port", config_.host_msop_port);
+    config_.lidar_type = declare_parameter<std::string>("lidar_type");
+    config_.host_address = declare_parameter<std::string>("host_address");
+    config_.lidar_address = declare_parameter<std::string>("lidar_address");
+    const int host_msop_port = declare_parameter<int>("host_msop_port");
     if (host_msop_port < 1 || host_msop_port > 65535) {
       throw std::runtime_error("host_msop_port must be in 1..65535");
     }
     config_.host_msop_port = static_cast<uint16_t>(host_msop_port);
-    const int64_t lidar_msop_port =
-        declare_parameter<int64_t>("lidar_msop_port", config_.lidar_msop_port);
+    const int lidar_msop_port = declare_parameter<int>("lidar_msop_port");
     if (lidar_msop_port < 1 || lidar_msop_port > 65535) {
       throw std::runtime_error("lidar_msop_port must be in 1..65535");
     }
     config_.lidar_msop_port = static_cast<uint16_t>(lidar_msop_port);
     const double start_angle =
-        declare_parameter<double>("start_angle", config_.start_angle);
+        declare_parameter<double>("start_angle");
     if (!detail::valid_scan_angle(start_angle)) {
       throw std::runtime_error(
           "start_angle must be finite and in [0, 360]");
     }
     config_.start_angle = static_cast<float>(start_angle);
     const double end_angle =
-        declare_parameter<double>("end_angle", config_.end_angle);
+        declare_parameter<double>("end_angle");
     if (!detail::valid_scan_angle(end_angle)) {
       throw std::runtime_error("end_angle must be finite and in [0, 360]");
     }
     config_.end_angle = static_cast<float>(end_angle);
-    config_.min_distance = static_cast<float>(
-        declare_parameter<double>("min_distance", config_.min_distance));
-    config_.max_distance = static_cast<float>(
-        declare_parameter<double>("max_distance", config_.max_distance));
-    config_.wait_for_difop =
-        declare_parameter<bool>("wait_for_difop", config_.wait_for_difop);
-    config_.config_from_file =
-        declare_parameter<bool>("config_from_file", config_.config_from_file);
-    config_.use_lidar_clock =
-        declare_parameter<bool>("use_lidar_clock", config_.use_lidar_clock);
-    config_.ts_first_point =
-        declare_parameter<bool>("ts_first_point", config_.ts_first_point);
-    config_.dense_points =
-        declare_parameter<bool>("dense_points", config_.dense_points);
-    config_.lidar_frame =
-        declare_parameter<std::string>("lidar_frame", config_.lidar_frame);
-    config_.imu_frame =
-        declare_parameter<std::string>("imu_frame", config_.imu_frame);
-    config_.point_cloud_topic = declare_parameter<std::string>(
-        "point_cloud_topic", config_.point_cloud_topic);
-    config_.imu_topic =
-        declare_parameter<std::string>("imu_topic", config_.imu_topic);
+    config_.min_distance =
+        static_cast<float>(declare_parameter<double>("min_distance"));
+    config_.max_distance =
+        static_cast<float>(declare_parameter<double>("max_distance"));
+    config_.wait_for_difop = declare_parameter<bool>("wait_for_difop");
+    config_.config_from_file = declare_parameter<bool>("config_from_file");
+    config_.use_lidar_clock = declare_parameter<bool>("use_lidar_clock");
+    config_.ts_first_point = declare_parameter<bool>("ts_first_point");
+    config_.dense_points = declare_parameter<bool>("dense_points");
+    config_.lidar_frame = declare_parameter<std::string>("lidar_frame");
+    config_.imu_frame = declare_parameter<std::string>("imu_frame");
+    config_.point_cloud_topic =
+        declare_parameter<std::string>("point_cloud_topic");
+    config_.imu_topic = declare_parameter<std::string>("imu_topic");
   }
 
   void publish_cloud(std::shared_ptr<VendorPointCloud> cloud) {

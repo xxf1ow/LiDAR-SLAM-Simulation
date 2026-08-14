@@ -8,24 +8,24 @@
 namespace vanjee_lidar_ros {
 
 struct DriverConfig {
-  std::string lidar_type{"vanjee_722"};
-  std::string host_address{"192.168.2.88"};
-  std::string lidar_address{"192.168.2.86"};
-  uint16_t host_msop_port{3001};
-  uint16_t lidar_msop_port{3333};
-  float start_angle{0.0F};
-  float end_angle{360.0F};
-  float min_distance{0.05F};
-  float max_distance{70.0F};
-  bool wait_for_difop{true};
-  bool config_from_file{false};
-  bool use_lidar_clock{false};
-  bool ts_first_point{true};
-  bool dense_points{false};
-  std::string lidar_frame{"velodyne"};
-  std::string imu_frame{"imu_link"};
-  std::string point_cloud_topic{"/points_raw"};
-  std::string imu_topic{"/imu/data"};
+  std::string lidar_type{};
+  std::string host_address{};
+  std::string lidar_address{};
+  uint16_t host_msop_port{};
+  uint16_t lidar_msop_port{};
+  float start_angle{};
+  float end_angle{};
+  float min_distance{};
+  float max_distance{};
+  bool wait_for_difop{};
+  bool config_from_file{};
+  bool use_lidar_clock{};
+  bool ts_first_point{};
+  bool dense_points{};
+  std::string lidar_frame{};
+  std::string imu_frame{};
+  std::string point_cloud_topic{};
+  std::string imu_topic{};
 };
 
 bool parse_lidar_type(

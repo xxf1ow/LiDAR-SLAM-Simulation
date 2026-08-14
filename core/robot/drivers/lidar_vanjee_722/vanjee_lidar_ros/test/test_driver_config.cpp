@@ -16,6 +16,33 @@ namespace vanjee_lidar_ros::detail {
 bool valid_scan_angle(double angle);
 }
 
+namespace {
+
+vlr::DriverConfig syntheticConfig() {
+  vlr::DriverConfig config{};
+  config.lidar_type = "vanjee_722";
+  config.host_address = "198.51.100.10";
+  config.lidar_address = "198.51.100.11";
+  config.host_msop_port = 4101;
+  config.lidar_msop_port = 4102;
+  config.start_angle = 5.0F;
+  config.end_angle = 355.0F;
+  config.min_distance = 0.25F;
+  config.max_distance = 123.5F;
+  config.wait_for_difop = false;
+  config.config_from_file = true;
+  config.use_lidar_clock = true;
+  config.ts_first_point = false;
+  config.dense_points = true;
+  config.lidar_frame = "synthetic_lidar";
+  config.imu_frame = "synthetic_imu";
+  config.point_cloud_topic = "/synthetic/points";
+  config.imu_topic = "/synthetic/imu";
+  return config;
+}
+
+}  // namespace
+
 TEST(DriverConfig, ParsesInstalledAndAlternateModels) {
   vjl::LidarType type{};
   ASSERT_TRUE(vlr::parse_lidar_type("vanjee_722", type));
@@ -29,7 +56,7 @@ TEST(DriverConfig, RejectsFactoryUnsupported738Model) {
   vjl::LidarType type{};
   EXPECT_FALSE(vlr::parse_lidar_type("vanjee_738", type));
 
-  vlr::DriverConfig config;
+  vlr::DriverConfig config = syntheticConfig();
   config.lidar_type = "vanjee_738";
   vjl::WJDriverParam param;
   std::string error;
@@ -38,21 +65,21 @@ TEST(DriverConfig, RejectsFactoryUnsupported738Model) {
 }
 
 TEST(DriverConfig, BuildsOnline722Parameters) {
-  vlr::DriverConfig config;
+  vlr::DriverConfig config = syntheticConfig();
   vjl::WJDriverParam param;
   std::string error;
   ASSERT_TRUE(vlr::make_driver_param(config, param, error)) << error;
   EXPECT_EQ(param.lidar_type, vjl::LidarType::vanjee_722);
   EXPECT_EQ(param.input_type, vjl::InputType::ONLINE_LIDAR);
   EXPECT_EQ(param.input_param.connect_type, 1);
-  EXPECT_EQ(param.input_param.host_address, "192.168.2.88");
-  EXPECT_EQ(param.input_param.lidar_address, "192.168.2.86");
-  EXPECT_EQ(param.input_param.host_msop_port, 3001);
-  EXPECT_EQ(param.input_param.lidar_msop_port, 3333);
+  EXPECT_EQ(param.input_param.host_address, "198.51.100.10");
+  EXPECT_EQ(param.input_param.lidar_address, "198.51.100.11");
+  EXPECT_EQ(param.input_param.host_msop_port, 4101);
+  EXPECT_EQ(param.input_param.lidar_msop_port, 4102);
   EXPECT_TRUE(param.decoder_param.point_cloud_enable);
   EXPECT_EQ(param.decoder_param.imu_enable, 1);
-  EXPECT_TRUE(param.decoder_param.ts_first_point);
-  EXPECT_FALSE(param.decoder_param.use_lidar_clock);
+  EXPECT_FALSE(param.decoder_param.ts_first_point);
+  EXPECT_TRUE(param.decoder_param.use_lidar_clock);
 }
 
 TEST(DriverConfig, BuildsModelScopedCalibrationPathsInMapDirectory) {
@@ -61,14 +88,14 @@ TEST(DriverConfig, BuildsModelScopedCalibrationPathsInMapDirectory) {
       fs::temp_directory_path() / "vanjee_lidar_calibration_path_test";
   fs::remove_all(home);
 
-  vlr::DriverConfig config;
+  vlr::DriverConfig config = syntheticConfig();
   vjl::WJDriverParam param_722;
   std::string error;
   ASSERT_TRUE(vlr::configure_calibration_paths(
       config, home.string(), param_722, error)) << error;
 
   const fs::path directory =
-      home / "result" / "lidar_calibration" / "192.168.2.86";
+      home / "result" / "lidar_calibration" / "198.51.100.11";
   EXPECT_TRUE(fs::is_directory(directory));
   EXPECT_EQ(fs::path(param_722.decoder_param.angle_path_ver),
             directory / "vanjee_722_vertical_angles.csv");
@@ -90,7 +117,7 @@ TEST(DriverConfig, BuildsModelScopedCalibrationPathsInMapDirectory) {
 }
 
 TEST(DriverConfig, RejectsMissingHomeForCalibrationPaths) {
-  vlr::DriverConfig config;
+  vlr::DriverConfig config = syntheticConfig();
   vjl::WJDriverParam param;
   std::string error;
 
@@ -99,7 +126,7 @@ TEST(DriverConfig, RejectsMissingHomeForCalibrationPaths) {
 }
 
 TEST(DriverConfig, RejectsInvalidInputsWithoutVendorExit) {
-  vlr::DriverConfig config;
+  vlr::DriverConfig config = syntheticConfig();
   vjl::WJDriverParam param;
   std::string error;
 
@@ -107,12 +134,12 @@ TEST(DriverConfig, RejectsInvalidInputsWithoutVendorExit) {
   EXPECT_FALSE(vlr::make_driver_param(config, param, error));
   EXPECT_EQ(error, "unsupported lidar_type: unknown");
 
-  config = vlr::DriverConfig{};
+  config = syntheticConfig();
   config.host_address = "192.168.2.999";
   EXPECT_FALSE(vlr::make_driver_param(config, param, error));
   EXPECT_EQ(error, "invalid host_address: 192.168.2.999");
 
-  config = vlr::DriverConfig{};
+  config = syntheticConfig();
   config.max_distance = config.min_distance;
   EXPECT_FALSE(vlr::make_driver_param(config, param, error));
   EXPECT_EQ(error, "max_distance must be greater than min_distance");
@@ -128,7 +155,7 @@ TEST(DriverConfig, RejectsNonFiniteDistanceLimits) {
   }};
 
   for (const auto &[min_distance, max_distance] : limits) {
-    vlr::DriverConfig config;
+    vlr::DriverConfig config = syntheticConfig();
     config.min_distance = min_distance;
     config.max_distance = max_distance;
     vjl::WJDriverParam param;
@@ -151,14 +178,14 @@ TEST(DriverConfig, RejectsInvalidScanAngles) {
   }};
 
   for (const float angle : invalid_angles) {
-    vlr::DriverConfig config;
+    vlr::DriverConfig config = syntheticConfig();
     config.start_angle = angle;
     vjl::WJDriverParam param;
     std::string error;
     EXPECT_FALSE(vlr::make_driver_param(config, param, error));
     EXPECT_EQ(error, "start_angle must be finite and in [0, 360]");
 
-    config = vlr::DriverConfig{};
+    config = syntheticConfig();
     config.end_angle = angle;
     EXPECT_FALSE(vlr::make_driver_param(config, param, error));
     EXPECT_EQ(error, "end_angle must be finite and in [0, 360]");
@@ -173,7 +200,7 @@ TEST(DriverConfig, AcceptsSupportedScanAngleSemantics) {
   }};
 
   for (const auto &[start_angle, end_angle] : angle_ranges) {
-    vlr::DriverConfig config;
+    vlr::DriverConfig config = syntheticConfig();
     config.start_angle = start_angle;
     config.end_angle = end_angle;
     vjl::WJDriverParam param;
@@ -204,7 +231,7 @@ TEST(DriverConfig, ValidatesDoubleScanAnglesBeforeNarrowing) {
 
 TEST(DriverConfig, RejectsZeroMsopPorts) {
   for (const bool host_port : {true, false}) {
-    vlr::DriverConfig config;
+    vlr::DriverConfig config = syntheticConfig();
     if (host_port) {
       config.host_msop_port = 0;
     } else {
@@ -219,7 +246,7 @@ TEST(DriverConfig, RejectsZeroMsopPorts) {
 }
 
 TEST(DriverConfig, RejectsNegativeMinimumDistance) {
-  vlr::DriverConfig config;
+  vlr::DriverConfig config = syntheticConfig();
   config.min_distance = -0.01F;
   vjl::WJDriverParam param;
   std::string error;
@@ -230,7 +257,7 @@ TEST(DriverConfig, RejectsNegativeMinimumDistance) {
 
 TEST(DriverConfig, RejectsEmptyFrameNames) {
   for (const bool lidar_frame : {true, false}) {
-    vlr::DriverConfig config;
+    vlr::DriverConfig config = syntheticConfig();
     if (lidar_frame) {
       config.lidar_frame.clear();
     } else {
@@ -246,7 +273,7 @@ TEST(DriverConfig, RejectsEmptyFrameNames) {
 
 TEST(DriverConfig, RejectsEmptyTopicNames) {
   for (const bool point_cloud_topic : {true, false}) {
-    vlr::DriverConfig config;
+    vlr::DriverConfig config = syntheticConfig();
     if (point_cloud_topic) {
       config.point_cloud_topic.clear();
     } else {

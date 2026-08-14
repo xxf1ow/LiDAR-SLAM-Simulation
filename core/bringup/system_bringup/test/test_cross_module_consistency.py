@@ -1,6 +1,7 @@
 """Cross-module source contracts that do not belong to runtime validation."""
 import os
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -16,6 +17,12 @@ GICP_TEMPLATE = ROOT / "core/bringup/system_bringup/config/templates/gicp.yaml"
 GICP_NODE_SOURCE = ROOT / "core/localization/gicp_localization/src/gicp_localization_node.cpp"
 GICP_ALIGNER_HEADER = ROOT / "core/localization/gicp_localization/include/gicp_localization/gicp_aligner.hpp"
 GICP_NODE_HEADER = ROOT / "core/localization/gicp_localization/include/gicp_localization/gicp_localization_node.hpp"
+VANJEE_TEMPLATE = ROOT / "core/bringup/system_bringup/config/templates/vanjee_lidar.yaml"
+VANJEE_NODE_SOURCE = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/src/vanjee_lidar_node.cpp"
+VANJEE_DRIVER_CONFIG = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/include/vanjee_lidar_ros/driver_config.hpp"
+VANJEE_LAUNCH = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/launch/vanjee_lidar.launch.py"
+VANJEE_CMAKE = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/CMakeLists.txt"
+RETIRED_VANJEE_CONFIG = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/config/vanjee_722.yaml"
 
 
 def _load_yaml(path):
@@ -187,3 +194,45 @@ def test_gicp_source_structs_and_members_have_no_tuning_fallbacks():
         assert f"{field} =" not in aligner_header
     assert "fitness_threshold_{" not in node_header
     assert "min_scan_points_{" not in node_header
+
+
+def test_vanjee_template_parameters_are_declared_once_without_defaults():
+    template_keys = set(
+        _load_yaml(VANJEE_TEMPLATE)["vanjee_lidar"]["ros__parameters"]
+    ) - {"use_sim_time"}
+    calls = _calls_named(
+        VANJEE_NODE_SOURCE.read_text(encoding="utf-8"), "declare_parameter"
+    )
+    declared_names = [call.split('"')[1] for call in calls]
+
+    assert set(declared_names) == template_keys
+    assert len(declared_names) == len(template_keys)
+    assert all(call.startswith("declare_parameter<") for call in calls)
+    assert all(_top_level_argument_count(call) == 1 for call in calls)
+
+
+def test_vanjee_launch_requires_an_explicit_generated_config_file():
+    source = VANJEE_LAUNCH.read_text(encoding="utf-8")
+    calls = _calls_named(source, "DeclareLaunchArgument")
+    config_file_call = next(call for call in calls if '"config_file"' in call)
+
+    assert "default_value" not in config_file_call
+    assert "FindPackageShare" not in source
+    assert "PathJoinSubstitution" not in source
+
+
+def test_vanjee_retired_package_config_is_not_protected_or_installed():
+    assert not RETIRED_VANJEE_CONFIG.exists()
+    assert "vanjee_722.yaml" not in Path(rcc.__file__).read_text(encoding="utf-8")
+    assert "install(DIRECTORY config" not in VANJEE_CMAKE.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_vanjee_driver_config_has_only_empty_or_zero_unconfigured_members():
+    source = VANJEE_DRIVER_CONFIG.read_text(encoding="utf-8")
+
+    assert not re.search(
+        r"\b(?:std::string|uint16_t|float|bool)\s+\w+\s*\{[^}]+\};",
+        source,
+    )

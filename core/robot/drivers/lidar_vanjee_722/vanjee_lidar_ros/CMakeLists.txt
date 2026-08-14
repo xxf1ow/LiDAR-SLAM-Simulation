@@ -39,7 +39,7 @@ ament_target_dependencies(vanjee_lidar_node rclcpp sensor_msgs)
 install(TARGETS vanjee_lidar_node
   RUNTIME DESTINATION lib/${PROJECT_NAME}
 )
-install(DIRECTORY config launch doc
+install(DIRECTORY launch doc
   DESTINATION share/${PROJECT_NAME}
 )
 
