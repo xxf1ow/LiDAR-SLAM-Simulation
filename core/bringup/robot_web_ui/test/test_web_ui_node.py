@@ -6,6 +6,10 @@ import types
 import pytest
 
 
+SYNTHETIC_MAX_LINEAR_SPEED = 1.7
+SYNTHETIC_MAX_ANGULAR_SPEED = 2.3
+
+
 @pytest.fixture
 def node_module(monkeypatch):
     class FakeNode:
@@ -171,8 +175,8 @@ def test_manual_command_publishes_one_stamped_base_link_message(node_module):
     node = bare_node(node_module)
     publisher = FakePublisher()
     stamp = object()
-    node._max_linear = 1.5
-    node._max_angular = 2.0
+    node._max_linear = SYNTHETIC_MAX_LINEAR_SPEED
+    node._max_angular = SYNTHETIC_MAX_ANGULAR_SPEED
     node._gate_mode = "manual"
     node._manual_publisher = publisher
     node.get_clock = lambda: types.SimpleNamespace(
@@ -185,15 +189,17 @@ def test_manual_command_publishes_one_stamped_base_link_message(node_module):
     message = publisher.messages[0]
     assert message.header.stamp is stamp
     assert message.header.frame_id == "base_link"
-    assert message.twist.linear.x == pytest.approx(0.3)
+    assert message.twist.linear.x == pytest.approx(
+        SYNTHETIC_MAX_LINEAR_SPEED * 20 / 100.0
+    )
     assert message.twist.angular.z == 0.0
 
 
 def test_nonzero_manual_command_is_rejected_outside_manual_mode(node_module):
     node = bare_node(node_module)
     publisher = FakePublisher()
-    node._max_linear = 1.5
-    node._max_angular = 2.0
+    node._max_linear = SYNTHETIC_MAX_LINEAR_SPEED
+    node._max_angular = SYNTHETIC_MAX_ANGULAR_SPEED
     node._gate_mode = "automatic"
     node._manual_publisher = publisher
 
@@ -212,8 +218,8 @@ def test_zero_manual_command_remains_a_safe_noop_outside_manual_mode(
 ):
     node = bare_node(node_module)
     publisher = FakePublisher()
-    node._max_linear = 1.5
-    node._max_angular = 2.0
+    node._max_linear = SYNTHETIC_MAX_LINEAR_SPEED
+    node._max_angular = SYNTHETIC_MAX_ANGULAR_SPEED
     node._gate_mode = "automatic"
     node._manual_publisher = publisher
     node.get_clock = lambda: types.SimpleNamespace(

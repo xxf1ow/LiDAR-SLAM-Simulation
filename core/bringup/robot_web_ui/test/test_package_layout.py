@@ -97,7 +97,7 @@ def test_node_has_exact_ros_contract_and_parameters():
         ("Trigger", "/cmd_vel_gate/resume_automatic"),
     }
 
-    parameters = {
+    parameters = [
         (
             ast.literal_eval(call.args[0]),
             ast.unparse(call.args[1]),
@@ -107,13 +107,15 @@ def test_node_has_exact_ros_contract_and_parameters():
         for call in calls
         if isinstance(call.func, ast.Attribute)
         and call.func.attr == "declare_parameter"
-    }
-    assert parameters == {
+    ]
+    expected_parameters = {
         ("max_linear_speed", "Parameter.Type.DOUBLE", 2, 0),
         ("max_angular_speed", "Parameter.Type.DOUBLE", 2, 0),
         ("host", "Parameter.Type.STRING", 2, 0),
         ("port", "Parameter.Type.INTEGER", 2, 0),
     }
+    assert len(parameters) == len(expected_parameters)
+    assert set(parameters) == expected_parameters
     assert any(
         isinstance(node, ast.ImportFrom)
         and node.module == "rclpy.parameter"

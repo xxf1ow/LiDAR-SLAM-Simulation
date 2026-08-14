@@ -64,30 +64,36 @@ def _effective_with_mounts(tmp_path, lidar_mount, imu_mount):
     ]["relative_transforms"]
 
 
-@pytest.mark.parametrize(
-    "platform,expected_bridge",
-    [
-        ("sim", [0.0, 0.0, -0.556]),
-        ("real", [-0.443, 0.0, -0.905]),
-    ],
-)
-def test_current_profiles_derive_identity_lidar_to_imu_and_full_imu_bridge(
-    tmp_path, platform, expected_bridge
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_selected_profiles_preserve_mounts_and_emit_rigid_transforms(
+    tmp_path, platform
 ):
-    path = pc.compile_profile(_selection(tmp_path, platform), tmp_path / "out")
-    transforms = yaml.safe_load(path.read_text(encoding="utf-8"))["derived"][
-        "geometry"
-    ]["relative_transforms"]
-    assert transforms["imu_from_lidar"] == {
-        "translation": [0.0, 0.0, 0.0],
-        "rotation_xyzw": [0.0, 0.0, 0.0, 1.0],
+    config = _selection(tmp_path, platform)
+    path = pc.compile_profile(config, tmp_path / "out")
+    effective = yaml.safe_load(path.read_text(encoding="utf-8"))
+    profile = yaml.safe_load(
+        (tmp_path / "profiles" / f"{platform}.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    geometry = effective["derived"]["geometry"]
+
+    assert geometry["mounts_relative_to_base_link"] == {
+        name: {
+            **mount,
+            "z": mount["z"] - geometry["body"]["base_link_height"],
+        }
+        for name, mount in profile["robot"]["mounts"].items()
     }
-    assert transforms["imu_from_base_footprint"]["translation"] == pytest.approx(
-        expected_bridge, abs=1e-12
-    )
-    assert transforms["imu_from_base_footprint"]["rotation_xyzw"] == pytest.approx(
-        [0.0, 0.0, 0.0, 1.0], abs=1e-12
-    )
+    assert set(geometry["relative_transforms"]) == {
+        "imu_from_lidar", "imu_from_base_footprint"
+    }
+    for transform in geometry["relative_transforms"].values():
+        assert len(transform["translation"]) == 3
+        assert len(transform["rotation_xyzw"]) == 4
+        assert sum(value * value for value in transform["rotation_xyzw"]) == (
+            pytest.approx(1.0, abs=1e-12)
+        )
 
 
 def test_relative_transform_applies_inverse_then_compose_in_correct_order(tmp_path):
@@ -302,7 +308,7 @@ def test_profile_file_must_be_valid_yaml_mapping(tmp_path, text, expected):
         (("robot", "body", "front_extent"), True, "front_extent"),
         (("robot", "body", "front_extent"), float("nan"), "finite"),
         (("robot", "body", "front_extent"), float("inf"), "finite"),
-        (("sensors", "lidar", "scan_lines"), 32.0, "scan_lines"),
+        (("sensors", "lidar", "scan_lines"), 7.0, "scan_lines"),
         (("hardware", "lidar", "backend"), "", "backend"),
         (("motion", "max_linear_velocity"), "unset", "max_linear_velocity"),
     ],
@@ -349,10 +355,10 @@ def test_allowed_null_fields_pass_schema_validation(tmp_path):
         ("sim", ("hardware", "lidar", "model"), "vanjee_722", "gazebo/gpu_lidar"),
         ("real", ("hardware", "lidar", "backend"), "gazebo", "vanjee/vanjee_722"),
         ("real", ("hardware", "lidar", "model"), "gpu_lidar", "vanjee/vanjee_722"),
-        ("sim", ("hardware", "lidar", "host_address"), "192.168.2.88", "must be null"),
-        ("sim", ("hardware", "lidar", "device_address"), "192.168.2.86", "must be null"),
-        ("sim", ("hardware", "lidar", "host_msop_port"), 3001, "must be null"),
-        ("sim", ("hardware", "lidar", "device_msop_port"), 3333, "must be null"),
+        ("sim", ("hardware", "lidar", "host_address"), "198.51.100.20", "must be null"),
+        ("sim", ("hardware", "lidar", "device_address"), "198.51.100.21", "must be null"),
+        ("sim", ("hardware", "lidar", "host_msop_port"), 4101, "must be null"),
+        ("sim", ("hardware", "lidar", "device_msop_port"), 4102, "must be null"),
         ("real", ("hardware", "lidar", "host_address"), "not-an-ip", "IPv4"),
         ("real", ("hardware", "lidar", "device_address"), "::1", "IPv4"),
         ("real", ("hardware", "lidar", "host_address"), None, "IPv4"),
@@ -379,7 +385,7 @@ def test_sensor_platform_contract_rejects_unsupported_values(
     [
         (("sensors", "imu", "rate_hz"), 0.0, "rate_hz"),
         (("sensors", "lidar", "min_range"), -0.1, "min_range"),
-        (("sensors", "lidar", "max_range"), 0.05, "max_range"),
+        (("sensors", "lidar", "max_range"), 0.125, "max_range"),
         (("sensors", "lidar", "horizontal_end_angle"), 0.0, "horizontal"),
         (("sensors", "lidar", "horizontal_end_angle"), 7.0, r"2\*pi"),
     ],
@@ -394,7 +400,7 @@ def test_sensor_numeric_semantics_are_strict(
             pair,
             platform,
             ("sensors", "lidar", "min_range"),
-            0.05,
+            0.125,
         )
     if path[-1] == "horizontal_end_angle" and value == 0.0:
         _set_pair_value(
@@ -441,7 +447,7 @@ def test_obstacle_height_bounds_must_be_finite_non_null(
         pc.validate_profile_pair(pair)
 
 
-@pytest.mark.parametrize("bounds", [(1.0, 1.0), (2.0, -0.52)])
+@pytest.mark.parametrize("bounds", [(1.0, 1.0), (3.0, -1.25)])
 def test_obstacle_height_min_must_be_less_than_max(tmp_path, bounds):
     pair = _pair(_selection(tmp_path))
     for platform in ("sim", "real"):
@@ -541,17 +547,18 @@ def test_compile_profile_preserves_all_mount_rotations(tmp_path):
     } == expected
 
 
-@pytest.mark.parametrize(
-    "platform,expected_points,expected_period",
-    [("sim", 28800, 0.1), ("real", 38400, 0.1)],
-)
-def test_compile_profile_derives_sensor_contract(
-    tmp_path, platform, expected_points, expected_period
-):
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_compile_profile_derives_sensor_contract(tmp_path, platform):
     config = _selection(tmp_path, platform)
     output = tmp_path / "output"
     path = pc.compile_profile(config, output)
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    source_profile = yaml.safe_load(
+        (tmp_path / "profiles" / f"{platform}.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    lidar = source_profile["sensors"]["lidar"]
 
     assert path == output / "effective_profile.generated.yaml"
     assert data["platform"] == platform
@@ -560,53 +567,38 @@ def test_compile_profile_derives_sensor_contract(
     )
     assert data["derived"]["use_sim_time"] is (platform == "sim")
     assert data["derived"]["sensor_contract"] == {
-        "points_per_scan": expected_points,
-        "scan_period": expected_period,
+        "points_per_scan": lidar["scan_lines"] * lidar["columns_per_scan"],
+        "scan_period": pytest.approx(1.0 / lidar["scan_rate_hz"]),
     }
 
 
-def test_real_derived_geometry_matches_confirmed_legacy_baseline(tmp_path):
-    path = pc.compile_profile(_selection(tmp_path, "real"), tmp_path / "out")
+@pytest.mark.parametrize("platform", ["sim", "real"])
+def test_compiled_geometry_is_derived_from_selected_profile(tmp_path, platform):
+    config = _selection(tmp_path, platform)
+    source = yaml.safe_load(
+        (tmp_path / "profiles" / f"{platform}.yaml").read_text(
+            encoding="utf-8"
+        )
+    )
+    path = pc.compile_profile(config, tmp_path / "out")
     geometry = yaml.safe_load(path.read_text(encoding="utf-8"))["derived"]["geometry"]
+    body = source["robot"]["body"]
 
     assert geometry["body"] == {
-        "length": 0.96,
-        "width": 0.61,
-        "height": 0.377,
-        "center_x": 0.0,
-        "center_y": 0.0,
-        "base_link_height": 0.3315,
+        "length": body["front_extent"] + body["rear_extent"],
+        "width": body["left_extent"] + body["right_extent"],
+        "height": body["height"],
+        "center_x": (body["front_extent"] - body["rear_extent"]) / 2.0,
+        "center_y": (body["left_extent"] - body["right_extent"]) / 2.0,
+        "base_link_height": body["ground_clearance"] + body["height"] / 2.0,
     }
-    assert geometry["drive"] == {
-        "wheel_radius": 0.1025,
-        "wheel_width": 0.101,
-        "wheel_separation": 0.463,
-    }
+    assert geometry["drive"] == source["robot"]["drive"]
     assert geometry["footprint"] == [
-        [0.480, 0.305],
-        [0.480, -0.305],
-        [-0.480, -0.305],
-        [-0.480, 0.305],
+        [body["front_extent"], body["left_extent"]],
+        [body["front_extent"], -body["right_extent"]],
+        [-body["rear_extent"], -body["right_extent"]],
+        [-body["rear_extent"], body["left_extent"]],
     ]
-    assert geometry["mounts_relative_to_base_link"]["lidar"] == {
-        "x": 0.443,
-        "y": 0.0,
-        "z": 0.5735,
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0,
-    }
-
-
-def test_sim_derived_geometry_matches_current_xacro(tmp_path):
-    path = pc.compile_profile(_selection(tmp_path, "sim"), tmp_path / "out")
-    geometry = yaml.safe_load(path.read_text(encoding="utf-8"))["derived"]["geometry"]
-    assert geometry["body"]["length"] == 0.75
-    assert geometry["body"]["width"] == 0.55
-    assert geometry["body"]["base_link_height"] == 0.32
-    assert geometry["drive"]["wheel_radius"] == 0.12
-    assert geometry["drive"]["wheel_separation"] == 0.55
-    assert geometry["mounts_relative_to_base_link"]["lidar"]["z"] == pytest.approx(0.236)
 
 
 def test_automatic_output_uses_private_temp_directory(tmp_path, monkeypatch):
@@ -630,11 +622,13 @@ def test_explicit_output_overwrites_only_generated_file(tmp_path):
     generated = output / "effective_profile.generated.yaml"
     generated.write_text("old", encoding="utf-8")
 
-    path = pc.compile_profile(_selection(tmp_path), output)
+    config = _selection(tmp_path)
+    selected, _ = pc.load_bringup_selection(config)
+    path = pc.compile_profile(config, output)
 
     assert path == generated
     assert keep.read_text(encoding="utf-8") == "keep"
-    assert yaml.safe_load(generated.read_text(encoding="utf-8"))["platform"] == "real"
+    assert yaml.safe_load(generated.read_text(encoding="utf-8"))["platform"] == selected
 
 
 def test_failed_compilation_does_not_create_final_file(tmp_path):

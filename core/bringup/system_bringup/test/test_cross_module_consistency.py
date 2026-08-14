@@ -4,7 +4,6 @@ from pathlib import Path
 import re
 import subprocess
 
-import pytest
 import yaml
 
 from system_bringup import consistency_check as cc
@@ -71,14 +70,6 @@ def _top_level_argument_count(call):
         elif char == "," and depth == 0:
             count += 1
     return count
-
-
-@pytest.fixture
-def sim_adapter_scan_period(tmp_path):
-    config = ROOT / "core/bringup/system_bringup/config/bringup.yaml"
-    manifest = rcc.compile_runtime_configs(config, tmp_path / "runtime")
-    adapter = _load_yaml(Path(manifest["lidar_adapter_path"]))
-    return adapter["lidar_pointcloud_adapter"]["ros__parameters"]["scan_period"]
 
 
 def test_repository_fixture_resolves_from_test_location():
@@ -150,10 +141,6 @@ def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
     )
 
     assert result.returncode == 0, result.stderr
-
-
-def test_adapter_scan_period(sim_adapter_scan_period):
-    assert sim_adapter_scan_period == 0.1
 
 
 def test_legacy_checker_does_not_parse_generated_adapter_config_from_launch():

@@ -15,6 +15,10 @@ from robot_web_ui.http_server import ActionUnavailable, create_server
 from robot_web_ui.manual_command import command_values
 
 
+SYNTHETIC_MAX_LINEAR_SPEED = 1.7
+SYNTHETIC_MAX_ANGULAR_SPEED = 2.3
+
+
 WEB_UI_NODE_PATH = (
     Path(__file__).parents[1]
     / "robot_web_ui"
@@ -40,7 +44,12 @@ class FakeActions:
         }
 
     def manual_command(self, direction, speed_percent):
-        command_values(direction, speed_percent, 1.5, 2.0)
+        command_values(
+            direction,
+            speed_percent,
+            SYNTHETIC_MAX_LINEAR_SPEED,
+            SYNTHETIC_MAX_ANGULAR_SPEED,
+        )
         if self.conflict:
             raise http_server.ActionConflict(
                 "manual control is not active",

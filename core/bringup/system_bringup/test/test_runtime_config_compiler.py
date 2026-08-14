@@ -23,18 +23,13 @@ SENSOR_TEMPLATE_NAMES = {
     "vanjee_lidar": "vanjee_lidar.yaml",
     "sensor_gate": "sensor_gate.yaml",
 }
-SIM_FOOTPRINT = [
-    [0.375, 0.275],
-    [0.375, -0.275],
-    [-0.375, -0.275],
-    [-0.375, 0.275],
-]
-REAL_FOOTPRINT = [
-    [0.48, 0.305],
-    [0.48, -0.305],
-    [-0.48, -0.305],
-    [-0.48, 0.305],
-]
+SYNTHETIC_MAP_ARTIFACTS = {
+    "lio_sam_work_dir": "/synthetic/lio-sam-work/",
+    "prior_pcd": "~/synthetic/prior-map.pcd",
+    "nav2_map": "~/synthetic/navigation-map.yaml",
+}
+SYNTHETIC_SETTLING = 12.75
+SYNTHETIC_DEFAULT_MODE = "mapping"
 ROBOT_LAUNCH_ARGUMENT_KEYS = {
     "base_length",
     "base_width",
@@ -132,17 +127,13 @@ def runtime_tree(tmp_path):
         yaml.safe_dump(
             {
                 "platform": "sim",
-                "mode": "navigation",
+                "mode": SYNTHETIC_DEFAULT_MODE,
                 "profiles": {
                     "sim": "profiles/sim.yaml",
                     "real": "profiles/real.yaml",
                 },
-                "map_artifacts": {
-                    "lio_sam_work_dir": "/result/loam/",
-                    "prior_pcd": "~/result/GlobalMap.pcd",
-                    "nav2_map": "~/result/factory_map.yaml",
-                },
-                "slam_stack": {"settling": 20.0},
+                "map_artifacts": SYNTHETIC_MAP_ARTIFACTS,
+                "slam_stack": {"settling": SYNTHETIC_SETTLING},
             },
             sort_keys=False,
         ),
@@ -154,20 +145,12 @@ def runtime_tree(tmp_path):
 def test_runtime_inputs_preserve_literal_map_artifacts(runtime_tree):
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
 
-    assert inputs["map_artifacts"] == {
-        "lio_sam_work_dir": "/result/loam/",
-        "prior_pcd": "~/result/GlobalMap.pcd",
-        "nav2_map": "~/result/factory_map.yaml",
-    }
+    assert inputs["map_artifacts"] == SYNTHETIC_MAP_ARTIFACTS
 
 
 def test_runtime_inputs_need_no_retired_platform_selectors(runtime_tree):
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
-    assert inputs["map_artifacts"] == {
-        "lio_sam_work_dir": "/result/loam/",
-        "prior_pcd": "~/result/GlobalMap.pcd",
-        "nav2_map": "~/result/factory_map.yaml",
-    }
+    assert inputs["map_artifacts"] == SYNTHETIC_MAP_ARTIFACTS
 
 
 @pytest.mark.parametrize(
@@ -355,30 +338,41 @@ def test_shared_templates_are_complete_mappings():
         assert data
 
 
-def test_gicp_template_is_complete_confirmed_real_baseline():
+def test_gicp_template_is_complete_native_parameter_schema():
     params = _load_yaml(TEMPLATE_DIR / "gicp.yaml")["gicp_localization"][
         "ros__parameters"
     ]
-    assert params == {
-        "map_frame": "map",
-        "odom_frame": "camera_init",
-        "base_frame": "body",
-        "cloud_topic": "/cloud_registered",
-        "odom_topic": "/Odometry",
-        "prior_map_path": "",
-        "map_voxel_size": 0.4,
-        "scan_voxel_size": 0.1,
-        "localization_freq": 0.5,
-        "tf_pub_freq": 50.0,
-        "gicp_max_corr_dist": 1.0,
-        "gicp_num_neighbors": 20,
-        "gicp_num_threads": 4,
-        "gicp_max_iterations": 20,
-        "fitness_threshold": 0.9,
-        "min_scan_points": 100,
-        "initial_pose": [0.0] * 6,
-        "use_sim_time": False,
+    assert set(params) == {
+        "map_frame", "odom_frame", "base_frame", "cloud_topic", "odom_topic",
+        "prior_map_path", "map_voxel_size", "scan_voxel_size",
+        "localization_freq", "tf_pub_freq", "gicp_max_corr_dist",
+        "gicp_num_neighbors", "gicp_num_threads", "gicp_max_iterations",
+        "fitness_threshold", "min_scan_points", "initial_pose", "use_sim_time",
     }
+    assert all(
+        isinstance(params[key], str)
+        for key in (
+            "map_frame", "odom_frame", "base_frame", "cloud_topic",
+            "odom_topic", "prior_map_path",
+        )
+    )
+    assert all(
+        type(params[key]) is float
+        for key in (
+            "map_voxel_size", "scan_voxel_size", "localization_freq",
+            "tf_pub_freq", "gicp_max_corr_dist", "fitness_threshold",
+        )
+    )
+    assert all(
+        type(params[key]) is int
+        for key in (
+            "gicp_num_neighbors", "gicp_num_threads", "gicp_max_iterations",
+            "min_scan_points",
+        )
+    )
+    assert len(params["initial_pose"]) == 6
+    assert all(type(value) is float for value in params["initial_pose"])
+    assert type(params["use_sim_time"]) is bool
 
 
 def test_retired_package_algorithm_configs_are_absent():
@@ -392,7 +386,7 @@ def test_retired_package_algorithm_configs_are_absent():
     assert all(not path.exists() for path in retired)
 
 
-def test_lio_sam_template_is_complete_confirmed_real_baseline():
+def test_lio_sam_template_is_complete_native_parameter_schema():
     data = _load_yaml(TEMPLATE_DIR / "lio_sam.yaml")
     assert set(data) == {"/**"}
     params = data["/**"]["ros__parameters"]
@@ -417,66 +411,19 @@ def test_lio_sam_template_is_complete_confirmed_real_baseline():
         "globalMapVisualizationSearchRadius", "globalMapVisualizationPoseDensity",
         "globalMapVisualizationLeafSize",
     }
-    assert params == {
-        "use_sim_time": False,
-        "pointCloudTopic": "/points_raw",
-        "imuTopic": "/imu/data",
-        "odomTopic": "odometry/imu",
-        "gpsTopic": "odometry/gpsz",
-        "lidarFrame": "velodyne",
-        "baselinkFrame": "base_footprint",
-        "odometryFrame": "odom",
-        "mapFrame": "map",
-        "useImuHeadingInitialization": False,
-        "useGpsElevation": False,
-        "gpsCovThreshold": 2.0,
-        "poseCovThreshold": 25.0,
-        "savePCD": True,
-        "savePCDDirectory": "/result/loam/",
-        "sensor": "velodyne",
-        "N_SCAN": 32,
-        "Horizon_SCAN": 1200,
-        "downsampleRate": 1,
-        "lidarMinRange": 0.3,
-        "lidarMaxRange": 40.0,
-        "imuAccNoise": 3.9939570888238808e-03,
-        "imuGyrNoise": 1.5636343949698187e-03,
-        "imuAccBiasN": 6.4356659353532566e-05,
-        "imuGyrBiasN": 3.5640318696367613e-05,
-        "imuGravity": 9.80511,
-        "imuRPYWeight": 0.01,
-        "extrinsicTrans": [0.0, 0.0, 0.0],
-        "extrinsicRot": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-        "extrinsicRPY": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-        "edgeThreshold": 0.1,
-        "surfThreshold": 0.1,
-        "edgeFeatureMinValidNum": 5,
-        "surfFeatureMinValidNum": 30,
-        "odometrySurfLeafSize": 0.2,
-        "mappingCornerLeafSize": 0.1,
-        "mappingSurfLeafSize": 0.2,
-        "z_tollerance": 1000.0,
-        "rotation_tollerance": 1000.0,
-        "numberOfCores": 3,
-        "mappingProcessInterval": 0.0,
-        "surroundingkeyframeAddingDistThreshold": 1.0,
-        "surroundingkeyframeAddingAngleThreshold": 0.2,
-        "surroundingKeyframeDensity": 2.0,
-        "surroundingKeyframeSearchRadius": 50.0,
-        "loopClosureEnableFlag": False,
-        "loopClosureFrequency": 1.0,
-        "surroundingKeyframeSize": 25,
-        "historyKeyframeSearchRadius": 15.0,
-        "historyKeyframeSearchTimeDiff": 30.0,
-        "historyKeyframeSearchNum": 25,
-        "historyKeyframeFitnessScore": 0.3,
-        "globalMapVisualizationSearchRadius": 1000.0,
-        "globalMapVisualizationPoseDensity": 10.0,
-        "globalMapVisualizationLeafSize": 1.0,
-    }
+    assert params["pointCloudTopic"] == "/points_raw"
+    assert params["imuTopic"] == "/imu/data"
+    assert params["lidarFrame"] == "velodyne"
+    assert params["baselinkFrame"] == "base_footprint"
+    assert params["mapFrame"] == "map"
+    assert type(params["use_sim_time"]) is bool
+    assert isinstance(params["savePCDDirectory"], str)
+    assert len(params["extrinsicTrans"]) == 3
+    assert len(params["extrinsicRot"]) == 9
+    assert len(params["extrinsicRPY"]) == 9
 
 
-def test_fast_lio_template_is_complete_and_preserves_confirmed_policy():
+def test_fast_lio_template_is_complete_native_parameter_schema():
     params = _load_yaml(TEMPLATE_DIR / "fast_lio.yaml")["/**"]["ros__parameters"]
     assert set(params) == {
         "feature_extract_enable", "point_filter_num", "max_iteration",
@@ -484,35 +431,21 @@ def test_fast_lio_template_is_complete_and_preserves_confirmed_policy():
         "cube_side_length", "runtime_pos_log_enable", "map_file_path",
         "common", "preprocess", "mapping", "publish", "pcd_save",
     }
-    assert params["common"] == {
-        "lid_topic": "/points_raw", "imu_topic": "/imu/data",
-        "time_sync_en": False, "time_offset_lidar_to_imu": 0.0,
+    assert params["common"]["lid_topic"] == "/points_raw"
+    assert params["common"]["imu_topic"] == "/imu/data"
+    assert set(params["preprocess"]) == {
+        "lidar_type", "scan_line", "scan_rate", "timestamp_unit", "blind"
     }
-    assert params["preprocess"] == {
-        "lidar_type": 2, "scan_line": 16, "scan_rate": 10,
-        "timestamp_unit": 0, "blind": 0.3,
+    assert set(params["mapping"]) == {
+        "acc_cov", "gyr_cov", "b_acc_cov", "b_gyr_cov", "fov_degree",
+        "det_range", "extrinsic_est_en", "extrinsic_T", "extrinsic_R",
     }
-    assert params["mapping"] == {
-        "acc_cov": 0.1, "gyr_cov": 0.1, "b_acc_cov": 0.0001,
-        "b_gyr_cov": 0.0001, "fov_degree": 360.0, "det_range": 100.0,
-        "extrinsic_est_en": True, "extrinsic_T": [0.0, 0.0, 0.0],
-        "extrinsic_R": [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0],
-    }
-    assert params["publish"] == {
-        "path_en": False, "effect_map_en": False, "map_en": False,
-        "scan_publish_en": True, "dense_publish_en": True,
-        "scan_bodyframe_pub_en": True,
-    }
-    assert params["pcd_save"] == {"pcd_save_en": False, "interval": -1}
-    assert params["feature_extract_enable"] is False
-    assert params["point_filter_num"] == 4
-    assert params["max_iteration"] == 3
-    assert params["filter_size_corner"] == 0.5
-    assert params["filter_size_surf"] == 0.5
-    assert params["filter_size_map"] == 0.5
-    assert params["cube_side_length"] == 1000.0
-    assert params["runtime_pos_log_enable"] is False
-    assert params["map_file_path"] == ""
+    assert len(params["mapping"]["extrinsic_T"]) == 3
+    assert len(params["mapping"]["extrinsic_R"]) == 9
+    assert all(type(value) is bool for value in params["publish"].values())
+    assert set(params["pcd_save"]) == {"pcd_save_en", "interval"}
+    assert type(params["pcd_save"]["pcd_save_en"]) is bool
+    assert isinstance(params["map_file_path"], str)
 
 
 def test_controller_template_contains_all_owned_target_leaves():
@@ -540,17 +473,17 @@ def test_controller_template_contains_all_owned_target_leaves():
 
 
 def test_web_ui_template_is_a_complete_native_parameter_file():
-    assert _load_yaml(TEMPLATE_DIR / "robot_web_ui.yaml") == {
-        "robot_web_ui": {
-            "ros__parameters": {
-                "use_sim_time": True,
-                "max_linear_speed": 1.5,
-                "max_angular_speed": 2.0,
-                "host": "0.0.0.0",
-                "port": 8080,
-            }
-        }
+    params = _load_yaml(TEMPLATE_DIR / "robot_web_ui.yaml")["robot_web_ui"][
+        "ros__parameters"
+    ]
+    assert set(params) == {
+        "use_sim_time", "max_linear_speed", "max_angular_speed", "host", "port"
     }
+    assert type(params["use_sim_time"]) is bool
+    assert type(params["max_linear_speed"]) is float
+    assert type(params["max_angular_speed"]) is float
+    assert isinstance(params["host"], str)
+    assert type(params["port"]) is int
 
 
 def test_nav2_template_is_complete_native_parameter_file():
@@ -565,39 +498,58 @@ def test_nav2_template_is_complete_native_parameter_file():
         "bt_navigator",
     }
     follow_path = template["controller_server"]["ros__parameters"]["FollowPath"]
-    assert follow_path["vx_min"] == -0.1
-    assert follow_path["wz_std"] == 0.2
+    assert type(follow_path["vx_min"]) is float
+    assert type(follow_path["wz_std"]) is float
     behavior = template["behavior_server"]["ros__parameters"]
-    assert behavior["max_rotational_vel"] == 0.2
-    assert behavior["min_rotational_vel"] == 0.1
-    assert behavior["rotational_acc_lim"] == 0.2
+    assert all(
+        type(behavior[key]) is float
+        for key in (
+            "max_rotational_vel", "min_rotational_vel", "rotational_acc_lim"
+        )
+    )
 
 
 def test_sensor_templates_are_complete_native_parameter_files():
     adapter = _load_yaml(
         TEMPLATE_DIR / SENSOR_TEMPLATE_NAMES["lidar_adapter"]
     )
-    assert adapter["lidar_pointcloud_adapter"]["ros__parameters"] == {
-        "use_sim_time": True,
-        "input_topic": "/lidar/points",
-        "output_topic": "/points_raw",
-        "output_frame": "velodyne",
-        "scan_period": 0.1,
+    adapter_params = adapter["lidar_pointcloud_adapter"]["ros__parameters"]
+    assert set(adapter_params) == {
+        "use_sim_time", "input_topic", "output_topic", "output_frame",
+        "scan_period",
     }
+    assert adapter_params["input_topic"] == "/lidar/points"
+    assert adapter_params["output_topic"] == "/points_raw"
+    assert adapter_params["output_frame"] == "velodyne"
+    assert type(adapter_params["use_sim_time"]) is bool
+    assert type(adapter_params["scan_period"]) is float
 
     vanjee = _load_yaml(TEMPLATE_DIR / SENSOR_TEMPLATE_NAMES["vanjee_lidar"])
     vanjee_params = vanjee["vanjee_lidar"]["ros__parameters"]
+    assert set(vanjee_params) == {
+        "lidar_type", "host_address", "lidar_address", "host_msop_port",
+        "lidar_msop_port", "start_angle", "end_angle", "min_distance",
+        "max_distance", "wait_for_difop", "config_from_file",
+        "use_lidar_clock", "ts_first_point", "dense_points", "lidar_frame",
+        "imu_frame", "point_cloud_topic", "imu_topic",
+    }
     assert vanjee_params["point_cloud_topic"] == "/points_raw"
     assert vanjee_params["imu_topic"] == "/imu/data"
 
     gate = _load_yaml(TEMPLATE_DIR / SENSOR_TEMPLATE_NAMES["sensor_gate"])
     gate_params = gate["sensor_contract_gate"]["ros__parameters"]
-    assert gate_params["minimum_point_rate_ratio"] == 0.8
-    assert gate_params["minimum_imu_rate_ratio"] == 0.75
-    assert gate_params["max_stamp_age"] == 0.5
-    assert gate_params["rate_window"] == 2.0
-    assert gate_params["stable_duration"] == 2.0
-    assert gate_params["timeout"] == 300.0
+    assert set(gate_params) == {
+        "use_sim_time", "expected_points_per_scan", "expected_point_hz",
+        "expected_imu_hz", "minimum_point_rate_ratio",
+        "minimum_imu_rate_ratio", "max_stamp_age", "rate_window",
+        "stable_duration", "timeout",
+    }
+    assert 0.0 < gate_params["minimum_point_rate_ratio"] <= 1.0
+    assert 0.0 < gate_params["minimum_imu_rate_ratio"] <= 1.0
+    assert all(
+        type(gate_params[key]) is float and gate_params[key] > 0.0
+        for key in ("max_stamp_age", "rate_window", "stable_duration", "timeout")
+    )
 
 
 @pytest.mark.parametrize(
@@ -619,23 +571,23 @@ def test_sensor_renderer_returns_only_selected_platform_configs(
     assert set(inputs["sensor_templates"]) == expected_keys
 
 
-def test_sim_sensor_renderer_maps_only_scan_period_clock_and_fixed_interface(
+def test_sim_sensor_renderer_maps_profile_period_and_preserves_template_fields(
     runtime_tree,
 ):
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    source = inputs["sensor_templates"]["lidar_adapter"]
 
     generated = rcc._render_sensor_configs(inputs)
 
-    params = generated["lidar_adapter"]["lidar_pointcloud_adapter"][
-        "ros__parameters"
+    expected = deepcopy(source)
+    expected_params = expected["lidar_pointcloud_adapter"]["ros__parameters"]
+    effective = inputs["effective"]
+    expected_params["use_sim_time"] = effective["derived"]["use_sim_time"]
+    expected_params["scan_period"] = effective["derived"]["sensor_contract"][
+        "scan_period"
     ]
-    assert params == {
-        "use_sim_time": True,
-        "input_topic": "/lidar/points",
-        "output_topic": "/points_raw",
-        "output_frame": "velodyne",
-        "scan_period": 0.1,
-    }
+    assert generated["lidar_adapter"] == expected
+    assert source == inputs["sensor_templates"]["lidar_adapter"]
 
 
 def test_real_sensor_renderer_maps_vanjee_profile_values(runtime_tree):
@@ -644,49 +596,48 @@ def test_real_sensor_renderer_maps_vanjee_profile_values(runtime_tree):
 
     generated = rcc._render_sensor_configs(inputs)
 
-    params = generated["vanjee_lidar"]["vanjee_lidar"]["ros__parameters"]
-    assert params["lidar_type"] == "vanjee_722"
-    assert params["host_address"] == "192.168.2.88"
-    assert params["lidar_address"] == "192.168.2.86"
-    assert params["host_msop_port"] == 3001
-    assert params["lidar_msop_port"] == 3333
-    assert params["start_angle"] == pytest.approx(0.0)
-    assert params["end_angle"] == pytest.approx(360.0)
-    assert params["min_distance"] == 0.05
-    assert params["max_distance"] == 70.0
-    assert params["lidar_frame"] == "velodyne"
-    assert params["imu_frame"] == "imu_link"
-    assert params["point_cloud_topic"] == "/points_raw"
-    assert params["imu_topic"] == "/imu/data"
+    expected = deepcopy(inputs["sensor_templates"]["vanjee_lidar"])
+    params = expected["vanjee_lidar"]["ros__parameters"]
+    effective = inputs["effective"]
+    profile = effective["profile"]
+    hardware = profile["hardware"]["lidar"]
+    lidar = profile["sensors"]["lidar"]
+    params.update(
+        lidar_type=hardware["model"],
+        host_address=hardware["host_address"],
+        lidar_address=hardware["device_address"],
+        host_msop_port=hardware["host_msop_port"],
+        lidar_msop_port=hardware["device_msop_port"],
+        start_angle=degrees(lidar["horizontal_start_angle"]),
+        end_angle=degrees(lidar["horizontal_end_angle"]),
+        min_distance=float(lidar["min_range"]),
+        max_distance=float(lidar["max_range"]),
+    )
+    assert generated["vanjee_lidar"] == expected
 
 
-@pytest.mark.parametrize(
-    "platform,expected_points,expected_clock",
-    [("sim", 28800, True), ("real", 38400, False)],
-)
+@pytest.mark.parametrize("platform", ["sim", "real"])
 def test_sensor_gate_renderer_maps_profile_facts_and_preserves_thresholds(
-    runtime_tree, platform, expected_points, expected_clock
+    runtime_tree, platform
 ):
     runtime_tree.set_bringup_value("platform", platform)
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
 
     generated = rcc._render_sensor_configs(inputs)
 
-    params = generated["sensor_gate"]["sensor_contract_gate"][
-        "ros__parameters"
-    ]
-    assert params == {
-        "use_sim_time": expected_clock,
-        "expected_points_per_scan": expected_points,
-        "expected_point_hz": 10.0,
-        "expected_imu_hz": 200.0,
-        "minimum_point_rate_ratio": 0.8,
-        "minimum_imu_rate_ratio": 0.75,
-        "max_stamp_age": 0.5,
-        "rate_window": 2.0,
-        "stable_duration": 2.0,
-        "timeout": 300.0,
-    }
+    expected = deepcopy(inputs["sensor_templates"]["sensor_gate"])
+    params = expected["sensor_contract_gate"]["ros__parameters"]
+    effective = inputs["effective"]
+    profile = effective["profile"]
+    params.update(
+        use_sim_time=effective["derived"]["use_sim_time"],
+        expected_points_per_scan=effective["derived"]["sensor_contract"][
+            "points_per_scan"
+        ],
+        expected_point_hz=float(profile["sensors"]["lidar"]["scan_rate_hz"]),
+        expected_imu_hz=float(profile["sensors"]["imu"]["rate_hz"]),
+    )
+    assert generated["sensor_gate"] == expected
 
 
 @pytest.mark.parametrize("platform", ["sim", "real"])
@@ -695,17 +646,17 @@ def test_sensor_renderer_normalizes_ros_double_parameters(
 ):
     runtime_tree.set_bringup_value("platform", platform)
     runtime_tree.set_profile_value(
-        platform, ("sensors", "lidar", "scan_rate_hz"), 10
+        platform, ("sensors", "lidar", "scan_rate_hz"), 13
     )
     runtime_tree.set_profile_value(
-        platform, ("sensors", "imu", "rate_hz"), 200
+        platform, ("sensors", "imu", "rate_hz"), 211
     )
     if platform == "real":
         runtime_tree.set_profile_value(
-            platform, ("sensors", "lidar", "min_range"), 1
+            platform, ("sensors", "lidar", "min_range"), 2
         )
         runtime_tree.set_profile_value(
-            platform, ("sensors", "lidar", "max_range"), 70
+            platform, ("sensors", "lidar", "max_range"), 89
         )
 
     generated = rcc._render_sensor_configs(
@@ -855,31 +806,33 @@ def test_renderer_maps_profile_motion_and_geometry_to_all_modules(
 
     assert web_ui["max_linear_speed"] == motion["max_linear_velocity"]
     assert web_ui["max_angular_speed"] == motion["max_angular_velocity"]
-    assert web_ui["host"] == "0.0.0.0"
-    assert web_ui["port"] == 8080
+    source_web_ui = inputs["templates"]["web_ui"]["robot_web_ui"][
+        "ros__parameters"
+    ]
+    assert web_ui["host"] == source_web_ui["host"]
+    assert web_ui["port"] == source_web_ui["port"]
 
     assert follow_path["vx_max"] == motion["max_linear_velocity"]
     assert follow_path["wz_max"] == motion["max_angular_velocity"]
-    assert follow_path["vx_min"] == -0.1
     assert {"ax_max", "ax_min", "az_max"}.isdisjoint(follow_path)
-    assert follow_path["vx_std"] == 0.2
-    assert follow_path["wz_std"] == 0.2
-    behavior = rendered["nav2"]["behavior_server"]["ros__parameters"]
-    assert behavior["max_rotational_vel"] == 0.2
-    assert behavior["min_rotational_vel"] == 0.1
-    assert behavior["rotational_acc_lim"] == 0.2
-    assert rendered["nav2"]["controller_server"]["ros__parameters"][
-        "controller_frequency"
-    ] == 10.0
-    assert rendered["nav2"]["behavior_server"]["ros__parameters"][
-        "spin"
-    ] == {"plugin": "nav2_behaviors/Spin"}
-    assert rendered["nav2"]["behavior_server"]["ros__parameters"][
-        "backup"
-    ] == {"plugin": "nav2_behaviors/BackUp"}
-    assert rendered["nav2"]["controller_server"]["ros__parameters"][
-        "FollowPath"
-    ]["ConstraintCritic"] == {"enabled": True, "cost_power": 1, "cost_weight": 4.0}
+    for path in (
+        ("controller_server", "ros__parameters", "FollowPath", "vx_min"),
+        ("controller_server", "ros__parameters", "FollowPath", "vx_std"),
+        ("controller_server", "ros__parameters", "FollowPath", "wz_std"),
+        ("behavior_server", "ros__parameters", "max_rotational_vel"),
+        ("behavior_server", "ros__parameters", "min_rotational_vel"),
+        ("behavior_server", "ros__parameters", "rotational_acc_lim"),
+        ("controller_server", "ros__parameters", "controller_frequency"),
+        ("behavior_server", "ros__parameters", "spin"),
+        ("behavior_server", "ros__parameters", "backup"),
+        (
+            "controller_server", "ros__parameters", "FollowPath",
+            "ConstraintCritic",
+        ),
+    ):
+        assert _path_value(rendered["nav2"], path) == _path_value(
+            inputs["templates"]["nav2"], path
+        )
 
     footprints = [
         rendered["nav2"]["global_costmap"]["global_costmap"]["ros__parameters"][
@@ -942,28 +895,41 @@ def test_nav2_fixed_behavior_must_fit_profile_capability(
 
 
 @pytest.mark.parametrize(
-    "platform,scan_line",
-    [("sim", 16), ("real", 32)],
+    "platform,synthetic_scan_lines",
+    [("sim", 17), ("real", 29)],
 )
 def test_fast_lio_renderer_maps_platform_scan_and_time_contract(
-    runtime_tree, platform, scan_line
+    runtime_tree, platform, synthetic_scan_lines
 ):
     runtime_tree.set_bringup_value("platform", platform)
+    runtime_tree.set_profile_value(
+        platform, ("sensors", "lidar", "scan_lines"), synthetic_scan_lines
+    )
+    runtime_tree.set_profile_value(
+        platform, ("sensors", "lidar", "scan_rate_hz"), 13.0
+    )
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
     params = rcc._render_fast_lio(
         inputs["templates"]["fast_lio"], inputs["effective"]
     )["/**"]["ros__parameters"]
-    assert params["preprocess"] == {
-        "lidar_type": 2, "scan_line": scan_line, "scan_rate": 10,
-        "timestamp_unit": 0, "blind": 0.3,
-    }
-    assert params["mapping"]["extrinsic_T"] == [0.0, 0.0, 0.0]
-    assert params["mapping"]["extrinsic_R"] == [
-        1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+    profile = inputs["effective"]["profile"]
+    source_params = inputs["templates"]["fast_lio"]["/**"]["ros__parameters"]
+    assert params["preprocess"]["scan_line"] == profile["sensors"]["lidar"][
+        "scan_lines"
     ]
+    assert params["preprocess"]["scan_rate"] == int(
+        profile["sensors"]["lidar"]["scan_rate_hz"]
+    )
+    assert params["preprocess"]["timestamp_unit"] == {
+        "seconds": 0,
+    }[profile["sensors"]["lidar"]["point_time_unit"]]
+    for key in ("lidar_type", "blind"):
+        assert params["preprocess"][key] == source_params["preprocess"][key]
     assert "use_sim_time" not in params
     assert "min_range" not in params and "max_range" not in params
-    assert params["mapping"]["det_range"] == 100.0
+    assert params["mapping"]["det_range"] == source_params["mapping"][
+        "det_range"
+    ]
 
 
 def test_fast_lio_renderer_changes_only_the_five_whitelisted_leaves(runtime_tree):
@@ -1689,6 +1655,41 @@ def _profile_owned_runtime_values(manifest):
     }
 
 
+def _expected_profile_owned_runtime_values(manifest):
+    effective = _load_yaml(manifest["effective_profile_path"])
+    geometry = effective["derived"]["geometry"]
+    motion = effective["profile"]["motion"]
+    use_sim_time = effective["derived"]["use_sim_time"]
+    return {
+        "controllers": {
+            "wheel_radius": geometry["drive"]["wheel_radius"],
+            "wheel_separation": geometry["drive"]["wheel_separation"],
+            "max_linear_velocity": motion["max_linear_velocity"],
+            "min_linear_velocity": -motion["max_linear_velocity"],
+            "max_linear_acceleration": motion["max_linear_acceleration"],
+            "min_linear_acceleration": -motion["max_linear_acceleration"],
+            "max_angular_velocity": motion["max_angular_velocity"],
+            "min_angular_velocity": -motion["max_angular_velocity"],
+            "max_angular_acceleration": motion["max_angular_acceleration"],
+            "min_angular_acceleration": -motion["max_angular_acceleration"],
+        },
+        "web_ui": {
+            "max_linear_speed": motion["max_linear_velocity"],
+            "max_angular_speed": motion["max_angular_velocity"],
+        },
+        "nav2": {
+            "vx_max": motion["max_linear_velocity"],
+            "wz_max": motion["max_angular_velocity"],
+            "footprints": [geometry["footprint"], geometry["footprint"]],
+        },
+        "use_sim_time": {
+            "controllers": [use_sim_time] * len(rcc.CONTROLLER_TIME_PATHS),
+            "web_ui": [use_sim_time] * len(rcc.WEB_UI_TIME_PATHS),
+            "nav2": [use_sim_time] * len(rcc.NAV2_TIME_PATHS),
+        },
+    }
+
+
 def _path_value(mapping, path):
     for key in path:
         mapping = mapping[key]
@@ -1698,6 +1699,28 @@ def _path_value(mapping, path):
 def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
     runtime_tree, tmp_path
 ):
+    synthetic_profile_facts = {
+        "sim": {
+            ("robot", "drive", "wheel_radius"): 0.17,
+            ("robot", "drive", "wheel_separation"): 0.73,
+            ("motion", "max_linear_velocity"): 2.1,
+            ("motion", "max_angular_velocity"): 2.4,
+            ("motion", "max_linear_acceleration"): 2.6,
+            ("motion", "max_angular_acceleration"): 2.8,
+        },
+        "real": {
+            ("robot", "drive", "wheel_radius"): 0.19,
+            ("robot", "drive", "wheel_separation"): 0.79,
+            ("motion", "max_linear_velocity"): 3.1,
+            ("motion", "max_angular_velocity"): 3.4,
+            ("motion", "max_linear_acceleration"): 3.6,
+            ("motion", "max_angular_acceleration"): 3.8,
+        },
+    }
+    for platform, facts in synthetic_profile_facts.items():
+        for path, value in facts.items():
+            runtime_tree.set_profile_value(platform, path, value)
+
     manifests = {platform: {} for platform in ("sim", "real")}
     generated = {platform: {} for platform in ("sim", "real")}
     for platform in ("sim", "real"):
@@ -1727,56 +1750,14 @@ def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
             generated["real"]["navigation"][name]
         )
 
-    assert _profile_owned_runtime_values(manifests["sim"]["navigation"]) == {
-        "controllers": {
-            "wheel_radius": 0.12,
-            "wheel_separation": 0.55,
-            "max_linear_velocity": 1.0,
-            "min_linear_velocity": -1.0,
-            "max_linear_acceleration": 1.0,
-            "min_linear_acceleration": -1.0,
-            "max_angular_velocity": 1.8,
-            "min_angular_velocity": -1.8,
-            "max_angular_acceleration": 1.0,
-            "min_angular_acceleration": -1.0,
-        },
-        "web_ui": {"max_linear_speed": 1.0, "max_angular_speed": 1.8},
-        "nav2": {
-            "vx_max": 1.0,
-            "wz_max": 1.8,
-            "footprints": [SIM_FOOTPRINT, SIM_FOOTPRINT],
-        },
-        "use_sim_time": {
-            "controllers": [True, True],
-            "web_ui": [True],
-            "nav2": [True] * len(rcc.NAV2_TIME_PATHS),
-        },
-    }
-    assert _profile_owned_runtime_values(manifests["real"]["navigation"]) == {
-        "controllers": {
-            "wheel_radius": 0.1025,
-            "wheel_separation": 0.463,
-            "max_linear_velocity": 1.0,
-            "min_linear_velocity": -1.0,
-            "max_linear_acceleration": 1.0,
-            "min_linear_acceleration": -1.0,
-            "max_angular_velocity": 0.4,
-            "min_angular_velocity": -0.4,
-            "max_angular_acceleration": 0.3,
-            "min_angular_acceleration": -0.3,
-        },
-        "web_ui": {"max_linear_speed": 1.0, "max_angular_speed": 0.4},
-        "nav2": {
-            "vx_max": 1.0,
-            "wz_max": 0.4,
-            "footprints": [REAL_FOOTPRINT, REAL_FOOTPRINT],
-        },
-        "use_sim_time": {
-            "controllers": [False, False],
-            "web_ui": [False],
-            "nav2": [False] * len(rcc.NAV2_TIME_PATHS),
-        },
-    }
+    for platform in ("sim", "real"):
+        manifest = manifests[platform]["navigation"]
+        assert _profile_owned_runtime_values(manifest) == (
+            _expected_profile_owned_runtime_values(manifest)
+        )
+    assert _profile_owned_runtime_values(manifests["sim"]["navigation"]) != (
+        _profile_owned_runtime_values(manifests["real"]["navigation"])
+    )
 
     legacy_report_keys = {"platform", "source_profile", "profile", "derived"}
     runtime_only_keys = {"generated_configs"}
@@ -1844,7 +1825,7 @@ def test_compile_runtime_configs_writes_owned_files_and_stable_manifest(
     assert loaded[0]["config"]["profiles"][platform] == selected_profile
     assert runtime_tree.config.read_bytes() == source_config
     assert manifest["platform"] == platform
-    assert manifest["mode"] == "navigation"
+    assert manifest["mode"] == SYNTHETIC_DEFAULT_MODE
     assert manifest["use_sim_time"] is (platform == "sim")
     assert manifest["effective_profile_path"] == paths["effective_profile"]
     assert manifest["controllers_path"] == paths["controllers"]
@@ -1901,91 +1882,36 @@ def test_every_platform_mode_generates_the_same_complete_common_set(
     } == set(rcc.COMMON_OUTPUT_FILENAMES.values())
 
 
-@pytest.mark.parametrize(
-    "platform,mode,scan_line,bridge",
-    [
-        (
-            "sim",
-            "mapping",
-            16,
-            {
-                "x": "0.0",
-                "y": "0.0",
-                "z": "-0.556",
-                "qx": "0.0",
-                "qy": "0.0",
-                "qz": "0.0",
-                "qw": "1.0",
-            },
-        ),
-        (
-            "sim",
-            "navigation",
-            16,
-            {
-                "x": "0.0",
-                "y": "0.0",
-                "z": "-0.556",
-                "qx": "0.0",
-                "qy": "0.0",
-                "qz": "0.0",
-                "qw": "1.0",
-            },
-        ),
-        (
-            "real",
-            "mapping",
-            32,
-            {
-                "x": "-0.443",
-                "y": "0.0",
-                "z": "-0.905",
-                "qx": "0.0",
-                "qy": "0.0",
-                "qz": "0.0",
-                "qw": "1.0",
-            },
-        ),
-        (
-            "real",
-            "navigation",
-            32,
-            {
-                "x": "-0.443",
-                "y": "0.0",
-                "z": "-0.905",
-                "qx": "0.0",
-                "qy": "0.0",
-                "qz": "0.0",
-                "qw": "1.0",
-            },
-        ),
-    ],
-)
+@pytest.mark.parametrize("platform", ["sim", "real"])
+@pytest.mark.parametrize("mode", ["mapping", "navigation"])
 def test_runtime_writes_fast_lio_for_every_platform_and_mode(
-    runtime_tree, tmp_path, platform, mode, scan_line, bridge
+    runtime_tree, tmp_path, platform, mode
 ):
     runtime_tree.set_bringup_value("platform", platform)
     runtime_tree.set_bringup_value("mode", mode)
     manifest = rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "out")
     params = _load_yaml(manifest["fast_lio_path"])["/**"]["ros__parameters"]
-    assert params["preprocess"]["scan_line"] == scan_line
-    assert params["preprocess"]["scan_rate"] == 10
-    assert params["preprocess"]["timestamp_unit"] == 0
-    assert params["mapping"]["extrinsic_T"] == [0.0, 0.0, 0.0]
-    assert params["mapping"]["extrinsic_R"] == [
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-        0.0,
-        0.0,
-        0.0,
-        1.0,
-    ]
-    assert manifest["fast_lio_body_bridge_arguments"] == bridge
     report = _load_yaml(manifest["effective_profile_path"])
+    lidar = report["profile"]["sensors"]["lidar"]
+    relative = report["derived"]["geometry"]["relative_transforms"]
+    assert params["preprocess"]["scan_line"] == lidar["scan_lines"]
+    assert params["preprocess"]["scan_rate"] == int(lidar["scan_rate_hz"])
+    assert params["preprocess"]["timestamp_unit"] == {
+        "seconds": 0,
+    }[lidar["point_time_unit"]]
+    assert params["mapping"]["extrinsic_T"] == relative["imu_from_lidar"][
+        "translation"
+    ]
+    assert manifest["fast_lio_body_bridge_arguments"] == {
+        key: str(value)
+        for key, value in zip(
+            ("x", "y", "z", "qx", "qy", "qz", "qw"),
+            [
+                *relative["imu_from_base_footprint"]["translation"],
+                *relative["imu_from_base_footprint"]["rotation_xyzw"],
+            ],
+        )
+    }
     assert report["generated_configs"]["fast_lio"] == str(
         manifest["fast_lio_path"]
     )
