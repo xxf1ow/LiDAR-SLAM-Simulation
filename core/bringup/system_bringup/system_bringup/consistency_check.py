@@ -166,8 +166,19 @@ _ACTIVE_RUNTIME_FILES = {
     "real_chassis": "core/robot/robot_bringup/launch/real_chassis.launch.py",
     "real_robot": "core/robot/robot_bringup/launch/robot.launch.py",
     "navigation": "core/navigation/robot_navigation/launch/navigation.launch.py",
+    "gicp_launch": (
+        "core/localization/gicp_localization/launch/localization.launch.py"
+    ),
+    "vanjee_launch": (
+        "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/launch/"
+        "vanjee_lidar.launch.py"
+    ),
     "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
     "web_ui": "core/bringup/robot_web_ui/robot_web_ui/web_ui_node.py",
+    "lidar_adapter": (
+        "core/simulation/lidar_pointcloud_adapter/"
+        "lidar_pointcloud_adapter/adapter_node.py"
+    ),
     "profile_compiler": (
         "core/bringup/system_bringup/system_bringup/profile_compiler.py"
     ),
@@ -193,10 +204,13 @@ _INSTALLED_RUNTIME_SHARES = {
     "real_chassis": ("robot_bringup", "launch/real_chassis.launch.py"),
     "real_robot": ("robot_bringup", "launch/robot.launch.py"),
     "navigation": ("robot_navigation", "launch/navigation.launch.py"),
+    "gicp_launch": ("gicp_localization", "launch/localization.launch.py"),
+    "vanjee_launch": ("vanjee_lidar_ros", "launch/vanjee_lidar.launch.py"),
 }
 _INSTALLED_RUNTIME_MODULES = {
     "cmd_gate": "cmd_vel_gate.gate_node",
     "web_ui": "robot_web_ui.web_ui_node",
+    "lidar_adapter": "lidar_pointcloud_adapter.adapter_node",
     "profile_compiler": "system_bringup.profile_compiler",
     "runtime_config_compiler": "system_bringup.runtime_config_compiler",
     "consistency_check": "system_bringup.consistency_check",
@@ -217,7 +231,8 @@ def _resolve_installed_runtime_paths(failures):
         failures.append(
             "active installed runtime cannot be resolved outside a sourced ROS "
             "environment; package shares and node modules "
-            "cmd_vel_gate.gate_node, robot_web_ui.web_ui_node are required: "
+            "cmd_vel_gate.gate_node, robot_web_ui.web_ui_node, and "
+            "lidar_pointcloud_adapter.adapter_node are required: "
             f"{exc}"
         )
         return {}
@@ -595,6 +610,19 @@ def run_runtime_consistency(repo_root, manifest):
             )
         except (KeyError, TypeError, ValueError) as exc:
             failures.append(f"generated lio_sam validation failed: {exc}")
+
+    if isinstance(platform, str) and platform in rcc.SENSOR_OUTPUT_FILENAMES:
+        protocol_names = {
+            "controllers",
+            "fast_lio",
+            "gicp",
+            *rcc.SENSOR_OUTPUT_FILENAMES[platform],
+        }
+        if all(name in loaded for name in protocol_names):
+            try:
+                rcc._validate_runtime_protocol(platform, loaded)
+            except (KeyError, TypeError, ValueError) as exc:
+                failures.append(f"generated runtime protocol mismatch: {exc}")
 
     if root is not None and root.is_dir():
         _validate_installed_freshness(root, failures)

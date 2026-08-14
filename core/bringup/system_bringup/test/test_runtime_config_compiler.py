@@ -99,11 +99,12 @@ class _RuntimeTree:
         )
 
     def mutate_template(self, label, path, mutation):
-        template_path = (
-            self.config.parent
-            / "templates"
-            / rcc.TEMPLATE_FILENAMES[label]
+        filename = rcc.TEMPLATE_FILENAMES.get(
+            label, SENSOR_TEMPLATE_NAMES.get(label)
         )
+        if filename is None:
+            raise KeyError(label)
+        template_path = self.config.parent / "templates" / filename
         template = _load_yaml(template_path)
         if callable(mutation):
             target = template
@@ -1549,56 +1550,159 @@ def test_fast_lio_template_owned_leaf_survives_validation(runtime_tree):
         rcc._validate_fast_lio_generated(inputs["effective"], template, broken)
 
 
+def test_vanjee_template_owned_strategy_survives_validation(runtime_tree):
+    runtime_tree.set_bringup_value("platform", "real")
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    templates = deepcopy(inputs["sensor_templates"])
+    path = ("vanjee_lidar", "ros__parameters", "wait_for_difop")
+    rcc._set_template_existing(
+        "vanjee_lidar", templates["vanjee_lidar"], path, False, bool
+    )
+    generated = {
+        "sensor_gate": rcc._render_sensor_gate(
+            templates["sensor_gate"], inputs["effective"]
+        ),
+        "vanjee_lidar": rcc._render_vanjee_lidar(
+            templates["vanjee_lidar"], inputs["effective"]
+        ),
+    }
+
+    assert rcc._get_existing(generated["vanjee_lidar"], path) is False
+    rcc._validate_sensor_generated_configs(
+        "real", inputs["effective"], templates, generated
+    )
+    broken = deepcopy(generated)
+    rcc._set_template_existing(
+        "vanjee_lidar", broken["vanjee_lidar"], path, True, bool
+    )
+    with pytest.raises(ValueError, match="vanjee_lidar"):
+        rcc._validate_sensor_generated_configs(
+            "real", inputs["effective"], templates, broken
+        )
+
+
 @pytest.mark.parametrize(
-    "platform,name,path,template_value,broken_value",
+    "platform,template_name,path,broken_value",
     [
         (
             "sim",
             "lidar_adapter",
+            ("lidar_pointcloud_adapter", "ros__parameters", "input_topic"),
+            "/broken/lidar-input",
+        ),
+        (
+            "sim",
+            "lidar_adapter",
             ("lidar_pointcloud_adapter", "ros__parameters", "output_topic"),
-            "/template_points",
-            "/broken_points",
+            "/broken/points",
+        ),
+        (
+            "sim",
+            "lidar_adapter",
+            ("lidar_pointcloud_adapter", "ros__parameters", "output_frame"),
+            "broken_lidar_frame",
+        ),
+        (
+            "real",
+            "vanjee_lidar",
+            ("vanjee_lidar", "ros__parameters", "point_cloud_topic"),
+            "/broken/points",
+        ),
+        (
+            "real",
+            "vanjee_lidar",
+            ("vanjee_lidar", "ros__parameters", "imu_topic"),
+            "/broken/imu",
         ),
         (
             "real",
             "vanjee_lidar",
             ("vanjee_lidar", "ros__parameters", "lidar_frame"),
-            "template_velodyne",
-            "broken_velodyne",
+            "broken_lidar_frame",
+        ),
+        (
+            "real",
+            "vanjee_lidar",
+            ("vanjee_lidar", "ros__parameters", "imu_frame"),
+            "broken_imu_frame",
+        ),
+        (
+            "sim",
+            "fast_lio",
+            rcc.FAST_LIO_ROOT + ("common", "lid_topic"),
+            "/broken/points",
+        ),
+        (
+            "sim",
+            "fast_lio",
+            rcc.FAST_LIO_ROOT + ("common", "imu_topic"),
+            "/broken/imu",
+        ),
+        (
+            "sim",
+            "gicp",
+            rcc.GICP_ROOT + ("map_frame",),
+            "broken_map",
+        ),
+        (
+            "sim",
+            "gicp",
+            rcc.GICP_ROOT + ("odom_frame",),
+            "broken_odom",
+        ),
+        (
+            "sim",
+            "gicp",
+            rcc.GICP_ROOT + ("base_frame",),
+            "broken_body",
+        ),
+        (
+            "sim",
+            "gicp",
+            rcc.GICP_ROOT + ("cloud_topic",),
+            "/broken/cloud",
+        ),
+        (
+            "sim",
+            "gicp",
+            rcc.GICP_ROOT + ("odom_topic",),
+            "/broken/odometry",
+        ),
+        (
+            "sim",
+            "controllers",
+            ("base_controller", "ros__parameters", "base_frame_id"),
+            "broken_base_frame",
         ),
     ],
 )
-def test_sensor_template_owned_leaf_survives_validation(
-    runtime_tree, platform, name, path, template_value, broken_value
+def test_runtime_protocol_rejects_stable_source_drift(
+    runtime_tree, tmp_path, platform, template_name, path, broken_value
 ):
     runtime_tree.set_bringup_value("platform", platform)
-    inputs = rcc._load_runtime_inputs(runtime_tree.config)
-    templates = deepcopy(inputs["sensor_templates"])
-    rcc._set_template_existing(name, templates[name], path, template_value, str)
-    generated = {
-        "sensor_gate": rcc._render_sensor_gate(
-            templates["sensor_gate"], inputs["effective"]
-        ),
-    }
-    if platform == "sim":
-        generated["lidar_adapter"] = rcc._render_lidar_adapter(
-            templates["lidar_adapter"], inputs["effective"]
-        )
-    else:
-        generated["vanjee_lidar"] = rcc._render_vanjee_lidar(
-            templates["vanjee_lidar"], inputs["effective"]
-        )
+    runtime_tree.mutate_template(template_name, path, lambda _old: broken_value)
 
-    assert rcc._get_existing(generated[name], path) == template_value
-    rcc._validate_sensor_generated_configs(
-        platform, inputs["effective"], templates, generated
+    with pytest.raises(ValueError, match="runtime protocol"):
+        rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "runtime")
+
+
+def test_runtime_protocol_rejects_matching_noncanonical_point_topics(
+    runtime_tree, tmp_path
+):
+    broken_topic = "/matching-but-broken-points"
+    runtime_tree.mutate_template(
+        "lidar_adapter",
+        ("lidar_pointcloud_adapter", "ros__parameters", "output_topic"),
+        lambda _old: broken_topic,
     )
-    broken = deepcopy(generated)
-    rcc._set_template_existing(name, broken[name], path, broken_value, str)
-    with pytest.raises(ValueError, match=name):
-        rcc._validate_sensor_generated_configs(
-            platform, inputs["effective"], templates, broken
-        )
+    runtime_tree.mutate_template(
+        "fast_lio",
+        rcc.FAST_LIO_ROOT + ("common", "lid_topic"),
+        lambda _old: broken_topic,
+    )
+
+    with pytest.raises(ValueError, match="runtime protocol"):
+        rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "runtime")
 
 
 def _mutate_path(mapping, path, mutation):
@@ -2509,6 +2613,32 @@ def test_staged_reload_validation_failure_precedes_all_replacements(
     assert validations == 2
     assert {path: path.read_bytes() for path in output.iterdir()} == before
     assert _temporary_files(output) == []
+
+
+def test_runtime_protocol_is_rechecked_after_staged_reload(
+    runtime_tree, tmp_path, monkeypatch
+):
+    output = tmp_path / "output"
+    original = rcc._validate_runtime_protocol
+    validations = 0
+
+    def fail_second_validation(*args):
+        nonlocal validations
+        validations += 1
+        if validations == 2:
+            raise ValueError("staged runtime protocol drift")
+        return original(*args)
+
+    monkeypatch.setattr(
+        rcc, "_validate_runtime_protocol", fail_second_validation
+    )
+
+    with pytest.raises(ValueError, match="staged runtime protocol drift"):
+        rcc.compile_runtime_configs(runtime_tree.config, output)
+
+    assert validations == 2
+    assert _temporary_files(output) == []
+    assert list(output.iterdir()) == []
 
 
 def test_sensor_staged_reload_failure_precedes_all_replacements(

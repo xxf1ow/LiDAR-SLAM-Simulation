@@ -21,8 +21,19 @@ ACTIVE_RUNTIME_FILES = {
     "real_chassis": "core/robot/robot_bringup/launch/real_chassis.launch.py",
     "real_robot": "core/robot/robot_bringup/launch/robot.launch.py",
     "navigation": "core/navigation/robot_navigation/launch/navigation.launch.py",
+    "gicp_launch": (
+        "core/localization/gicp_localization/launch/localization.launch.py"
+    ),
+    "vanjee_launch": (
+        "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/launch/"
+        "vanjee_lidar.launch.py"
+    ),
     "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
     "web_ui": "core/bringup/robot_web_ui/robot_web_ui/web_ui_node.py",
+    "lidar_adapter": (
+        "core/simulation/lidar_pointcloud_adapter/"
+        "lidar_pointcloud_adapter/adapter_node.py"
+    ),
     "profile_compiler": (
         "core/bringup/system_bringup/system_bringup/profile_compiler.py"
     ),
@@ -653,6 +664,37 @@ def test_template_owned_runtime_artifact_drift_is_reported(runtime_factory):
     assert any("generated runtime config mismatch" in failure for failure in failures)
 
 
+def test_matching_source_and_artifact_protocol_drift_is_reported(runtime_factory):
+    repo_root, manifest = runtime_factory("sim")
+    broken_topic = "/matching-but-broken-points"
+    mutations = (
+        (
+            repo_root
+            / "core/bringup/system_bringup/config/templates/lidar_adapter.yaml",
+            ("lidar_pointcloud_adapter", "ros__parameters", "output_topic"),
+        ),
+        (
+            manifest["lidar_adapter_path"],
+            ("lidar_pointcloud_adapter", "ros__parameters", "output_topic"),
+        ),
+        (
+            repo_root
+            / "core/bringup/system_bringup/config/templates/fast_lio.yaml",
+            rcc.FAST_LIO_ROOT + ("common", "lid_topic"),
+        ),
+        (
+            manifest["fast_lio_path"],
+            rcc.FAST_LIO_ROOT + ("common", "lid_topic"),
+        ),
+    )
+    for path, dotted_path in mutations:
+        _mutate_yaml(path, dotted_path, broken_topic)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("runtime protocol" in failure for failure in failures)
+
+
 def test_foreign_artifact_path_is_rejected(runtime_factory, tmp_path):
     repo_root, manifest = runtime_factory()
     foreign = tmp_path / "foreign-nav2.yaml"
@@ -872,6 +914,9 @@ def test_forced_same_path_resolution_error_is_aggregated(
         "runtime_config_compiler",
         "consistency_check",
         "sensor_gate_node",
+        "lidar_adapter",
+        "vanjee_launch",
+        "gicp_launch",
     ],
 )
 def test_installed_freshness_rejects_source_install_mismatch(
@@ -959,7 +1004,7 @@ def test_runtime_consistency_does_not_parse_topology(
     assert cc.run_runtime_consistency(repo_root, manifest) == []
 
 
-def test_installed_resolver_no_ros_diagnostic_names_both_node_modules(
+def test_installed_resolver_no_ros_diagnostic_names_all_node_modules(
     monkeypatch,
 ):
     real_import = builtins.__import__
@@ -976,7 +1021,31 @@ def test_installed_resolver_no_ros_diagnostic_names_both_node_modules(
     assert any(
         "cmd_vel_gate.gate_node" in failure
         and "robot_web_ui.web_ui_node" in failure
+        and "lidar_pointcloud_adapter.adapter_node" in failure
         for failure in failures
+    )
+
+
+def test_installed_freshness_covers_all_active_sensor_and_localization_code():
+    expected_sources = {
+        "lidar_adapter": ACTIVE_RUNTIME_FILES["lidar_adapter"],
+        "vanjee_launch": ACTIVE_RUNTIME_FILES["vanjee_launch"],
+        "gicp_launch": ACTIVE_RUNTIME_FILES["gicp_launch"],
+    }
+    assert {
+        label: cc._ACTIVE_RUNTIME_FILES[label]
+        for label in expected_sources
+    } == expected_sources
+    assert cc._INSTALLED_RUNTIME_MODULES["lidar_adapter"] == (
+        "lidar_pointcloud_adapter.adapter_node"
+    )
+    assert cc._INSTALLED_RUNTIME_SHARES["vanjee_launch"] == (
+        "vanjee_lidar_ros",
+        "launch/vanjee_lidar.launch.py",
+    )
+    assert cc._INSTALLED_RUNTIME_SHARES["gicp_launch"] == (
+        "gicp_localization",
+        "launch/localization.launch.py",
     )
 
 

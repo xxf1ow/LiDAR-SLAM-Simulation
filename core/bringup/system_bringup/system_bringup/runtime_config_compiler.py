@@ -77,6 +77,11 @@ NAV2_STVL_ROOTS = (
     ("global_costmap", "global_costmap", "ros__parameters", "stvl_layer"),
     ("local_costmap", "local_costmap", "ros__parameters", "stvl_layer"),
 )
+SENSOR_POINT_TOPIC = "/points_raw"
+SENSOR_IMU_TOPIC = "/imu/data"
+LIDAR_FRAME = "velodyne"
+IMU_FRAME = "imu_link"
+SIM_LIDAR_INPUT_TOPIC = "/lidar/points"
 
 
 class _OneLineArgumentParser(argparse.ArgumentParser):
@@ -789,6 +794,117 @@ def _validate_sensor_generated_configs(platform, effective, templates, generated
             )
 
 
+def _runtime_protocol_value(tree, path, expected, label):
+    actual = _get_existing(tree, path)
+    if type(actual) is not type(expected) or actual != expected:
+        raise ValueError(
+            f"runtime protocol {label} must be {expected!r}; got {actual!r}"
+        )
+    return actual
+
+
+def _validate_runtime_protocol(platform, generated):
+    fast_lio = generated["fast_lio"]
+    fast_lio_point_topic = _get_existing(
+        fast_lio, FAST_LIO_ROOT + ("common", "lid_topic")
+    )
+    fast_lio_imu_topic = _get_existing(
+        fast_lio, FAST_LIO_ROOT + ("common", "imu_topic")
+    )
+
+    if platform == "sim":
+        adapter = generated["lidar_adapter"]
+        adapter_root = ("lidar_pointcloud_adapter", "ros__parameters")
+        _runtime_protocol_value(
+            adapter,
+            adapter_root + ("input_topic",),
+            SIM_LIDAR_INPUT_TOPIC,
+            "lidar adapter input_topic",
+        )
+        adapter_point_topic = _get_existing(
+            adapter, adapter_root + ("output_topic",)
+        )
+        if adapter_point_topic != fast_lio_point_topic:
+            raise ValueError(
+                "runtime protocol lidar adapter output_topic must match "
+                "FAST-LIO common.lid_topic"
+            )
+        _runtime_protocol_value(
+            adapter,
+            adapter_root + ("output_frame",),
+            LIDAR_FRAME,
+            "lidar adapter output_frame",
+        )
+    elif platform == "real":
+        vanjee = generated["vanjee_lidar"]
+        vanjee_root = ("vanjee_lidar", "ros__parameters")
+        vanjee_point_topic = _get_existing(
+            vanjee, vanjee_root + ("point_cloud_topic",)
+        )
+        vanjee_imu_topic = _get_existing(
+            vanjee, vanjee_root + ("imu_topic",)
+        )
+        if vanjee_point_topic != fast_lio_point_topic:
+            raise ValueError(
+                "runtime protocol Vanjee point_cloud_topic must match "
+                "FAST-LIO common.lid_topic"
+            )
+        if vanjee_imu_topic != fast_lio_imu_topic:
+            raise ValueError(
+                "runtime protocol Vanjee imu_topic must match "
+                "FAST-LIO common.imu_topic"
+            )
+        _runtime_protocol_value(
+            vanjee,
+            vanjee_root + ("lidar_frame",),
+            LIDAR_FRAME,
+            "Vanjee lidar_frame",
+        )
+        _runtime_protocol_value(
+            vanjee,
+            vanjee_root + ("imu_frame",),
+            IMU_FRAME,
+            "Vanjee imu_frame",
+        )
+    else:
+        raise ValueError("platform must be 'sim' or 'real'")
+
+    _runtime_protocol_value(
+        fast_lio,
+        FAST_LIO_ROOT + ("common", "lid_topic"),
+        SENSOR_POINT_TOPIC,
+        "FAST-LIO point topic / sensor-gate point topic",
+    )
+    _runtime_protocol_value(
+        fast_lio,
+        FAST_LIO_ROOT + ("common", "imu_topic"),
+        SENSOR_IMU_TOPIC,
+        "FAST-LIO IMU topic / sensor-gate IMU topic",
+    )
+
+    gicp = generated["gicp"]
+    for key, expected in (
+        ("map_frame", "map"),
+        ("odom_frame", "camera_init"),
+        ("base_frame", "body"),
+        ("cloud_topic", "/cloud_registered"),
+        ("odom_topic", "/Odometry"),
+    ):
+        _runtime_protocol_value(
+            gicp,
+            GICP_ROOT + (key,),
+            expected,
+            f"GICP {key}",
+        )
+
+    _runtime_protocol_value(
+        generated["controllers"],
+        ("base_controller", "ros__parameters", "base_frame_id"),
+        "base_footprint",
+        "controller base_frame_id",
+    )
+
+
 def _render_sensor_configs(inputs):
     effective = inputs["effective"]
     templates = inputs["sensor_templates"]
@@ -919,6 +1035,7 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
     effective = inputs["effective"]
     generated = _render_runtime_configs(inputs)
     generated.update(_render_sensor_configs(inputs))
+    _validate_runtime_protocol(inputs["platform"], generated)
     robot_launch_arguments = _derive_robot_launch_arguments(inputs["effective"])
     fast_lio_body_bridge_arguments = _derive_fast_lio_body_bridge_arguments(
         effective
@@ -997,7 +1114,7 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
                 for key in SENSOR_OUTPUT_FILENAMES[inputs["platform"]]
             },
         )
-
+        _validate_runtime_protocol(inputs["platform"], reloaded)
         for key in output_filenames:
             os.replace(staged_paths[key], paths[key])
         return manifest

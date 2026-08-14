@@ -57,6 +57,7 @@ def node_module(monkeypatch):
             self._clock = clock
             self._logger = FakeLogger()
             self.declared_parameters = []
+            self.subscriptions = []
 
         def declare_parameter(self, name, parameter_type):
             self.declared_parameters.append((name, parameter_type))
@@ -65,6 +66,7 @@ def node_module(monkeypatch):
             return types.SimpleNamespace(value=generated[name])
 
         def create_subscription(self, *args, **kwargs):
+            self.subscriptions.append((args, kwargs))
             return types.SimpleNamespace(args=args, kwargs=kwargs)
 
         def create_timer(self, _period, _callback):
@@ -211,6 +213,16 @@ def test_node_declares_only_typed_required_generated_parameters(node_module):
         for name, parameter_type in node.declared_parameters
         if name != "expected_points_per_scan"
     )
+
+
+def test_node_subscribes_to_the_stable_sensor_protocol_topics(node_module):
+    module, _clock, _generated = node_module
+    node = module.SensorGateNode()
+
+    assert [args[1] for args, _kwargs in node.subscriptions] == [
+        "/points_raw",
+        "/imu/data",
+    ]
 
 
 def test_startup_and_samples_use_one_ros_clock_domain(node_module):
