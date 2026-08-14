@@ -200,7 +200,7 @@ def runtime_factory(tmp_path, monkeypatch):
         ("real", "navigation"),
     ],
 )
-def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
+def test_valid_manifest_reloads_source_templates_without_compile_or_write(
     runtime_factory, monkeypatch, platform, mode
 ):
     repo_root, manifest = runtime_factory(platform, mode)
@@ -647,7 +647,6 @@ def test_template_owned_runtime_artifact_drift_is_reported(runtime_factory):
         repo_root / "core/bringup/system_bringup/config/templates/nav2.yaml"
     )
     _mutate_yaml(template_path, path, 0.137)
-    _mutate_yaml(manifest["nav2_path"], path, 0.041)
 
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
