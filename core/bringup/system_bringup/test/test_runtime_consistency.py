@@ -229,9 +229,9 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
         sensor_validations.append(args)
         return validate_sensors(*args)
 
-    def counted_fast_lio_validation(effective, fast_lio):
-        fast_lio_validations.append((effective, fast_lio))
-        return validate_fast_lio(effective, fast_lio)
+    def counted_fast_lio_validation(*args):
+        fast_lio_validations.append(args)
+        return validate_fast_lio(*args)
 
     def counted_gicp_validation(*args):
         gicp_validations.append(args)
@@ -263,7 +263,9 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     monkeypatch.setattr(Path, "write_bytes", forbidden)
 
     assert cc.run_runtime_consistency(repo_root, manifest) == []
-    assert len(loads) == len(rcc._output_filenames(platform)) + 2
+    assert len(loads) == len(rcc._output_filenames(platform)) + len(
+        rcc.runtime_template_filenames(platform)
+    )
     assert len(validations) == 1
     assert len(sensor_validations) == 1
     assert len(fast_lio_validations) == 1
@@ -272,7 +274,11 @@ def test_valid_manifest_is_read_once_without_source_reload_compile_or_write(
     assert fast_lio_validations[0][0] == _load_yaml(
         manifest["effective_profile_path"]
     )
-    assert fast_lio_validations[0][1] == _load_yaml(manifest["fast_lio_path"])
+    assert fast_lio_validations[0][1] == _load_yaml(
+        repo_root
+        / "core/bringup/system_bringup/config/templates/fast_lio.yaml"
+    )
+    assert fast_lio_validations[0][2] == _load_yaml(manifest["fast_lio_path"])
 
 
 @pytest.mark.parametrize("artifact_key", ["gicp_path", "lio_sam_path"])
@@ -401,7 +407,7 @@ def test_fast_lio_content_drift_is_reported(runtime_factory):
 
     failures = cc.run_runtime_consistency(repo_root, manifest)
 
-    assert any("fast_lio" in item and "scan_line" in item for item in failures)
+    assert any("fast_lio" in item for item in failures)
 
 
 @pytest.mark.parametrize("value", [True, 16.0, 0, -1])
@@ -634,6 +640,20 @@ def test_sensor_generated_config_drift_is_reported(
     )
 
 
+def test_template_owned_runtime_artifact_drift_is_reported(runtime_factory):
+    repo_root, manifest = runtime_factory("sim")
+    path = ("controller_server", "ros__parameters", "FollowPath", "wz_std")
+    template_path = (
+        repo_root / "core/bringup/system_bringup/config/templates/nav2.yaml"
+    )
+    _mutate_yaml(template_path, path, 0.137)
+    _mutate_yaml(manifest["nav2_path"], path, 0.041)
+
+    failures = cc.run_runtime_consistency(repo_root, manifest)
+
+    assert any("generated runtime config mismatch" in failure for failure in failures)
+
+
 def test_foreign_artifact_path_is_rejected(runtime_factory, tmp_path):
     repo_root, manifest = runtime_factory()
     foreign = tmp_path / "foreign-nav2.yaml"
@@ -741,7 +761,7 @@ def test_backend_mismatch_is_reported(
                 "footprint",
             ),
             "[]",
-            "footprint",
+            "nav2",
         ),
     ],
 )

@@ -131,14 +131,14 @@ def _load_runtime_artifacts(manifest, failures, runtime_compiler, artifacts):
 
 
 def _load_runtime_template(
-    source_path, artifact_name, runtime_compiler, failures
+    source_path, artifact_name, template_filename, runtime_compiler, failures
 ):
     if source_path is None or not source_path.is_file():
         return None
     template_path = (
         source_path.parent
         / "templates"
-        / runtime_compiler.TEMPLATE_FILENAMES[artifact_name]
+        / template_filename
     )
     try:
         _, template = runtime_compiler._load_template(
@@ -391,6 +391,16 @@ def run_runtime_consistency(repo_root, manifest):
     paths, loaded = _load_runtime_artifacts(
         manifest, failures, rcc, artifacts
     )
+    source_templates = {}
+    source_template_filenames = {}
+    if platform in ("sim", "real"):
+        source_template_filenames = rcc.runtime_template_filenames(platform)
+        for name, filename in source_template_filenames.items():
+            template = _load_runtime_template(
+                source_path, name, filename, rcc, failures
+            )
+            if template is not None:
+                source_templates[name] = template
     report = loaded.get("effective_profile")
     if report is not None:
         if report.get("platform", _MISSING) != platform:
@@ -519,13 +529,15 @@ def run_runtime_consistency(repo_root, manifest):
                         f"{actual!r} != effective bridge {expected!r}"
                     )
 
-    if all(
-        name in loaded
-        for name in ("effective_profile", "controllers", "web_ui", "nav2")
+    if (
+        report is not None
+        and all(name in loaded for name in ("controllers", "web_ui", "nav2"))
+        and all(name in source_templates for name in ("controllers", "web_ui", "nav2"))
     ):
         try:
             rcc._validate_generated_configs(
-                loaded["effective_profile"],
+                report,
+                source_templates,
                 loaded["controllers"],
                 loaded["web_ui"],
                 loaded["nav2"],
@@ -537,53 +549,52 @@ def run_runtime_consistency(repo_root, manifest):
         isinstance(platform, str)
         and platform in rcc.SENSOR_OUTPUT_FILENAMES
     ):
-        sensor_names = rcc.SENSOR_OUTPUT_FILENAMES[platform]
-        if "effective_profile" in loaded and all(
+        sensor_names = set(source_template_filenames) - set(rcc.TEMPLATE_FILENAMES)
+        if report is not None and all(
             name in loaded for name in sensor_names
-        ):
+        ) and all(name in source_templates for name in sensor_names):
             try:
                 rcc._validate_sensor_generated_configs(
                     platform,
-                    loaded["effective_profile"],
+                    report,
+                    {name: source_templates[name] for name in sensor_names},
                     {key: loaded[key] for key in sensor_names},
                 )
             except (KeyError, TypeError, ValueError) as exc:
                 failures.append(f"generated runtime config mismatch: {exc}")
 
-    if "effective_profile" in loaded and "fast_lio" in loaded:
+    if (
+        report is not None
+        and "fast_lio" in loaded
+        and "fast_lio" in source_templates
+    ):
         try:
             rcc._validate_fast_lio_generated(
-                loaded["effective_profile"], loaded["fast_lio"]
+                report,
+                source_templates["fast_lio"],
+                loaded["fast_lio"],
             )
         except (KeyError, TypeError, ValueError) as exc:
             failures.append(f"generated fast_lio validation failed: {exc}")
 
-    if report is not None and "gicp" in loaded:
-        gicp_template = _load_runtime_template(
-            source_path, "gicp", rcc, failures
-        )
-        if gicp_template is not None:
-            try:
-                rcc._validate_gicp_generated(
-                    report, gicp_template, loaded["gicp"]
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                failures.append(f"generated gicp validation failed: {exc}")
+    if report is not None and "gicp" in loaded and "gicp" in source_templates:
+        try:
+            rcc._validate_gicp_generated(
+                report, source_templates["gicp"], loaded["gicp"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            failures.append(f"generated gicp validation failed: {exc}")
 
-    if report is not None and "lio_sam" in loaded:
-        lio_sam_template = _load_runtime_template(
-            source_path, "lio_sam", rcc, failures
-        )
-        if lio_sam_template is not None:
-            try:
-                rcc._validate_lio_sam_generated(
-                    report,
-                    config.get("map_artifacts"),
-                    lio_sam_template,
-                    loaded["lio_sam"],
-                )
-            except (KeyError, TypeError, ValueError) as exc:
-                failures.append(f"generated lio_sam validation failed: {exc}")
+    if report is not None and "lio_sam" in loaded and "lio_sam" in source_templates:
+        try:
+            rcc._validate_lio_sam_generated(
+                report,
+                config.get("map_artifacts"),
+                source_templates["lio_sam"],
+                loaded["lio_sam"],
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            failures.append(f"generated lio_sam validation failed: {exc}")
 
     if root is not None and root.is_dir():
         _validate_installed_freshness(root, failures)

@@ -110,7 +110,13 @@ class _RuntimeTree:
             / rcc.TEMPLATE_FILENAMES[label]
         )
         template = _load_yaml(template_path)
-        _mutate_path(template, path, mutation)
+        if callable(mutation):
+            target = template
+            for key in path[:-1]:
+                target = target[key]
+            target[path[-1]] = mutation(target[path[-1]])
+        else:
+            _mutate_path(template, path, mutation)
         template_path.write_text(
             yaml.safe_dump(template, sort_keys=False), encoding="utf-8"
         )
@@ -785,6 +791,7 @@ def test_sensor_generated_validator_rejects_contract_drift(
         rcc._validate_sensor_generated_configs(
             platform,
             inputs["effective"],
+            inputs["sensor_templates"],
             generated,
         )
 
@@ -1079,7 +1086,9 @@ def test_fast_lio_validator_rejects_invalid_rotation_matrix(
     )
     rendered["/**"]["ros__parameters"]["mapping"]["extrinsic_R"] = matrix
     with pytest.raises(ValueError, match=error):
-        rcc._validate_fast_lio_generated(inputs["effective"], rendered)
+        rcc._validate_fast_lio_generated(
+            inputs["effective"], inputs["templates"]["fast_lio"], rendered
+        )
 
 
 @pytest.mark.parametrize("platform", ["sim", "real"])
@@ -1229,6 +1238,7 @@ def test_generated_config_validator_rejects_cross_module_drift(
     with pytest.raises(ValueError):
         rcc._validate_generated_configs(
             inputs["effective"],
+            inputs["templates"],
             rendered["controllers"],
             rendered["web_ui"],
             rendered["nav2"],
@@ -1346,12 +1356,91 @@ def test_generated_config_validator_rejects_nav2_stvl_and_fixed_behavior_drift(
     rendered = rcc._render_runtime_configs(inputs)
     _set_nested(rendered["nav2"], path, 99.0)
 
-    with pytest.raises(ValueError, match="generated nav2 mismatch"):
+    with pytest.raises(ValueError, match="generated nav2"):
         rcc._validate_generated_configs(
             inputs["effective"],
+            inputs["templates"],
             rendered["controllers"],
             rendered["web_ui"],
             rendered["nav2"],
+        )
+
+
+def test_template_owned_nav2_value_is_not_a_validator_default(runtime_tree, tmp_path):
+    path = (
+        "controller_server", "ros__parameters", "FollowPath", "wz_std"
+    )
+    runtime_tree.mutate_template("nav2", path, lambda _old: 0.137)
+
+    manifest = rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "runtime")
+    generated = _load_yaml(manifest["nav2_path"])
+
+    assert rcc._get_existing(generated, path) == 0.137
+
+
+def test_fast_lio_template_owned_leaf_survives_validation(runtime_tree):
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    template = deepcopy(inputs["templates"]["fast_lio"])
+    path = rcc.FAST_LIO_ROOT + ("common", "time_offset_lidar_to_imu")
+    rcc._set_template_existing("fast_lio", template, path, 0.037, float)
+    generated = rcc._render_fast_lio(template, inputs["effective"])
+
+    rcc._validate_fast_lio_generated(inputs["effective"], template, generated)
+    broken = deepcopy(generated)
+    rcc._set_template_existing("fast_lio", broken, path, 0.041, float)
+    with pytest.raises(ValueError, match="fast_lio"):
+        rcc._validate_fast_lio_generated(inputs["effective"], template, broken)
+
+
+@pytest.mark.parametrize(
+    "platform,name,path,template_value,broken_value",
+    [
+        (
+            "sim",
+            "lidar_adapter",
+            ("lidar_pointcloud_adapter", "ros__parameters", "output_topic"),
+            "/template_points",
+            "/broken_points",
+        ),
+        (
+            "real",
+            "vanjee_lidar",
+            ("vanjee_lidar", "ros__parameters", "lidar_frame"),
+            "template_velodyne",
+            "broken_velodyne",
+        ),
+    ],
+)
+def test_sensor_template_owned_leaf_survives_validation(
+    runtime_tree, platform, name, path, template_value, broken_value
+):
+    runtime_tree.set_bringup_value("platform", platform)
+    inputs = rcc._load_runtime_inputs(runtime_tree.config)
+    templates = deepcopy(inputs["sensor_templates"])
+    rcc._set_template_existing(name, templates[name], path, template_value, str)
+    generated = {
+        "sensor_gate": rcc._render_sensor_gate(
+            templates["sensor_gate"], inputs["effective"]
+        ),
+    }
+    if platform == "sim":
+        generated["lidar_adapter"] = rcc._render_lidar_adapter(
+            templates["lidar_adapter"], inputs["effective"]
+        )
+    else:
+        generated["vanjee_lidar"] = rcc._render_vanjee_lidar(
+            templates["vanjee_lidar"], inputs["effective"]
+        )
+
+    assert rcc._get_existing(generated[name], path) == template_value
+    rcc._validate_sensor_generated_configs(
+        platform, inputs["effective"], templates, generated
+    )
+    broken = deepcopy(generated)
+    rcc._set_template_existing(name, broken[name], path, broken_value, str)
+    with pytest.raises(ValueError, match=name):
+        rcc._validate_sensor_generated_configs(
+            platform, inputs["effective"], templates, broken
         )
 
 
@@ -2053,14 +2142,10 @@ def test_compile_runtime_configs_uses_integrated_renderer(
 
     monkeypatch.setattr(rcc, "_render_runtime_configs", render_with_marker)
 
-    manifest = rcc.compile_runtime_configs(
-        runtime_tree.config, tmp_path / "output"
-    )
+    with pytest.raises(ValueError, match="generated web_ui"):
+        rcc.compile_runtime_configs(runtime_tree.config, tmp_path / "output")
 
     assert len(calls) == 1
-    assert _load_yaml(manifest["web_ui_path"])["robot_web_ui"][
-        "ros__parameters"
-    ]["host"] == "renderer-used"
 
 
 def test_compile_runtime_configs_uses_unique_private_temp_directories(runtime_tree):
@@ -2292,7 +2377,7 @@ def test_fast_lio_staged_reload_failure_precedes_all_replacements(
     monkeypatch.setattr(rcc, "_load_staged_yaml", corrupt_fast_lio_load)
     monkeypatch.setattr(rcc.os, "replace", record_replace)
 
-    with pytest.raises(ValueError, match="generated fast_lio mismatch"):
+    with pytest.raises(ValueError, match="generated fast_lio"):
         rcc.compile_runtime_configs(runtime_tree.config, output)
 
     assert replaced == []

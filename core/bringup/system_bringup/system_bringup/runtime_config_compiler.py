@@ -94,6 +94,15 @@ def _output_filenames(platform):
     }
 
 
+def runtime_template_filenames(platform):
+    if platform not in SENSOR_TEMPLATE_FILENAMES:
+        raise ValueError("platform must be 'sim' or 'real'")
+    return {
+        **TEMPLATE_FILENAMES,
+        **SENSOR_TEMPLATE_FILENAMES[platform],
+    }
+
+
 def runtime_manifest_artifacts(platform):
     return {
         f"{artifact_name}_path": artifact_name
@@ -572,51 +581,17 @@ def _render_fast_lio(template, effective):
         _set_template_existing(
             "fast_lio", fast_lio, FAST_LIO_ROOT + suffix, value, expected_type
         )
-    _validate_fast_lio_generated(effective, fast_lio)
     return fast_lio
 
 
-def _validate_fast_lio_generated(effective, fast_lio):
-    lidar = effective["profile"]["sensors"]["lidar"]
-    if lidar["point_time_unit"] != "seconds":
-        raise ValueError("FAST-LIO supports only point_time_unit seconds")
-    relative = effective["derived"]["geometry"]["relative_transforms"][
-        "imu_from_lidar"
-    ]
-    expected = {
-        ("preprocess", "scan_line"): _fast_lio_scan_lines(lidar),
-        ("preprocess", "scan_rate"): _fast_lio_scan_rate(lidar),
-        ("preprocess", "timestamp_unit"): 0,
-        ("mapping", "extrinsic_T"): _finite_float_list(
-            relative["translation"], 3, "imu_from_lidar.translation"
-        ),
-        ("mapping", "extrinsic_R"): _rotation_matrix_from_xyzw(
-            relative["rotation_xyzw"]
-        ),
-        ("common", "lid_topic"): "/points_raw",
-        ("common", "imu_topic"): "/imu/data",
-        ("common", "time_sync_en"): False,
-        ("common", "time_offset_lidar_to_imu"): 0.0,
-        ("preprocess", "lidar_type"): 2,
-    }
+def _validate_fast_lio_generated(effective, template, generated):
+    expected = _render_fast_lio(template, effective)
     _validate_rotation_matrix(
-        _get_existing(fast_lio, FAST_LIO_ROOT + ("mapping", "extrinsic_R")),
+        _get_existing(generated, FAST_LIO_ROOT + ("mapping", "extrinsic_R")),
         "generated fast_lio extrinsic_R",
     )
-    for suffix, expected_value in expected.items():
-        actual = _get_existing(fast_lio, FAST_LIO_ROOT + suffix)
-        if isinstance(expected_value, list):
-            valid = (
-                isinstance(actual, list)
-                and all(type(item) is float for item in actual)
-                and actual == expected_value
-            )
-        else:
-            valid = _same_typed_value(actual, expected_value)
-        if not valid:
-            raise ValueError(
-                f"generated fast_lio mismatch: {'.'.join(FAST_LIO_ROOT + suffix)}"
-            )
+    if not _same_typed_tree(generated, expected):
+        raise ValueError("generated fast_lio does not match template plus overrides")
 
 
 def _gicp_overrides(effective):
@@ -763,75 +738,33 @@ def _render_sensor_gate(template, effective):
     return gate
 
 
-def _validate_sensor_generated_configs(platform, effective, generated):
-    expected_keys = set(SENSOR_TEMPLATE_FILENAMES[platform])
-    if set(generated) != expected_keys:
-        raise ValueError(
-            f"generated sensor configs mismatch: expected {sorted(expected_keys)}"
-        )
-
-    lidar = effective["profile"]["sensors"]["lidar"]
+def _validate_sensor_generated_configs(platform, effective, templates, generated):
+    expected = {"sensor_gate": _render_sensor_gate(
+        templates["sensor_gate"], effective
+    )}
     if platform == "sim":
-        adapter = generated["lidar_adapter"]
-        adapter_path = ("lidar_pointcloud_adapter", "ros__parameters")
-        expected_adapter = {
-            "use_sim_time": effective["derived"]["use_sim_time"],
-            "input_topic": "/lidar/points",
-            "output_topic": "/points_raw",
-            "output_frame": "velodyne",
-            "scan_period": float(
-                effective["derived"]["sensor_contract"]["scan_period"]
-            ),
-        }
-        for key, expected in expected_adapter.items():
-            path = adapter_path + (key,)
-            if not _same_typed_value(_get_existing(adapter, path), expected):
-                raise ValueError(
-                    f"generated lidar_adapter mismatch: {'.'.join(path)}"
-                )
+        expected["lidar_adapter"] = _render_lidar_adapter(
+            templates["lidar_adapter"], effective
+        )
+    elif platform == "real":
+        expected["vanjee_lidar"] = _render_vanjee_lidar(
+            templates["vanjee_lidar"], effective
+        )
     else:
-        hardware = effective["profile"]["hardware"]["lidar"]
-        vanjee = generated["vanjee_lidar"]
-        vanjee_path = ("vanjee_lidar", "ros__parameters")
-        expected_vanjee = {
-            "lidar_type": hardware["model"],
-            "host_address": hardware["host_address"],
-            "lidar_address": hardware["device_address"],
-            "host_msop_port": hardware["host_msop_port"],
-            "lidar_msop_port": hardware["device_msop_port"],
-            "start_angle": float(degrees(lidar["horizontal_start_angle"])),
-            "end_angle": float(degrees(lidar["horizontal_end_angle"])),
-            "min_distance": float(lidar["min_range"]),
-            "max_distance": float(lidar["max_range"]),
-            "lidar_frame": "velodyne",
-            "imu_frame": "imu_link",
-            "point_cloud_topic": "/points_raw",
-            "imu_topic": "/imu/data",
-        }
-        for key, expected in expected_vanjee.items():
-            path = vanjee_path + (key,)
-            if not _same_typed_value(_get_existing(vanjee, path), expected):
-                raise ValueError(
-                    f"generated vanjee_lidar mismatch: {'.'.join(path)}"
-                )
+        raise ValueError("platform must be 'sim' or 'real'")
+
+    if set(generated) != set(expected):
+        raise ValueError(
+            f"generated sensor configs mismatch: expected {sorted(expected)}"
+        )
+    for name, expected_tree in expected.items():
+        if not _same_typed_tree(generated[name], expected_tree):
+            raise ValueError(
+                f"generated {name} does not match template plus overrides"
+            )
 
     gate = generated["sensor_gate"]
     gate_path = ("sensor_contract_gate", "ros__parameters")
-    expected_gate = {
-        "use_sim_time": effective["derived"]["use_sim_time"],
-        "expected_points_per_scan": effective["derived"]["sensor_contract"][
-            "points_per_scan"
-        ],
-        "expected_point_hz": float(lidar["scan_rate_hz"]),
-        "expected_imu_hz": float(
-            effective["profile"]["sensors"]["imu"]["rate_hz"]
-        ),
-    }
-    for key, expected in expected_gate.items():
-        path = gate_path + (key,)
-        if not _same_typed_value(_get_existing(gate, path), expected):
-            raise ValueError(f"generated sensor_gate mismatch: {'.'.join(path)}")
-
     for key in ("minimum_point_rate_ratio", "minimum_imu_rate_ratio"):
         path = gate_path + (key,)
         value = _get_existing(gate, path)
@@ -877,104 +810,38 @@ def _render_sensor_configs(inputs):
                 templates["sensor_gate"], effective
             ),
         }
-    _validate_sensor_generated_configs(inputs["platform"], effective, generated)
+    _validate_sensor_generated_configs(
+        inputs["platform"], effective, templates, generated
+    )
     return generated
 
 
-def _validate_generated_configs(effective, controllers, web_ui, nav2):
-    drive = effective["derived"]["geometry"]["drive"]
-    motion = effective["profile"]["motion"]
-    base_path = ("base_controller", "ros__parameters")
-    expected_controller = {
-        "wheel_radius": drive["wheel_radius"],
-        "wheel_separation": drive["wheel_separation"],
-        "linear.x.max_velocity": motion["max_linear_velocity"],
-        "linear.x.min_velocity": -motion["max_linear_velocity"],
-        "linear.x.max_acceleration": motion["max_linear_acceleration"],
-        "linear.x.min_acceleration": -motion["max_linear_acceleration"],
-        "angular.z.max_velocity": motion["max_angular_velocity"],
-        "angular.z.min_velocity": -motion["max_angular_velocity"],
-        "angular.z.max_acceleration": motion["max_angular_acceleration"],
-        "angular.z.min_acceleration": -motion["max_angular_acceleration"],
+def _validate_generated_configs(effective, templates, controllers, web_ui, nav2):
+    expected = {
+        "controllers": _render_controller(templates["controllers"], effective),
+        "web_ui": _render_web_ui(templates["web_ui"], effective),
+        "nav2": _render_nav2(templates["nav2"], effective),
     }
-    for key, expected in expected_controller.items():
-        if _get_existing(controllers, base_path + (key,)) != expected:
-            raise ValueError(f"generated controllers mismatch: {'.'.join(base_path + (key,))}")
-    base = _get_existing(controllers, base_path)
+    actual = {
+        "controllers": controllers,
+        "web_ui": web_ui,
+        "nav2": nav2,
+    }
+    for name in expected:
+        if not _same_typed_tree(actual[name], expected[name]):
+            raise ValueError(
+                f"generated {name} does not match template plus overrides"
+            )
+
+    base = _get_existing(controllers, ("base_controller", "ros__parameters"))
     if "wheel_width" in base:
         raise ValueError("generated controllers must not contain wheel_width")
-
-    for key, expected in (
-        ("max_linear_speed", motion["max_linear_velocity"]),
-        ("max_angular_speed", motion["max_angular_velocity"]),
-    ):
-        path = ("robot_web_ui", "ros__parameters", key)
-        if _get_existing(web_ui, path) != expected:
-            raise ValueError(f"generated web_ui mismatch: {'.'.join(path)}")
-
-    follow_path = (
-        "controller_server",
-        "ros__parameters",
-        "FollowPath",
+    follow = _get_existing(
+        nav2, ("controller_server", "ros__parameters", "FollowPath")
     )
-    for key, expected in (
-        ("vx_max", motion["max_linear_velocity"]),
-        ("wz_max", motion["max_angular_velocity"]),
-    ):
-        path = follow_path + (key,)
-        if _get_existing(nav2, path) != expected:
-            raise ValueError(f"generated nav2 mismatch: {'.'.join(path)}")
-    follow_values = _get_existing(nav2, follow_path)
-    unsupported = {"ax_max", "ax_min", "az_max"}.intersection(follow_values)
+    unsupported = {"ax_max", "ax_min", "az_max"}.intersection(follow)
     if unsupported:
         raise ValueError(f"generated nav2 has unsupported keys: {sorted(unsupported)}")
-
-    fixed_behavior = (
-        (follow_path + ("vx_min",), -0.1),
-        (follow_path + ("wz_std",), 0.2),
-        (("behavior_server", "ros__parameters", "max_rotational_vel"), 0.2),
-        (("behavior_server", "ros__parameters", "min_rotational_vel"), 0.1),
-        (("behavior_server", "ros__parameters", "rotational_acc_lim"), 0.2),
-    )
-    for path, expected in fixed_behavior:
-        if not _same_typed_value(_get_existing(nav2, path), expected):
-            raise ValueError(f"generated nav2 mismatch: {'.'.join(path)}")
-
-    obstacle_height = effective["profile"]["perception"]["obstacle_height"]
-    lidar = effective["profile"]["sensors"]["lidar"]
-    horizontal_fov = (
-        lidar["horizontal_end_angle"] - lidar["horizontal_start_angle"]
-    )
-    for root in NAV2_STVL_ROOTS:
-        for suffix, expected in (
-            (("pointcloud_mark", "min_obstacle_height"), obstacle_height["min"]),
-            (("pointcloud_mark", "max_obstacle_height"), obstacle_height["max"]),
-            (("pointcloud_clear", "min_z"), obstacle_height["min"]),
-            (("pointcloud_clear", "max_z"), obstacle_height["max"]),
-            (("pointcloud_clear", "vertical_fov_angle"), lidar["vertical_fov_angle"]),
-            (("pointcloud_clear", "horizontal_fov_angle"), horizontal_fov),
-        ):
-            path = root + suffix
-            if not _same_typed_value(_get_existing(nav2, path), float(expected)):
-                raise ValueError(f"generated nav2 mismatch: {'.'.join(path)}")
-
-    footprint = _format_footprint(effective["derived"]["geometry"]["footprint"])
-    for path in (
-        ("global_costmap", "global_costmap", "ros__parameters", "footprint"),
-        ("local_costmap", "local_costmap", "ros__parameters", "footprint"),
-    ):
-        if _get_existing(nav2, path) != footprint:
-            raise ValueError(f"generated nav2 mismatch: {'.'.join(path)}")
-
-    expected_time = effective["derived"]["use_sim_time"]
-    for mapping, paths in (
-        (controllers, CONTROLLER_TIME_PATHS),
-        (web_ui, WEB_UI_TIME_PATHS),
-        (nav2, NAV2_TIME_PATHS),
-    ):
-        for path in paths:
-            if _get_existing(mapping, path) is not expected_time:
-                raise ValueError(f"generated config mismatch: {'.'.join(path)}")
 
 
 def _render_runtime_configs(inputs):
@@ -989,8 +856,8 @@ def _render_runtime_configs(inputs):
         templates["lio_sam"], effective, inputs["map_artifacts"]
     )
     gicp = _render_gicp(templates["gicp"], effective)
-    _validate_generated_configs(effective, controllers, web_ui, nav2)
-    _validate_fast_lio_generated(effective, fast_lio)
+    _validate_generated_configs(effective, templates, controllers, web_ui, nav2)
+    _validate_fast_lio_generated(effective, templates["fast_lio"], fast_lio)
     _validate_lio_sam_generated(
         effective, inputs["map_artifacts"], templates["lio_sam"], lio_sam
     )
@@ -1100,12 +967,15 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
             )
         _validate_generated_configs(
             reloaded["effective_profile"],
+            inputs["templates"],
             reloaded["controllers"],
             reloaded["web_ui"],
             reloaded["nav2"],
         )
         _validate_fast_lio_generated(
-            reloaded["effective_profile"], reloaded["fast_lio"]
+            reloaded["effective_profile"],
+            inputs["templates"]["fast_lio"],
+            reloaded["fast_lio"],
         )
         _validate_lio_sam_generated(
             reloaded["effective_profile"],
@@ -1121,6 +991,7 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
         _validate_sensor_generated_configs(
             inputs["platform"],
             reloaded["effective_profile"],
+            inputs["sensor_templates"],
             {
                 key: reloaded[key]
                 for key in SENSOR_OUTPUT_FILENAMES[inputs["platform"]]
