@@ -4,7 +4,7 @@
 #
 # === CHASSIS-DEPENDENT（换底盘改这里）===
 #   planner_server.GridBased: minimum_turning_radius / motion_model_for_search
-#   controller_server.FollowPath: motion_model / vx_max / vx_min / wz_max / AckermannConstraints.min_turning_r
+#   controller_server.FollowPath: motion_model / vx_max / vx_min / wz_max
 #   global_costmap & local_costmap: footprint
 #   behavior_server: spin/backup 为原地机动，不能原地转的底盘需复审(spin→drive_on_heading 式)
 # ==========================================
@@ -91,8 +91,6 @@ controller_server:
       TrajectoryVisualizer:
         trajectory_step: 5
         time_step: 3
-      AckermannConstraints:
-        min_turning_r: 0.2      # CHASSIS: 仅 motion_model=Ackermann 时生效
       critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
       ConstraintCritic:
         enabled: true
@@ -171,7 +169,6 @@ global_costmap:
         voxel_size: 0.05
         track_unknown_space: true
         mark_threshold: 0
-        origin_z: 0.0
         publish_voxel_map: false    # 全图层不发布 3D 体素(省带宽;调试临时开)
         transform_tolerance: 0.2
         mapping_mode: false
@@ -234,7 +231,6 @@ local_costmap:
         voxel_size: 0.05
         track_unknown_space: true
         mark_threshold: 0
-        origin_z: 0.0               # STVL 视锥清除,0.0 起步;若刷 Sensor origin out of map bounds 则改 -1.0(见 Task 3 Step 6)
         publish_voxel_map: true     # 局部保留发布(调试;原 VoxelLayer 也发布)
         transform_tolerance: 0.2
         mapping_mode: false

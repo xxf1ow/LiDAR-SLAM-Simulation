@@ -652,6 +652,24 @@ def test_nav2_template_is_complete_native_parameter_file():
     )
 
 
+def test_nav2_template_omits_constraints_for_inactive_motion_model():
+    template = _load_yaml(TEMPLATE_DIR / "nav2.yaml")
+    follow_path = template["controller_server"]["ros__parameters"]["FollowPath"]
+
+    assert (
+        follow_path["motion_model"] == "Ackermann"
+        or "AckermannConstraints" not in follow_path
+    )
+
+
+@pytest.mark.parametrize("costmap", ["global_costmap", "local_costmap"])
+def test_nav2_stvl_template_omits_undeclared_origin_z(costmap):
+    template = _load_yaml(TEMPLATE_DIR / "nav2.yaml")
+    stvl = template[costmap][costmap]["ros__parameters"]["stvl_layer"]
+
+    assert "origin_z" not in stvl
+
+
 def test_sensor_templates_are_complete_native_parameter_files():
     adapter = _load_yaml(
         TEMPLATE_DIR / SENSOR_TEMPLATE_NAMES["lidar_adapter"]
