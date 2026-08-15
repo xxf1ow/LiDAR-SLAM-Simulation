@@ -53,10 +53,13 @@ formal bringup 与包级 launch 切换为 manifest 指定的 generated YAML，�
 - full workspace 首次并行构建因 host OOM 失败；唯一环境调度调整为 sequential 后 16 packages build 通过。default-policy test 执行 11 packages，`colcon test-result` 为 926 tests、0 errors、0 failures、0 skipped。
 - metadata parse 与 stale-document scan 通过；独立预提交审查最终为 Ready Yes（0 Critical、0 Important，最后一个 Minor 已修复）。
 
-### [ ] 6D. 真机 mapping/navigation 统一验收
+### [x] 6D. 真机 mapping/navigation 统一验收
 
-在 6C-3 完成后，按 tracked 6D runbook 分别执行有人在场的真机 mapping/navigation 静态与
-运行观察；不下发导航目标，不把动态调参或长期稳定性验收混入该 gate。
+真机 mapping 验收通过。navigation 首轮严格 generated/live 比较发现 DiffDrive 下的
+Ackermann 专属参数与 Humble STVL 未声明参数；`eef134a` 完成最小删除后，Navigation-only
+复验确认五个 lifecycle 节点均为 active，`controller_server`、`global_costmap`、
+`local_costmap` 三项 typed projection 全部 EQUAL，配置 byte-exact 恢复且栈清理通过。
+全程未下发导航目标、未移动底盘、未调参、未保存地图。
 
 ## 当前已知边界与后续产品工作
 
@@ -66,4 +69,5 @@ formal bringup 与包级 launch 切换为 manifest 指定的 generated YAML，�
 
 ## 下一步
 
-按 tracked `docs/acceptance/profile-migration-real-acceptance.md` 执行 6D 真机 mapping/navigation 统一验收。
+Profile + template 配置迁移与统一真机验收已结束。后续产品工作从上述已知边界中单独立项，
+不在本阶段顺带扩展。
