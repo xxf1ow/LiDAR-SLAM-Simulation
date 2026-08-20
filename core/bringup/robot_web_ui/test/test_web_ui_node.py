@@ -11,6 +11,7 @@ from robot_web_ui.map_snapshot import (
     BinarySnapshot,
     GridInfo,
     GridSnapshot,
+    update_grid_snapshot,
     update_path_snapshot,
 )
 
@@ -333,14 +334,10 @@ def navigation_bare_node(module):
     node._map_error = None
     node._static_map = None
     node._global_costmap = None
-    node._local_costmap = None
     node._path_snapshot = None
     node._localization_pose = None
     node._localization_error = None
     node._path_error = None
-    node._local_transform_available = None
-    node._local_transform_error = None
-    node._local_map_from_source = None
     node._local_layer = (None, None, None, None)
     node._gate_mode = "automatic"
     node._odom_feedback = None
@@ -442,8 +439,8 @@ def test_local_costmap_callback_stores_grid_and_separate_map_transform(
     node._local_costmap_callback(grid)
 
     state = node.navigation_state()
-    assert node._local_costmap.info.frame_id == "odom"
-    assert node._local_costmap.binary.data == bytes((12, 88))
+    assert node._local_layer[0].info.frame_id == "odom"
+    assert node._local_layer[0].binary.data == bytes((12, 88))
     assert state["layers"]["local_costmap"]["map_from_source"] == pytest.approx(
         [4.0, -2.0, 0.5]
     )
@@ -462,7 +459,7 @@ def test_local_costmap_tf_failure_preserves_other_layers_and_reports_unavailable
     node._tf_buffer = node_module.Buffer()
     node._tf_buffer.transform = map_transform()
     node._local_costmap_callback(occupancy_grid(node_module, frame_id="odom"))
-    local_before = node._local_costmap
+    local_before = node._local_layer[0]
     node._tf_buffer.error = node_module.TransformException("missing transform")
 
     node._local_costmap_callback(
@@ -471,7 +468,7 @@ def test_local_costmap_tf_failure_preserves_other_layers_and_reports_unavailable
 
     assert node._global_costmap is global_before
     assert node._static_map is static_before
-    assert node._local_costmap is local_before
+    assert node._local_layer[0] is local_before
     local = node.navigation_state()["layers"]["local_costmap"]
     assert local["map_from_source"] is None
     assert local["transform_available"] is False
@@ -512,14 +509,11 @@ def test_navigation_state_is_a_complete_immutable_projection(node_module):
     node = navigation_bare_node(node_module)
     node._static_map = _static_snapshot()
     node._global_costmap_callback(occupancy_grid(node_module, data=(7, 8)))
-    node._local_costmap = node._global_costmap
-    node._local_transform_available = True
-    node._local_map_from_source = (1.0, 2.0, 0.3)
     node._local_layer = (
-        node._local_costmap,
-        node._local_map_from_source,
-        node._local_transform_available,
-        node._local_transform_error,
+        node._global_costmap,
+        (1.0, 2.0, 0.3),
+        True,
+        None,
     )
     node._path_snapshot = update_path_snapshot(
         None, "map", [(3.0, 4.0)]
@@ -547,9 +541,9 @@ def test_local_costmap_state_reads_one_atomic_layer_projection(node_module):
     node._tf_buffer = node_module.Buffer()
     node._tf_buffer.transform = map_transform()
     node._local_costmap_callback(occupancy_grid(node_module, data=(1, 2)))
-    old = node._local_costmap
+    old = node._local_layer[0]
     node._local_costmap_callback(occupancy_grid(node_module, data=(3, 4)))
-    new = node._local_costmap
+    new = node._local_layer[0]
     node._local_costmap = old
     node._local_map_from_source = (1.0, 2.0, 0.3)
     node._local_transform_available = True
@@ -560,6 +554,36 @@ def test_local_costmap_state_reads_one_atomic_layer_projection(node_module):
 
     assert local["revision"] == new.binary.revision
     assert local["map_from_source"] == [7.0, 8.0, 0.9]
+
+
+def test_local_costmap_asset_reads_the_same_atomic_layer_as_state(node_module):
+    node = navigation_bare_node(node_module)
+    info = GridInfo(2, 1, 0.4, -3.0, 1.5, 0.0, "odom")
+    stale = update_grid_snapshot(None, info, b"\x01\x02")
+    current = update_grid_snapshot(stale, info, b"\x03\x04")
+    node._local_costmap = stale
+    node._local_layer = (current, (7.0, 8.0, 0.9), True, None)
+
+    local = node.navigation_state()["layers"]["local_costmap"]
+
+    assert local["revision"] == current.binary.revision
+    assert node.navigation_asset("local_costmap") is current.binary
+
+
+def test_local_costmap_callback_builds_revisions_from_atomic_layer(node_module):
+    node = navigation_bare_node(node_module)
+    node._tf_buffer = node_module.Buffer()
+    node._tf_buffer.transform = map_transform()
+    info = GridInfo(2, 1, 0.4, -3.0, 1.5, 0.0, "odom")
+    previous = update_grid_snapshot(None, info, b"\x01\x02")
+    node._local_layer = (previous, (4.0, -2.0, 0.5), True, None)
+    node._local_costmap_callback(
+        occupancy_grid(node_module, frame_id="odom", data=(3, 4))
+    )
+
+    current = node._local_layer[0]
+    assert current.binary.revision == previous.binary.revision + 1
+    assert current.binary.data == b"\x03\x04"
 
 
 def test_node_declares_exact_visualization_subscriptions_and_qos(node_module):

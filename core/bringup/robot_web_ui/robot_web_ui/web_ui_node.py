@@ -66,14 +66,10 @@ class WebUiNode(Node):
         self._static_map = None
         self._map_error = None
         self._global_costmap = None
-        self._local_costmap = None
         self._path_snapshot = None
         self._localization_pose = None
         self._localization_error = None
         self._path_error = None
-        self._local_map_from_source = None
-        self._local_transform_available = None
-        self._local_transform_error = None
         self._local_layer = (None, None, None, None)
         try:
             self._static_map = load_nav2_pgm(Path(map_yaml_path))
@@ -291,7 +287,9 @@ class WebUiNode(Node):
     def _local_costmap_callback(self, message: OccupancyGrid) -> None:
         try:
             info, data = self._grid_fields(message)
-            candidate = update_grid_snapshot(self._local_costmap, info, data)
+            candidate = update_grid_snapshot(
+                self._local_layer[0], info, data
+            )
             transform = self._tf_buffer.lookup_transform(
                 "map", info.frame_id, Time()
             )
@@ -302,22 +300,15 @@ class WebUiNode(Node):
                 raise ValueError("invalid map transform")
         except TransformException as exc:
             self._local_layer = (
-                self._local_costmap,
+                self._local_layer[0],
                 None,
                 False,
                 str(exc),
             )
-            self._local_transform_available = False
-            self._local_transform_error = str(exc)
-            self._local_map_from_source = None
             return
         except (AttributeError, TypeError, ValueError):
             return
         self._local_layer = (candidate, (x, y, yaw), True, None)
-        self._local_costmap = candidate
-        self._local_map_from_source = (x, y, yaw)
-        self._local_transform_available = True
-        self._local_transform_error = None
 
     def _plan_callback(self, message: NavPath) -> None:
         try:
@@ -422,7 +413,8 @@ class WebUiNode(Node):
         if name == "global_costmap":
             return None if self._global_costmap is None else self._global_costmap.binary
         if name == "local_costmap":
-            return None if self._local_costmap is None else self._local_costmap.binary
+            snapshot = self._local_layer[0]
+            return None if snapshot is None else snapshot.binary
         if name == "path":
             return None if self._path_snapshot is None else self._path_snapshot.binary
         raise KeyError(name)
