@@ -1,5 +1,6 @@
 import json
 import socket
+import struct
 import threading
 import time
 import urllib.error
@@ -371,11 +372,53 @@ def test_map_download_does_not_block_manual_post(tmp_path):
     assert results["download"] == (200, actions.assets["static"].gzip_data)
 
 
-def test_abandoned_map_download_does_not_disrupt_manual_post(tmp_path):
+@pytest.mark.parametrize(
+    "write_error",
+    [BrokenPipeError, ConnectionResetError, TimeoutError],
+)
+def test_send_bytes_absorbs_client_write_errors(write_error, tmp_path):
+    class FailingWriter:
+        def write(self, _body):
+            raise write_error()
+
+    handler = object.__new__(
+        http_server._handler_for(FakeActions(), tmp_path / "index.html")
+    )
+    handler.wfile = FailingWriter()
+    handler.close_connection = False
+    handler.send_response = lambda _status: None
+    handler.send_header = lambda _name, _value: None
+    handler.end_headers = lambda: None
+
+    handler._send_bytes(200, "application/octet-stream", b"asset")
+
+    assert handler.close_connection is True
+
+
+def test_abandoned_map_download_does_not_disrupt_manual_post(
+    tmp_path, monkeypatch
+):
     html_path = tmp_path / "index.html"
     html_path.write_text("ok")
     actions = FakeActions()
     actions.blocked_asset_name = "static"
+    response_handled = threading.Event()
+    original_handler_for = http_server._handler_for
+
+    def handler_for(*args):
+        handler = original_handler_for(*args)
+        original_do_get = handler.do_GET
+
+        def do_GET(request_handler):
+            try:
+                original_do_get(request_handler)
+            finally:
+                response_handled.set()
+
+        handler.do_GET = do_GET
+        return handler
+
+    monkeypatch.setattr(http_server, "_handler_for", handler_for)
 
     with running_server(actions, html_path) as base_url:
         host, port = base_url.removeprefix("http://").split(":")
@@ -389,9 +432,15 @@ def test_abandoned_map_download_does_not_disrupt_manual_post(tmp_path):
             )
             assert actions.asset_read_started.wait(timeout=1.0)
         finally:
+            client.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_LINGER,
+                struct.pack("ii", 1, 0),
+            )
             client.close()
 
         actions.allow_asset_read.set()
+        assert response_handled.wait(timeout=1.0)
         response = post_json(
             base_url,
             "/api/manual-command",
