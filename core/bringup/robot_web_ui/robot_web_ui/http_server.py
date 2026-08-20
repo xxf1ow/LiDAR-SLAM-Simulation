@@ -73,7 +73,15 @@ def _handler_for(actions, html_path: Path):
                 self.close_connection = True
 
         def _send_json(self, status: int, payload: dict[str, object]) -> None:
-            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            try:
+                body = json.dumps(
+                    payload,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            except (TypeError, ValueError):
+                status = 500
+                body = b'{"error":"response serialization failed"}'
             self._send_bytes(
                 status,
                 "application/json; charset=utf-8",

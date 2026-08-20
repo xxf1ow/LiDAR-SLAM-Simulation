@@ -39,6 +39,7 @@ class FakeActions:
         self.asset_read_started = threading.Event()
         self.allow_asset_read = threading.Event()
         self.blocked_asset_name = None
+        self.navigation_state_override = None
         self.assets = {
             "static": BinarySnapshot(
                 3,
@@ -79,6 +80,8 @@ class FakeActions:
         }
 
     def navigation_state(self):
+        if self.navigation_state_override is not None:
+            return self.navigation_state_override
         return {
             "map_error": None,
             "localized": True,
@@ -236,9 +239,51 @@ def test_navigation_state_returns_small_no_store_json(tmp_path):
         assert response.status == 200
         assert response.headers["Cache-Control"] == "no-store"
         assert response.headers.get("Content-Encoding") is None
+        assert body == json.dumps(
+            actions.navigation_state(), separators=(",", ":")
+        ).encode()
         assert json.loads(body) == actions.navigation_state()
         assert b'"data"' not in body
         assert b"gzip" not in body
+
+
+@pytest.mark.parametrize(
+    "bad_value",
+    [
+        pytest.param(object(), id="non-json-object"),
+        pytest.param(float("nan"), id="non-finite-float"),
+    ],
+)
+def test_navigation_state_serialization_failure_returns_500_and_server_recovers(
+    tmp_path, bad_value
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    actions.navigation_state_override = {"bad": bad_value}
+
+    with running_server(actions, html_path) as base_url:
+        try:
+            response = request(base_url, "/api/navigation-state")
+        except Exception as exc:
+            pytest.fail(f"server closed without a 500 response: {exc}")
+
+        assert response.status == 500
+        assert (
+            response.headers["Content-Type"]
+            == "application/json; charset=utf-8"
+        )
+        assert response.read() == b'{"error":"response serialization failed"}'
+
+        actions.navigation_state_override = None
+        manual = post_json(
+            base_url,
+            "/api/manual-command",
+            {"direction": "forward", "speed_percent": 20},
+        )
+        assert manual.status == 200
+        assert response_json(manual)["ok"] is True
+        assert actions.calls == [("manual_command", "forward", 20)]
 
 
 @pytest.mark.parametrize(
