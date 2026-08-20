@@ -147,11 +147,6 @@ def _read_pgm(path: Path) -> tuple[int, int, bytes]:
         index += 2
     else:
         index += 1
-    while index < len(raw) and raw[index] == ord("#"):
-        newline = raw.find(b"\n", index)
-        if newline < 0:
-            raise ValueError("invalid PGM header: comment has no line ending")
-        index = newline + 1
 
     pixels = raw[index:]
     expected = width * height

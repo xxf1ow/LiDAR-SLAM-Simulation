@@ -69,6 +69,28 @@ def test_load_nav2_pgm_resolves_image_relative_to_yaml(tmp_path, monkeypatch):
     assert len(snapshot.binary.data) == 4
 
 
+def test_load_nav2_pgm_preserves_hash_raster_byte(tmp_path):
+    pgm = tmp_path / "hash.pgm"
+    pgm.write_bytes(b"P5\n1 1\n255\n#")
+    yaml_path = tmp_path / "hash.yaml"
+    yaml_path.write_text(
+        "image: hash.pgm\n"
+        "resolution: 0.2\n"
+        "origin: [0.0, 0.0, 0.0]\n"
+        "negate: 0\n"
+        "occupied_thresh: 0.65\n"
+        "free_thresh: 0.25\n"
+        "mode: trinary\n",
+        encoding="utf-8",
+    )
+
+    snapshot = load_nav2_pgm(yaml_path)
+
+    assert snapshot.info.width == 1
+    assert snapshot.info.height == 1
+    assert snapshot.binary.data == b"\x64"
+
+
 @pytest.mark.parametrize(
     ("case", "expected"),
     [
@@ -139,6 +161,14 @@ def test_gzip_body_round_trips_exact_bytes():
     snapshot = update_grid_snapshot(None, info, b"\x00\xff")
 
     assert gzip.decompress(snapshot.binary.gzip_data) == snapshot.binary.data
+
+
+def test_generic_grid_snapshot_preserves_inflated_cost_value():
+    info = GridInfo(1, 1, 0.2, 0.0, 0.0, 0.0, "map")
+
+    snapshot = update_grid_snapshot(None, info, b"\x25")
+
+    assert snapshot.binary.data == b"\x25"
 
 
 def test_path_snapshot_is_little_endian_float32_and_revisioned():
