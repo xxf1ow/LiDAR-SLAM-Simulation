@@ -4,8 +4,8 @@
 
 - FAST-LIO2 消费 LiDAR/IMU，发布 `camera_init -> body`、`/Odometry` 和
   `/cloud_registered`。
-- `gicp_localization` 把 `/cloud_registered` 配准到 LIO-SAM 先验图，发布
-  `map -> camera_init` 和 `/localization`。
+- `gicp_localization` 把 `/cloud_registered` 配准到 LIO-SAM 先验图，高频发布供 RViz
+  观察的 `map -> camera_init`；只有首次配准被接受后才发布 `/localization`。
 
 完整定位链：
 
@@ -37,8 +37,9 @@ git apply ../fast-lio2.patch
 ## GICP 集成
 
 `gicp_localization/` 是本仓库代码。它使用 small_gicp，以低频配准更新校正，同时高频发布
-最后一次接受的 `map -> camera_init`。接受条件是 fitness 达到阈值；被拒绝时保持上一次有效
-校正。
+当前预览/最后一次接受的 `map -> camera_init`。接受条件是 fitness 达到阈值；被拒绝时保持
+上一次校正。首次 accepted 前不发布 `/localization`，因此后续 Nav2 gate 不会把“节点正在运行”
+误认为“已经定位成功”。
 
 small_gicp 克隆到 `core/localization/small_gicp`：
 
@@ -70,7 +71,8 @@ source install/setup.bash
 ros2 launch system_bringup bringup.launch.py
 ```
 
-shared sensor gate 通过后启动 FAST-LIO；随后 GICP 和底盘里程计 gate 放行 Nav2。
+shared sensor gate 通过后启动 FAST-LIO；navigation RViz 提前显示 GICP prior map 与实时注册点云。
+GICP 首次 accepted 并开始发布 `/localization` 后，才由底盘里程计 gate 放行 Nav2。
 formal bringup 从 manifest 传入 `fast_lio.generated.yaml` 的绝对路径；`slam_stack` 将其拆为
 上游 FAST-LIO 的 `config_path`/`config_file`，并永久发布 `body -> base_footprint` bridge。
 `gicp.generated.yaml` 拥有算法参数；`map_artifacts.prior_pcd` 提供运行时先验地图覆盖。

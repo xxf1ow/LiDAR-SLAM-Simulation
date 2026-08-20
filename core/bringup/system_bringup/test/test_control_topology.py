@@ -6,6 +6,7 @@ import types
 import xml.etree.ElementTree as ET
 
 import pytest
+import yaml
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -13,6 +14,7 @@ NAVIGATION = ROOT / "core/navigation/robot_navigation/launch/navigation.launch.p
 SLAM_STACK = ROOT / "core/bringup/system_bringup/launch/slam_stack.launch.py"
 BRINGUP = ROOT / "core/bringup/system_bringup/launch/bringup.launch.py"
 GICP_LAUNCH = ROOT / "core/localization/gicp_localization/launch/localization.launch.py"
+NAV_RVIZ = ROOT / "core/navigation/robot_navigation/config/nav2.rviz"
 ROBOT = ROOT / "core/robot/robot_bringup/launch/robot.launch.py"
 REAL_CHASSIS = ROOT / "core/robot/robot_bringup/launch/real_chassis.launch.py"
 SENSOR_GATE = ROOT / "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
@@ -316,6 +318,55 @@ def test_slam_stack_navigation_owns_one_manifest_driven_body_bridge():
     assert first_term.elts[1].id == "body_bridge"
     assert isinstance(first_term.elts[2], ast.Name)
     assert first_term.elts[2].id == "fast_lio"
+
+
+def test_slam_stack_starts_one_rviz_before_localization_gate():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    navigation = _mode_branch(function, "navigation")
+    rviz_nodes = [
+        call
+        for call in _calls(navigation, "Node")
+        if _string(_keyword(call, "package")) == "rviz2"
+    ]
+    assert len(rviz_nodes) == 1
+    assert _string(_keyword(rviz_nodes[0], "name")) == "rviz2"
+
+    result = next(
+        node.value for node in navigation.body if isinstance(node, ast.Return)
+    )
+    first_term = _add_terms(result)[0]
+    assert isinstance(first_term, ast.List)
+    assert any(
+        isinstance(item, ast.Name) and item.id == "rviz"
+        for item in first_term.elts
+    )
+
+    nav2_include = next(
+        call
+        for call in _calls(navigation, "_inc")
+        if _string(call.args[0]) == "robot_navigation"
+    )
+    assert _string(_dict_value(nav2_include.args[2], "use_rviz")) == "false"
+
+
+def test_navigation_rviz_supports_initial_pose_against_both_point_clouds():
+    config = yaml.safe_load(NAV_RVIZ.read_text(encoding="utf-8"))
+    manager = config["Visualization Manager"]
+    assert manager["Global Options"]["Fixed Frame"] == "map"
+    assert any(
+        tool["Class"] == "rviz_default_plugins/SetInitialPose"
+        and tool["Topic"]["Value"] == "/initialpose"
+        for tool in manager["Tools"]
+    )
+    cloud_topics = {
+        display["Topic"]["Value"]
+        for display in manager["Displays"]
+        if display["Class"] == "rviz_default_plugins/PointCloud2"
+    }
+    assert cloud_topics >= {
+        "/gicp_localization/prior_map",
+        "/cloud_registered",
+    }
 
 
 def test_slam_stack_mapping_has_no_fast_lio_or_body_bridge():
@@ -1168,3 +1219,4 @@ def test_manifest_exec_depends_on_control_packages_and_body_bridge():
     assert {"cmd_vel_gate", "robot_web_ui"} <= dependencies
     assert {"robot_bringup", "vanjee_lidar_ros", "rclpy", "sensor_msgs"} <= dependencies
     assert "tf2_ros" in dependencies
+    assert "rviz2" in dependencies
