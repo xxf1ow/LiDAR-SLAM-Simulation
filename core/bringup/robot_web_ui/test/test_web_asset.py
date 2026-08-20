@@ -68,6 +68,23 @@ def test_notice_stays_visible_outside_the_manual_only_panel():
     assert not manual_panel < notice < manual_panel_end
 
 
+def test_navigation_status_is_separate_from_manual_notice_and_panel():
+    source = HTML.read_text(encoding="utf-8")
+    manual_panel = source.index('id="manualPanel"')
+    manual_panel_end = source.index(
+        '</section>\n  <section class="map-actions"', manual_panel
+    )
+    navigation_status = source.index('id="navigationStatus"')
+
+    assert source.count('id="navigationStatus"') == 1
+    assert not manual_panel < navigation_status < manual_panel_end
+    assert (
+        'navigationStatus: document.getElementById("navigationStatus")'
+        in source
+    )
+    assert 'const notice = document.getElementById("notice")' in source
+
+
 def test_page_uses_neutral_api_without_vendor_surface():
     source = HTML.read_text(encoding="utf-8")
 

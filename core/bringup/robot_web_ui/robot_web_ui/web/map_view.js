@@ -110,19 +110,35 @@
       return raster;
     }
 
+    function effectiveGridInfo(name, info) {
+      const layer = cache[name];
+      if (!layer) return null;
+      if (
+        info
+        && layer.revision === info.revision
+        && layer.etag === info.etag
+      ) return info;
+      return layer.info;
+    }
+
     function drawGrid(name, info) {
       const layer = cache[name];
-      if (!layer || !info || !layer.raster) return;
-      if (name === "local_costmap" && !validLocalAffine(info)) return;
+      const drawInfo = effectiveGridInfo(name, info);
+      if (!layer || !drawInfo || !layer.raster) return;
+      if (name === "local_costmap" && !validLocalAffine(drawInfo)) return;
       context.save();
       if (name === "local_costmap") {
-        context.translate(info.map_from_source[0], info.map_from_source[1]);
-        context.rotate(info.map_from_source[2]);
+        context.translate(
+          drawInfo.map_from_source[0], drawInfo.map_from_source[1]
+        );
+        context.rotate(drawInfo.map_from_source[2]);
       }
-      context.translate(info.origin[0], info.origin[1]);
-      context.rotate(info.origin[2]);
-      context.scale(info.resolution, info.resolution);
-      context.drawImage(layer.raster, 0, 0, info.width, info.height);
+      context.translate(drawInfo.origin[0], drawInfo.origin[1]);
+      context.rotate(drawInfo.origin[2]);
+      context.scale(drawInfo.resolution, drawInfo.resolution);
+      context.drawImage(
+        layer.raster, 0, 0, drawInfo.width, drawInfo.height
+      );
       context.restore();
     }
 
@@ -183,33 +199,81 @@
       }
       if (name === "local_costmap" && !validLocalAffine(info)) return;
       const current = cache[name];
-      if (current && current.revision === info.revision) return;
+      if (
+        current
+        && current.revision === info.revision
+        && current.etag === info.etag
+      ) return;
       const headers = current && current.etag ? {"If-None-Match": current.etag} : {};
       const response = await fetch(LAYERS[name], {headers});
+      const responseEtag = response.headers.get("ETag");
+      if (responseEtag !== info.etag) return;
       if (response.status === 304) {
-        if (current) {
+        if (current && current.etag === responseEtag) {
           cache[name] = {
             ...current,
             revision: info.revision,
-            etag: info.etag || current.etag
+            info
           };
         }
         return;
       }
       if (!response.ok) return;
       const cells = new Uint8Array(await response.arrayBuffer());
+      if (name === "path") {
+        if (cells.byteLength === 0 || cells.byteLength % 8 !== 0) return;
+      } else if (
+        !Number.isInteger(info.width)
+        || !Number.isInteger(info.height)
+        || info.width <= 0
+        || info.height <= 0
+        || cells.byteLength !== info.width * info.height
+      ) return;
       cache[name] = {
         revision: info.revision,
-        etag: info.etag || response.headers.get("ETag"),
+        etag: responseEtag,
+        info,
         cells,
         raster: name === "path" ? null : buildGridRaster(name, info, cells)
       };
+    }
+
+    function updateNavigationStatus() {
+      const layers = latestState.layers || {};
+      const mapUnavailable = Boolean(latestState.map_error) || !layers.static;
+      const messages = [];
+      if (mapUnavailable) {
+        messages.push(latestState.map_error
+          ? `地图不可用：${latestState.map_error}`
+          : "地图不可用");
+      }
+      if (latestState.localization_error) {
+        messages.push(`定位异常：${latestState.localization_error}`);
+      } else if (!latestState.localization) {
+        messages.push("等待定位");
+      }
+      if (latestState.path_error) {
+        messages.push(`路径异常：${latestState.path_error}`);
+      }
+      const local = layers.local_costmap;
+      if (local && local.transform_available === false) {
+        messages.push(local.transform_error
+          ? `局部代价地图不可用：${local.transform_error}`
+          : "局部代价地图等待坐标变换");
+      }
+      if (options.navigationStatus) {
+        options.navigationStatus.textContent = messages.join("；");
+      }
+      Object.values(buttons).forEach((button) => {
+        if (button) button.disabled = mapUnavailable;
+      });
     }
 
     async function applyState(state) {
       latestState = state || {layers: {}};
       const layers = latestState.layers || {};
       for (const name of Object.keys(LAYERS)) await updateLayer(name, layers[name]);
+      updateNavigationStatus();
       render();
     }
 
@@ -236,7 +300,8 @@
     }
 
     function fit() {
-      const info = latestState.layers && latestState.layers.static;
+      const stateInfo = latestState.layers && latestState.layers.static;
+      const info = effectiveGridInfo("static", stateInfo);
       if (!info) return;
       const corners = [
         gridToWorld(info, 0, 0),
@@ -289,6 +354,7 @@
     if (buttons.fit) buttons.fit.addEventListener("click", fit);
     if (buttons.centerRobot) buttons.centerRobot.addEventListener("click", centerRobot);
     if (globalThis.addEventListener) globalThis.addEventListener("resize", render);
+    updateNavigationStatus();
     render();
     if (options.poll !== false) poll();
 

@@ -428,6 +428,21 @@ def test_global_costmap_callback_revisions_only_on_content_or_metadata_change(
     assert node._global_costmap.binary.revision == content_changed.binary.revision + 1
 
 
+def test_global_costmap_wrong_frame_retains_last_valid_snapshot(node_module):
+    node = navigation_bare_node(node_module)
+    node._global_costmap_callback(
+        occupancy_grid(node_module, frame_id="map", data=(12, 34))
+    )
+    valid = node._global_costmap
+
+    node._global_costmap_callback(
+        occupancy_grid(node_module, frame_id="odom", data=(56, 78))
+    )
+
+    assert node._global_costmap is valid
+    assert node._global_costmap.binary.data == bytes((12, 34))
+
+
 def test_local_costmap_callback_stores_grid_and_separate_map_transform(
     node_module,
 ):

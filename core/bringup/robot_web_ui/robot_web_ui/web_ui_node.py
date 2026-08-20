@@ -280,6 +280,8 @@ class WebUiNode(Node):
             info, data = self._grid_fields(message)
         except (AttributeError, TypeError, ValueError):
             return
+        if info.frame_id != "map":
+            return
         self._global_costmap = update_grid_snapshot(
             self._global_costmap, info, data
         )

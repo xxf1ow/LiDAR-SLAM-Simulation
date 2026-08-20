@@ -138,7 +138,16 @@ def _run_map_scenario(scenario):
             assert.deepStrictEqual(cell, {column: 1, row: 2});
             return;
           }
-          const view = RobotMapView.create({canvas, poll: false});
+          const navigationStatus = new FakeElement("navigationStatus");
+          const buttons = {
+            zoomIn: new FakeElement("mapZoomIn"),
+            zoomOut: new FakeElement("mapZoomOut"),
+            fit: new FakeElement("mapFit"),
+            centerRobot: new FakeElement("mapCenterRobot")
+          };
+          const view = RobotMapView.create({
+            canvas, buttons, navigationStatus, poll: false
+          });
           if (scenario === "revision") {
             responses.push(json(state({layers: {static: grid(1), global_costmap: null, local_costmap: null, path: null}})), bytes([0, 255, 0, 0]));
             await view.poll();
@@ -148,6 +157,108 @@ def _run_map_scenario(scenario):
             await view.poll();
             assert.deepStrictEqual(requests.map((request) => request.path), ["/api/navigation-state", "/api/map/static", "/api/navigation-state", "/api/navigation-state", "/api/map/static"]);
             assert.strictEqual(requests[4].options.headers["If-None-Match"], '"1"');
+            return;
+          }
+          if (scenario === "etag-interleaving") {
+            const first = grid(1, {etag: '"A"'});
+            const second = grid(2, {etag: '"B"', origin: [10, 20, 0]});
+            responses.push(json(state({layers: {static: first, global_costmap: null, local_costmap: null, path: null}})), bytes([0, 0, 0, 0], '"A"'));
+            await view.poll();
+            const priorRaster = offscreenCanvases[0];
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: null}})), bytes([100, 100, 100, 100], '"C"'));
+            await view.poll();
+            assert.strictEqual(offscreenCanvases.length, 1);
+            assert(canvas.operations.some((operation) => operation[0] === "drawImage" && operation[1] === priorRaster));
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: null}})), bytes([100, 100, 100, 100], '"B"'));
+            await view.poll();
+            assert.strictEqual(offscreenCanvases.length, 2);
+            assert.strictEqual(requests.filter((request) => request.path === "/api/map/static").length, 3);
+            return;
+          }
+          if (scenario === "asset-lengths") {
+            const first = grid(1, {etag: '"A"'});
+            const second = grid(2, {etag: '"B"'});
+            const firstPath = {revision: 1, etag: '"P"'};
+            const secondPath = {revision: 2, etag: '"Q"'};
+            responses.push(json(state({layers: {static: first, global_costmap: null, local_costmap: null, path: firstPath}})), bytes([0, 0, 0, 0], '"A"'), pathBytes([[1, 2]], '"P"'));
+            await view.poll();
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([100, 100, 100], '"B"'), bytes([0, 0, 0, 0], '"Q"'));
+            await view.poll();
+            assert.strictEqual(offscreenCanvases.length, 1);
+            assert.strictEqual(canvas.operations.filter((operation) => operation[0] === "move" && operation[1] === 1 && operation[2] === 2).length, 2);
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([100, 100, 100, 100], '"B"'), pathBytes([[9, 10]], '"Q"'));
+            await view.poll();
+            assert.strictEqual(offscreenCanvases.length, 2);
+            assert(canvas.operations.some((operation) => operation[0] === "move" && operation[1] === 9 && operation[2] === 10));
+            assert.strictEqual(requests.filter((request) => request.path === "/api/map/static").length, 3);
+            assert.strictEqual(requests.filter((request) => request.path === "/api/navigation-path").length, 3);
+            return;
+          }
+          if (scenario === "empty-assets") {
+            const first = grid(1, {etag: '"A"'});
+            const second = grid(2, {etag: '"B"'});
+            const firstPath = {revision: 1, etag: '"P"'};
+            const secondPath = {revision: 2, etag: '"Q"'};
+            responses.push(json(state({layers: {static: first, global_costmap: null, local_costmap: null, path: firstPath}})), bytes([0, 0, 0, 0], '"A"'), pathBytes([[1, 2]], '"P"'));
+            await view.poll();
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([], '"B"'), bytes([], '"Q"'));
+            await view.poll();
+            assert.strictEqual(offscreenCanvases.length, 1);
+            assert(canvas.operations.some((operation) => operation[0] === "move" && operation[1] === 1 && operation[2] === 2));
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([100, 100, 100, 100], '"B"'), pathBytes([[9, 10]], '"Q"'));
+            await view.poll();
+            assert.strictEqual(requests.filter((request) => request.path === "/api/map/static").length, 3);
+            assert.strictEqual(requests.filter((request) => request.path === "/api/navigation-path").length, 3);
+            assert(canvas.operations.some((operation) => operation[0] === "move" && operation[1] === 9 && operation[2] === 10));
+            return;
+          }
+          if (scenario === "not-modified-etag-mismatch") {
+            const first = grid(1, {etag: '"A"'});
+            const second = grid(2, {etag: '"B"'});
+            const mismatched304 = {ok: false, status: 304, headers: {get: () => '"C"'}};
+            responses.push(json(state({layers: {static: first, global_costmap: null, local_costmap: null, path: null}})), bytes([0, 0, 0, 0], '"A"'));
+            await view.poll();
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: null}})), mismatched304);
+            await view.poll();
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: null}})), bytes([100, 100, 100, 100], '"B"'));
+            await view.poll();
+            assert.strictEqual(requests.filter((request) => request.path === "/api/map/static").length, 3);
+            assert.strictEqual(offscreenCanvases.length, 2);
+            return;
+          }
+          if (scenario === "navigation-status") {
+            const manualNotice = new FakeElement("notice");
+            manualNotice.textContent = "人工控制请求失败";
+            await view.applyState(state({
+              map_error: "bad map yaml", localization: null,
+              layers: {static: null, global_costmap: null, local_costmap: null, path: null}
+            }));
+            assert(navigationStatus.textContent.includes("bad map yaml"));
+            assert(navigationStatus.textContent.includes("等待定位"));
+            assert(Object.values(buttons).every((button) => button.disabled));
+            assert.strictEqual(manualNotice.textContent, "人工控制请求失败");
+            responses.push(bytes([0, 0, 0, 0]));
+            await view.applyState(state({
+              localization: null,
+              layers: {static: grid(1), global_costmap: null, local_costmap: null, path: null}
+            }));
+            assert.strictEqual(navigationStatus.textContent, "等待定位");
+            assert(Object.values(buttons).every((button) => !button.disabled));
+            await view.applyState(state({
+              localization: null,
+              localization_error: "expected map pose",
+              path_error: "expected map path",
+              layers: {
+                static: grid(1), global_costmap: null,
+                local_costmap: {transform_available: false, transform_error: "missing transform"},
+                path: null
+              }
+            }));
+            assert(navigationStatus.textContent.includes("expected map pose"));
+            assert(navigationStatus.textContent.includes("expected map path"));
+            assert(navigationStatus.textContent.includes("missing transform"));
+            assert(Object.values(buttons).every((button) => !button.disabled));
+            assert.strictEqual(manualNotice.textContent, "人工控制请求失败");
             return;
           }
           if (scenario === "raster-semantics") {
@@ -277,16 +388,16 @@ def _run_map_scenario(scenario):
             return;
           }
           if (scenario === "not-modified") {
-            const notModified = {ok: false, status: 304, headers: {get: () => '"2"'}};
+            const notModified = {ok: false, status: 304, headers: {get: () => '"1"'}};
             responses.push(json(state({layers: {static: grid(1), global_costmap: null, local_costmap: null, path: null}})), bytes([255, 0, 0, 0]));
             await view.poll();
             canvas.operations.length = 0;
-            responses.push(json(state({layers: {static: grid(2), global_costmap: null, local_costmap: null, path: null}})), notModified);
+            responses.push(json(state({layers: {static: grid(2, {etag: '"1"'}), global_costmap: null, local_costmap: null, path: null}})), notModified);
             await view.poll();
             assert(canvas.operations.some((operation) => operation[0] === "drawImage" && operation[1] === offscreenCanvases[0]));
             assert.deepStrictEqual([...offscreenCanvases[0].imageData.data.slice(0, 4)], [102, 112, 133, 255]);
             assert.strictEqual(offscreenCanvases.length, 1);
-            responses.push(json(state({layers: {static: grid(2), global_costmap: null, local_costmap: null, path: null}})), notModified);
+            responses.push(json(state({layers: {static: grid(2, {etag: '"1"'}), global_costmap: null, local_costmap: null, path: null}})));
             await view.poll();
             assert.strictEqual(requests.filter((request) => request.path === "/api/map/static").length, 2);
             return;
@@ -348,6 +459,31 @@ def test_world_grid_screen_round_trip_including_origin_yaw_and_y_flip():
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_status_poll_fetches_binary_layer_only_when_revision_changes():
     _run_map_scenario("revision")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_state_etag_must_match_200_asset_before_cache_replacement():
+    _run_map_scenario("etag-interleaving")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_malformed_grid_and_path_lengths_retain_cache_and_retry():
+    _run_map_scenario("asset-lengths")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_empty_grid_and_path_bodies_retain_cache_and_retry():
+    _run_map_scenario("empty-assets")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_state_etag_must_match_304_before_revision_advances():
+    _run_map_scenario("not-modified-etag-mismatch")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_navigation_degradation_status_is_separate_and_scoped():
+    _run_map_scenario("navigation-status")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")

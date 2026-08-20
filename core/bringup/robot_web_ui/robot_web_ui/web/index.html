@@ -59,6 +59,14 @@
       grid-column: 1 / -1;
       margin: 0;
     }
+    #navigationStatus {
+      grid-column: 1 / -1;
+      min-height: 1.4em;
+      margin: 0;
+      color: #f0bf68;
+      font-size: .85rem;
+      line-height: 1.4;
+    }
     header {
       display: flex;
       align-items: baseline;
@@ -201,6 +209,7 @@
     </header>
     <button id="modeToggle" disabled>状态同步中…</button>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
+    <p id="navigationStatus" role="status" aria-live="polite"></p>
   </section>
   <section id="manualPanel" class="overlay" aria-label="手动控制" hidden>
     <section class="panel speed-row" aria-label="速度设置">
@@ -489,7 +498,8 @@
         zoomOut: document.getElementById("mapZoomOut"),
         fit: document.getElementById("mapFit"),
         centerRobot: document.getElementById("mapCenterRobot")
-      }
+      },
+      navigationStatus: document.getElementById("navigationStatus")
     });
   }
 </script>
