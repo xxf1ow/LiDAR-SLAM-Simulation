@@ -128,7 +128,10 @@ def _bringup(context, *args, **kwargs):
             package="robot_web_ui",
             executable="robot_web_ui",
             output="screen",
-            parameters=[str(manifest["web_ui_path"])],
+            parameters=[
+                str(manifest["web_ui_path"]),
+                {"map_yaml_path": map_artifacts["nav2_map"]},
+            ],
         ),
     ]
     slam_stack = _inc(

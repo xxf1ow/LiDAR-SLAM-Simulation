@@ -905,11 +905,31 @@ def test_shared_control_consumes_only_manifest_clock_and_web_ui_file():
 
     web = _node_call(function, "robot_web_ui", "robot_web_ui")
     web_parameters = _keyword(web, "parameters")
-    assert isinstance(web_parameters, ast.List) and len(web_parameters.elts) == 1
+    assert isinstance(web_parameters, ast.List) and len(web_parameters.elts) == 2
     config_path = web_parameters.elts[0]
     assert isinstance(config_path, ast.Call)
     assert isinstance(config_path.func, ast.Name) and config_path.func.id == "str"
     assert _subscript_path(config_path.args[0]) == ("manifest", ("web_ui_path",))
+
+
+def test_formal_web_ui_receives_generated_yaml_and_manifest_nav2_map_override():
+    function = _function(_tree(BRINGUP), "_bringup")
+    web = _node_call(function, "robot_web_ui", "robot_web_ui")
+    parameters = _keyword(web, "parameters")
+    assert isinstance(parameters, ast.List) and len(parameters.elts) == 2
+    generated_yaml = parameters.elts[0]
+    assert isinstance(generated_yaml, ast.Call)
+    assert isinstance(generated_yaml.func, ast.Name)
+    assert generated_yaml.func.id == "str"
+    assert _subscript_path(generated_yaml.args[0]) == (
+        "manifest", ("web_ui_path",)
+    )
+    override = parameters.elts[1]
+    assert isinstance(override, ast.Dict)
+    assert [_string(key) for key in override.keys] == ["map_yaml_path"]
+    assert _subscript_path(override.values[0]) == (
+        "map_artifacts", ("nav2_map",)
+    )
 
 
 def test_formal_bringup_passes_only_manifest_fast_lio_interfaces():

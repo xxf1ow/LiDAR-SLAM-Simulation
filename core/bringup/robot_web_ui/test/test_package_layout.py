@@ -44,6 +44,7 @@ def test_package_declares_runtime_dependencies():
         "ament_index_python",
         "geometry_msgs",
         "nav_msgs",
+        "python3-yaml",
         "rclpy",
         "std_msgs",
         "std_srvs",
@@ -60,7 +61,7 @@ def test_setup_installs_web_asset_and_entry_point():
     )
 
 
-def test_node_has_exact_ros_contract_and_parameters():
+def test_map_yaml_path_is_the_only_required_runtime_only_parameter():
     source = NODE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
@@ -138,17 +139,26 @@ def test_node_has_exact_ros_contract_and_parameters():
         and call.func.attr == "declare_parameter"
     ]
     expected_parameters = _template_parameter_types()
-    parameter_names = [name for name, _type, _args, _keywords in parameters]
-    assert len(parameters) == len(expected_parameters)
+    template_parameters = [
+        parameter for parameter in parameters if parameter[0] != "map_yaml_path"
+    ]
+    runtime_parameters = [
+        parameter for parameter in parameters if parameter[0] == "map_yaml_path"
+    ]
+    parameter_names = [name for name, _type, _args, _keywords in template_parameters]
+    assert len(template_parameters) == len(expected_parameters)
     assert len(parameter_names) == len(set(parameter_names))
     assert {
         name: parameter_type
-        for name, parameter_type, _args, _keywords in parameters
+        for name, parameter_type, _args, _keywords in template_parameters
     } == expected_parameters
     assert all(
         argument_count == 2 and keyword_count == 0
-        for _name, _type, argument_count, keyword_count in parameters
+        for _name, _type, argument_count, keyword_count in template_parameters
     )
+    assert runtime_parameters == [
+        ("map_yaml_path", "Parameter.Type.STRING", 2, 0)
+    ]
     assert any(
         isinstance(node, ast.ImportFrom)
         and node.module == "rclpy.parameter"

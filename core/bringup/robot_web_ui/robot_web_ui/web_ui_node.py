@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 
 import rclpy
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
 from nav_msgs.msg import Odometry
@@ -25,6 +26,7 @@ from .http_server import (
     create_server,
 )
 from .manual_command import command_values
+from .map_snapshot import BinarySnapshot, load_nav2_pgm
 
 
 ODOM_TIMEOUT = 0.5
@@ -49,6 +51,19 @@ class WebUiNode(Node):
         self._max_angular = float(max_angular)
         self._gate_mode = None
         self._odom_feedback = None
+        map_yaml_path = self.declare_parameter(
+            "map_yaml_path", Parameter.Type.STRING
+        ).value
+        self._static_map = None
+        self._map_error = None
+        self._global_costmap = None
+        self._local_costmap = None
+        self._path_snapshot = None
+        self._localization_pose = None
+        try:
+            self._static_map = load_nav2_pgm(Path(map_yaml_path))
+        except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
+            self._map_error = f"{type(exc).__name__}: {exc}"
 
         self._manual_publisher = self.create_publisher(
             TwistStamped,
@@ -167,6 +182,30 @@ class WebUiNode(Node):
             "angular_z": feedback[1],
             "feedback_fresh": True,
         }
+
+    def navigation_state(self) -> dict[str, object]:
+        static = self._static_map
+        return {
+            "map_error": self._map_error,
+            "localized": self._localization_pose is not None,
+            "layers": {
+                "static": None if static is None else {
+                    **static.info.as_dict(),
+                    "revision": static.binary.revision,
+                    "etag": static.binary.etag,
+                },
+                "global_costmap": None,
+                "local_costmap": None,
+                "path": None,
+            },
+        }
+
+    def navigation_asset(self, name: str) -> BinarySnapshot | None:
+        if name == "static":
+            return None if self._static_map is None else self._static_map.binary
+        if name in {"global_costmap", "local_costmap", "path"}:
+            return None
+        raise KeyError(name)
 
     def takeover_manual(self) -> str:
         return self._call_mode_service(

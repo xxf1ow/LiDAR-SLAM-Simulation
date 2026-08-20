@@ -4,6 +4,9 @@ import threading
 import types
 
 import pytest
+import yaml
+
+from robot_web_ui.map_snapshot import BinarySnapshot, GridInfo, GridSnapshot
 
 
 SYNTHETIC_MAX_LINEAR_SPEED = 1.7
@@ -13,6 +16,44 @@ SYNTHETIC_MAX_ANGULAR_SPEED = 2.3
 @pytest.fixture
 def node_module(monkeypatch):
     class FakeNode:
+        def __init__(self, *_args):
+            self.declared_parameters = {}
+            self.publishers = []
+            self.destroyed = False
+
+        def declare_parameter(self, name, _parameter_type):
+            values = {
+                "max_linear_speed": SYNTHETIC_MAX_LINEAR_SPEED,
+                "max_angular_speed": SYNTHETIC_MAX_ANGULAR_SPEED,
+                "host": "127.0.0.1",
+                "port": 0,
+                "map_yaml_path": "map.yaml",
+            }
+            value = values[name]
+            self.declared_parameters[name] = value
+            return types.SimpleNamespace(value=value)
+
+        def create_publisher(self, *_args):
+            publisher = FakePublisher()
+            self.publishers.append(publisher)
+            return publisher
+
+        def create_subscription(self, *_args):
+            return object()
+
+        def create_client(self, *_args):
+            return object()
+
+        def get_clock(self):
+            return types.SimpleNamespace(
+                now=lambda: types.SimpleNamespace(
+                    to_msg=lambda: object(), nanoseconds=0
+                )
+            )
+
+        def get_logger(self):
+            return types.SimpleNamespace(info=lambda _message: None)
+
         def destroy_node(self):
             self.base_destroy_calls = (
                 getattr(self, "base_destroy_calls", 0) + 1
@@ -55,7 +96,11 @@ def node_module(monkeypatch):
     rclpy_parameter = types.ModuleType("rclpy.parameter")
     rclpy_parameter.Parameter = FakeParameter
     rclpy_qos = types.ModuleType("rclpy.qos")
-    rclpy_qos.QoSProfile = object
+    class FakeQoSProfile:
+        def __init__(self, **kwargs):
+            self.settings = kwargs
+
+    rclpy_qos.QoSProfile = FakeQoSProfile
     rclpy_qos.HistoryPolicy = types.SimpleNamespace(KEEP_LAST=object())
     rclpy_qos.ReliabilityPolicy = types.SimpleNamespace(RELIABLE=object())
     rclpy_qos.DurabilityPolicy = types.SimpleNamespace(
@@ -99,6 +144,19 @@ def node_module(monkeypatch):
     module_name = "robot_web_ui.web_ui_node"
     sys.modules.pop(module_name, None)
     module = importlib.import_module(module_name)
+    class FakeServer:
+        def serve_forever(self):
+            return None
+
+        def shutdown(self):
+            return None
+
+        def server_close(self):
+            return None
+
+    monkeypatch.setattr(
+        module, "create_server", lambda *args, **kwargs: FakeServer()
+    )
     yield module
     sys.modules.pop(module_name, None)
 
@@ -160,6 +218,78 @@ def response(success=True, message=""):
 
 def bare_node(module):
     return object.__new__(module.WebUiNode)
+
+
+def _static_snapshot():
+    info = GridInfo(2, 1, 0.05, -1.0, 2.0, 0.25, "map")
+    binary = BinarySnapshot(
+        3, '"etag-static"', "application/octet-stream", b"\x00\x64", b"gzip"
+    )
+    return GridSnapshot(info, binary)
+
+
+def test_static_map_load_success_exposes_state_and_asset(node_module, monkeypatch):
+    snapshot = _static_snapshot()
+    monkeypatch.setattr(node_module, "load_nav2_pgm", lambda _path: snapshot)
+
+    node = node_module.WebUiNode()
+
+    assert node.navigation_state() == {
+        "map_error": None,
+        "localized": False,
+        "layers": {
+            "static": {
+                **snapshot.info.as_dict(),
+                "revision": snapshot.binary.revision,
+                "etag": snapshot.binary.etag,
+            },
+            "global_costmap": None,
+            "local_costmap": None,
+            "path": None,
+        },
+    }
+    assert node.navigation_asset("static") is snapshot.binary
+    node.destroy_node()
+
+
+@pytest.mark.parametrize(
+    "loader_error",
+    [
+        OSError("missing"),
+        TypeError("bad type"),
+        ValueError("bad map"),
+        yaml.YAMLError("bad yaml"),
+    ],
+)
+def test_static_map_load_failure_is_reported_without_breaking_manual_controls(
+    node_module, monkeypatch, loader_error
+):
+    def fail(_path):
+        raise loader_error
+
+    monkeypatch.setattr(node_module, "load_nav2_pgm", fail)
+    node = node_module.WebUiNode()
+    node._gate_mode = "automatic"
+
+    result = node.manual_command("stop", 20)
+
+    assert result == "automatic"
+    message = node._manual_publisher.messages[-1]
+    assert message.header.stamp is not None
+    assert message.header.frame_id == "base_link"
+    assert message.twist.linear.x == 0.0
+    assert message.twist.angular.z == 0.0
+    assert node._static_map is None
+    assert loader_error.__class__.__name__ in node._map_error
+    node.destroy_node()
+
+
+def test_navigation_asset_rejects_unknown_names(node_module):
+    node = bare_node(node_module)
+    node._static_map = None
+
+    with pytest.raises(KeyError):
+        node.navigation_asset("unknown")
 
 
 def set_clock(node, *seconds):
