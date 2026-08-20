@@ -55,6 +55,10 @@
       border-radius: 14px;
       background: var(--surface);
     }
+    #statusStrip .notice {
+      grid-column: 1 / -1;
+      margin: 0;
+    }
     header {
       display: flex;
       align-items: baseline;
@@ -196,6 +200,7 @@
       <p class="hint">按住移动，松开停止</p>
     </header>
     <button id="modeToggle" disabled>状态同步中…</button>
+    <p id="notice" class="notice" role="status" aria-live="polite"></p>
   </section>
   <section id="manualPanel" class="overlay" aria-label="手动控制" hidden>
     <section class="panel speed-row" aria-label="速度设置">
@@ -214,7 +219,6 @@
       <span>角速度<strong id="angularVelocity">--</strong></span>
       <p id="feedbackState">底盘反馈中断</p>
     </section>
-    <p id="notice" class="notice" role="status" aria-live="polite"></p>
   </section>
   <section class="map-actions" aria-label="地图视图">
     <button id="mapZoomIn" aria-label="放大地图">+</button>

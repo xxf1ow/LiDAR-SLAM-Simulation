@@ -57,6 +57,17 @@ def test_page_has_one_full_viewport_map_and_opaque_manual_overlay():
     assert 'addEventListener("touch' not in source
 
 
+def test_notice_stays_visible_outside_the_manual_only_panel():
+    source = HTML.read_text(encoding="utf-8")
+    manual_panel = source.index('id="manualPanel"')
+    manual_panel_end = source.index(
+        '</section>\n  <section class="map-actions"', manual_panel
+    )
+    notice = source.index('id="notice"')
+
+    assert not manual_panel < notice < manual_panel_end
+
+
 def test_page_uses_neutral_api_without_vendor_surface():
     source = HTML.read_text(encoding="utf-8")
 
@@ -89,10 +100,11 @@ def _run_browser_scenario(scenario):
           constructor(id = "") {{
             this.id = id;
             this.value = id === "speed" ? "20" : "";
-            this.textContent = "";
-            this.dataset = {{}};
-            this.disabled = false;
-            this.listeners = new Map();
+                this.textContent = "";
+                this.dataset = {{}};
+                this.disabled = false;
+                this.hidden = false;
+                this.listeners = new Map();
             this.classList = {{
               values: new Set(),
               add: (...names) => names.forEach((name) => this.classList.values.add(name)),
@@ -321,6 +333,8 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(desiredDirection, "stop");
             assert.strictEqual(elements.get("manualPanel").hidden, true);
+            elements.get("notice").textContent = "自动导航状态通知";
+            assert.strictEqual(elements.get("notice").hidden, false);
             assert.deepStrictEqual(heldMovementKeys, []);
             assert(directionButtons.every((button) => button.disabled));
             assert.strictEqual(elements.get("modeToggle").disabled, false);

@@ -121,7 +121,7 @@ def _run_map_scenario(scenario):
             return;
           }
           if (scenario === "draw-order") {
-            responses.push(json(state({layers: {static: grid(1), global_costmap: grid(1), local_costmap: grid(1, {map_from_source: [1, 0, 0]}), path: {revision: 1, etag: '"path"'}}})), bytes([0, 0, 0, 0]), bytes([100, 100, 100, 100]), bytes([255, 255, 255, 255]), bytes([0, 0, 0, 0, 0, 0, 0, 0]));
+            responses.push(json(state({layers: {static: grid(1), global_costmap: grid(1), local_costmap: grid(1, {map_from_source: [1, 0, 0], transform_available: true}), path: {revision: 1, etag: '"path"'}}})), bytes([0, 0, 0, 0]), bytes([100, 100, 100, 100]), bytes([255, 255, 255, 255]), bytes([0, 0, 0, 0, 0, 0, 0, 0]));
             await view.poll();
             const fills = canvas.operations.filter((operation) => operation[0] === "fill").map((operation) => operation[1]);
             assert.deepStrictEqual(fills.slice(-12, -8), ["#e5e7eb", "#e5e7eb", "#e5e7eb", "#e5e7eb"]);
@@ -153,14 +153,37 @@ def _run_map_scenario(scenario):
             return;
           }
           if (scenario === "local-affine") {
-            const local = grid(1, {map_from_source: [1, 2, 0]});
+            const local = grid(1, {map_from_source: [1, 2, 0], transform_available: true});
             responses.push(json(state({layers: {static: null, global_costmap: null, local_costmap: local, path: null}})), bytes([1, 2, 3, 4]));
             await view.poll();
             const before = canvas.operations.filter((operation) => operation[0] === "rotate").length;
-            responses.push(json(state({layers: {static: null, global_costmap: null, local_costmap: grid(1, {map_from_source: [1, 2, 1]}), path: null}})));
+            responses.push(json(state({layers: {static: null, global_costmap: null, local_costmap: grid(1, {map_from_source: [1, 2, 1], transform_available: true}), path: null}})));
             await view.poll();
             assert.strictEqual(requests.filter((request) => request.path === "/api/map/local-costmap").length, 1);
             assert(canvas.operations.filter((operation) => operation[0] === "rotate").length > before);
+            return;
+          }
+          if (scenario === "invalid-local-affine") {
+            responses.push(json(state({layers: {static: null, global_costmap: null, local_costmap: grid(1, {map_from_source: [1, 2, 0], transform_available: true}), path: null}})), bytes([1, 2, 3, 4]));
+            await view.poll();
+            canvas.operations.length = 0;
+            responses.push(json(state({layers: {static: null, global_costmap: null, local_costmap: grid(1, {map_from_source: null, transform_available: false}), path: null}})));
+            await view.poll();
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "fill"), false);
+            assert.strictEqual(requests.filter((request) => request.path === "/api/map/local-costmap").length, 1);
+            return;
+          }
+          if (scenario === "not-modified") {
+            const notModified = {ok: false, status: 304, headers: {get: () => '"2"'}};
+            responses.push(json(state({layers: {static: grid(1), global_costmap: null, local_costmap: null, path: null}})), bytes([255, 0, 0, 0]));
+            await view.poll();
+            canvas.operations.length = 0;
+            responses.push(json(state({layers: {static: grid(2), global_costmap: null, local_costmap: null, path: null}})), notModified);
+            await view.poll();
+            assert(canvas.operations.some((operation) => operation[0] === "fill" && operation[1] === "#667085"));
+            responses.push(json(state({layers: {static: grid(2), global_costmap: null, local_costmap: null, path: null}})), notModified);
+            await view.poll();
+            assert.strictEqual(requests.filter((request) => request.path === "/api/map/static").length, 2);
             return;
           }
           assert.fail(`unknown scenario: ${scenario}`);
@@ -245,3 +268,13 @@ def test_zoom_in_out_fit_and_center_robot_are_bounded():
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_local_costmap_uses_map_from_source_affine_without_redownload():
     _run_map_scenario("local-affine")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_local_costmap_with_missing_map_affine_is_not_fetched_or_drawn():
+    _run_map_scenario("invalid-local-affine")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_not_modified_binary_layer_retains_cached_bytes_without_retries():
+    _run_map_scenario("not-modified")

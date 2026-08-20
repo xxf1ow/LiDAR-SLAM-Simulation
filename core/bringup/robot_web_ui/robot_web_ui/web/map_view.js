@@ -44,6 +44,13 @@
     };
   }
 
+  function validLocalAffine(info) {
+    return info.transform_available === true
+      && Array.isArray(info.map_from_source)
+      && info.map_from_source.length === 3
+      && info.map_from_source.every(Number.isFinite);
+  }
+
   function create(options) {
     const canvas = options.canvas;
     const context = canvas.getContext("2d");
@@ -81,8 +88,9 @@
     function drawGrid(name, info) {
       const layer = cache[name];
       if (!layer || !info || !layer.cells) return;
+      if (name === "local_costmap" && !validLocalAffine(info)) return;
       context.save();
-      if (name === "local_costmap" && Array.isArray(info.map_from_source)) {
+      if (name === "local_costmap") {
         context.translate(info.map_from_source[0], info.map_from_source[1]);
         context.rotate(info.map_from_source[2]);
       }
@@ -152,11 +160,21 @@
         delete cache[name];
         return;
       }
+      if (name === "local_costmap" && !validLocalAffine(info)) return;
       const current = cache[name];
       if (current && current.revision === info.revision) return;
       const headers = current && current.etag ? {"If-None-Match": current.etag} : {};
       const response = await fetch(LAYERS[name], {headers});
-      if (response.status === 304) return;
+      if (response.status === 304) {
+        if (current) {
+          cache[name] = {
+            ...current,
+            revision: info.revision,
+            etag: info.etag || current.etag
+          };
+        }
+        return;
+      }
       if (!response.ok) return;
       cache[name] = {
         revision: info.revision,
