@@ -208,6 +208,22 @@ def test_root_returns_exact_asset_without_caching(tmp_path):
         assert actions.calls == []
 
 
+def test_map_view_is_served_as_an_exact_javascript_asset(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    map_view = html_path.with_name("map_view.js")
+    map_view.write_bytes(b"globalThis.RobotMapView = {};")
+
+    with running_server(FakeActions(), html_path) as base_url:
+        response = request(base_url, "/map_view.js")
+
+        assert response.status == 200
+        assert response.headers["Content-Type"] == (
+            "application/javascript; charset=utf-8"
+        )
+        assert response.read() == map_view.read_bytes()
+
+
 def test_navigation_state_returns_small_no_store_json(tmp_path):
     html_path = tmp_path / "index.html"
     html_path.write_text("ok")

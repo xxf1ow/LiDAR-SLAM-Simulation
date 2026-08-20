@@ -56,6 +56,7 @@ def test_setup_installs_web_asset_and_entry_point():
     source = (ROOT / "setup.py").read_text(encoding="utf-8")
 
     assert '"robot_web_ui/web/index.html"' in source
+    assert '"robot_web_ui/web/map_view.js"' in source
     assert (
         '"robot_web_ui = robot_web_ui.web_ui_node:main"'
         in source

@@ -1,0 +1,268 @@
+(function () {
+  "use strict";
+
+  const LAYERS = {
+    static: "/api/map/static",
+    global_costmap: "/api/map/global-costmap",
+    local_costmap: "/api/map/local-costmap",
+    path: "/api/navigation-path"
+  };
+  const PALETTE = {
+    free: "#e5e7eb",
+    unknown: "#667085",
+    inflated: "#f0bf68",
+    lethal: "#d94f4f",
+    path: "#4db7d6",
+    robot: "#ffffff"
+  };
+  const MIN_SCALE = 0.25;
+  const MAX_SCALE = 128;
+
+  function gridToWorld(info, column, row) {
+    const localX = (column + 0.5) * info.resolution;
+    const localY = (info.height - row - 0.5) * info.resolution;
+    const [originX, originY, yaw] = info.origin;
+    const cosine = Math.cos(yaw);
+    const sine = Math.sin(yaw);
+    return {
+      x: originX + localX * cosine - localY * sine,
+      y: originY + localX * sine + localY * cosine
+    };
+  }
+
+  function worldToGrid(info, x, y) {
+    const [originX, originY, yaw] = info.origin;
+    const cosine = Math.cos(yaw);
+    const sine = Math.sin(yaw);
+    const dx = x - originX;
+    const dy = y - originY;
+    const localX = dx * cosine + dy * sine;
+    const localY = -dx * sine + dy * cosine;
+    return {
+      column: Math.floor(localX / info.resolution),
+      row: info.height - 1 - Math.floor(localY / info.resolution)
+    };
+  }
+
+  function create(options) {
+    const canvas = options.canvas;
+    const context = canvas.getContext("2d");
+    const buttons = options.buttons || {};
+    const cache = {};
+    let latestState = {layers: {}};
+    let inFlight = false;
+    let timer = null;
+    let dragging = null;
+    const transform = {scale: 16, x: 100, y: 50};
+
+    function bounds() {
+      const rect = canvas.getBoundingClientRect();
+      return {width: rect.width || 1, height: rect.height || 1};
+    }
+
+    function resize() {
+      const rect = bounds();
+      const ratio = globalThis.devicePixelRatio || 1;
+      const width = Math.round(rect.width * ratio);
+      const height = Math.round(rect.height * ratio);
+      if (canvas.width !== width) canvas.width = width;
+      if (canvas.height !== height) canvas.height = height;
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+      return rect;
+    }
+
+    function color(cell) {
+      if (cell === 255) return PALETTE.unknown;
+      if (cell >= 253) return PALETTE.lethal;
+      if (cell >= 100) return PALETTE.inflated;
+      return PALETTE.free;
+    }
+
+    function drawGrid(name, info) {
+      const layer = cache[name];
+      if (!layer || !info || !layer.cells) return;
+      context.save();
+      if (name === "local_costmap" && Array.isArray(info.map_from_source)) {
+        context.translate(info.map_from_source[0], info.map_from_source[1]);
+        context.rotate(info.map_from_source[2]);
+      }
+      context.translate(info.origin[0], info.origin[1]);
+      context.rotate(info.origin[2]);
+      context.scale(info.resolution, info.resolution);
+      for (let row = 0; row < info.height; row += 1) {
+        for (let column = 0; column < info.width; column += 1) {
+          const cell = layer.cells[row * info.width + column];
+          context.fillStyle = color(cell);
+          context.fillRect(column, info.height - row - 1, 1, 1);
+        }
+      }
+      context.restore();
+    }
+
+    function drawPath(info) {
+      const layer = cache.path;
+      if (!layer || !info || !layer.cells || layer.cells.byteLength < 8) return;
+      const data = new DataView(
+        layer.cells.buffer,
+        layer.cells.byteOffset,
+        layer.cells.byteLength
+      );
+      context.beginPath();
+      for (let offset = 0; offset + 7 < data.byteLength; offset += 8) {
+        const x = data.getFloat32(offset, true);
+        const y = data.getFloat32(offset + 4, true);
+        if (offset === 0) context.moveTo(x, y);
+        else context.lineTo(x, y);
+      }
+      context.strokeStyle = PALETTE.path;
+      context.lineWidth = 2 / transform.scale;
+      context.stroke();
+    }
+
+    function drawRobot() {
+      const pose = latestState.localization;
+      if (!pose || !Number.isFinite(pose.x) || !Number.isFinite(pose.y)) return;
+      context.save();
+      context.translate(pose.x, pose.y);
+      context.rotate(pose.yaw || 0);
+      context.fillStyle = PALETTE.robot;
+      context.beginPath();
+      context.arc(0, 0, 0.24, 0, Math.PI * 2);
+      context.fill();
+      context.restore();
+    }
+
+    function render() {
+      const rect = resize();
+      context.clearRect(0, 0, rect.width, rect.height);
+      context.save();
+      context.translate(transform.x, transform.y);
+      context.scale(transform.scale, -transform.scale);
+      const layers = latestState.layers || {};
+      drawGrid("static", layers.static);
+      drawGrid("global_costmap", layers.global_costmap);
+      drawGrid("local_costmap", layers.local_costmap);
+      drawPath(layers.path);
+      drawRobot();
+      context.restore();
+    }
+
+    async function updateLayer(name, info) {
+      if (!info) {
+        delete cache[name];
+        return;
+      }
+      const current = cache[name];
+      if (current && current.revision === info.revision) return;
+      const headers = current && current.etag ? {"If-None-Match": current.etag} : {};
+      const response = await fetch(LAYERS[name], {headers});
+      if (response.status === 304) return;
+      if (!response.ok) return;
+      cache[name] = {
+        revision: info.revision,
+        etag: info.etag || response.headers.get("ETag"),
+        cells: new Uint8Array(await response.arrayBuffer())
+      };
+    }
+
+    async function applyState(state) {
+      latestState = state || {layers: {}};
+      const layers = latestState.layers || {};
+      for (const name of Object.keys(LAYERS)) await updateLayer(name, layers[name]);
+      render();
+    }
+
+    async function poll() {
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const response = await fetch("/api/navigation-state");
+        if (response.ok) await applyState(await response.json());
+      } finally {
+        inFlight = false;
+        if (options.poll !== false) {
+          timer = setTimeout(poll, 200);
+        }
+      }
+    }
+
+    function zoom(multiplier) {
+      transform.scale = Math.max(
+        MIN_SCALE,
+        Math.min(MAX_SCALE, transform.scale * multiplier)
+      );
+      render();
+    }
+
+    function fit() {
+      const info = latestState.layers && latestState.layers.static;
+      if (!info) return;
+      const corners = [
+        gridToWorld(info, 0, 0),
+        gridToWorld(info, info.width - 1, 0),
+        gridToWorld(info, 0, info.height - 1),
+        gridToWorld(info, info.width - 1, info.height - 1)
+      ];
+      const minX = Math.min(...corners.map((point) => point.x));
+      const maxX = Math.max(...corners.map((point) => point.x));
+      const minY = Math.min(...corners.map((point) => point.y));
+      const maxY = Math.max(...corners.map((point) => point.y));
+      const rect = bounds();
+      transform.scale = Math.max(
+        MIN_SCALE,
+        Math.min(MAX_SCALE, 0.9 * Math.min(rect.width / (maxX - minX + info.resolution), rect.height / (maxY - minY + info.resolution)))
+      );
+      transform.x = rect.width / 2 - transform.scale * (minX + maxX) / 2;
+      transform.y = rect.height / 2 + transform.scale * (minY + maxY) / 2;
+      render();
+    }
+
+    function centerRobot() {
+      const pose = latestState.localization;
+      if (!pose) return;
+      const rect = bounds();
+      transform.x = rect.width / 2 - pose.x * transform.scale;
+      transform.y = rect.height / 2 + pose.y * transform.scale;
+      render();
+    }
+
+    canvas.addEventListener("pointerdown", (event) => {
+      dragging = {pointerId: event.pointerId, x: event.clientX, y: event.clientY};
+      canvas.setPointerCapture(event.pointerId);
+    });
+    canvas.addEventListener("pointermove", (event) => {
+      if (!dragging || event.pointerId !== dragging.pointerId) return;
+      transform.x += event.clientX - dragging.x;
+      transform.y += event.clientY - dragging.y;
+      dragging.x = event.clientX;
+      dragging.y = event.clientY;
+      render();
+    });
+    ["pointerup", "pointercancel", "lostpointercapture"].forEach((name) => {
+      canvas.addEventListener(name, (event) => {
+        if (dragging && event.pointerId === dragging.pointerId) dragging = null;
+      });
+    });
+    if (buttons.zoomIn) buttons.zoomIn.addEventListener("click", () => zoom(1.25));
+    if (buttons.zoomOut) buttons.zoomOut.addEventListener("click", () => zoom(0.8));
+    if (buttons.fit) buttons.fit.addEventListener("click", fit);
+    if (buttons.centerRobot) buttons.centerRobot.addEventListener("click", centerRobot);
+    if (globalThis.addEventListener) globalThis.addEventListener("resize", render);
+    render();
+    if (options.poll !== false) poll();
+
+    return {
+      poll,
+      applyState,
+      render,
+      zoomIn: () => zoom(1.25),
+      zoomOut: () => zoom(0.8),
+      fit,
+      centerRobot,
+      getTransform: () => ({...transform}),
+      stop: () => { if (timer !== null) clearTimeout(timer); }
+    };
+  }
+
+  globalThis.RobotMapView = {create, gridToWorld, worldToGrid};
+}());

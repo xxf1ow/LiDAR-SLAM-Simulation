@@ -40,6 +40,23 @@ def test_page_contains_only_the_required_mobile_controls():
     assert "prefers-reduced-motion: reduce" in source
 
 
+def test_page_has_one_full_viewport_map_and_opaque_manual_overlay():
+    source = HTML.read_text(encoding="utf-8")
+
+    assert source.count('id="mapCanvas"') == 1
+    assert 'id="manualPanel"' in source
+    assert 'position: absolute' in source
+    assert 'background: var(--surface)' in source
+    assert '<script src="/map_view.js"></script>' in source
+    assert 'id="mapZoomIn"' in source
+    assert 'id="mapZoomOut"' in source
+    assert 'id="mapFit"' in source
+    assert 'id="mapCenterRobot"' in source
+    assert source.count('id="modeToggle"') == 1
+    assert 'addEventListener("wheel"' not in source
+    assert 'addEventListener("touch' not in source
+
+
 def test_page_uses_neutral_api_without_vendor_surface():
     source = HTML.read_text(encoding="utf-8")
 
@@ -97,15 +114,35 @@ def _run_browser_scenario(scenario):
               ...event
             }})));
           }}
-          setPointerCapture() {{}}
+            setPointerCapture() {{}}
+            getBoundingClientRect() {{
+              return {{left: 0, top: 0, width: 360, height: 640}};
+            }}
+        }}
+
+        class FakeCanvas extends FakeElement {{
+          constructor() {{
+            super("mapCanvas");
+            this.width = 360;
+            this.height = 640;
+            this.context = {{
+              setTransform() {{}}, clearRect() {{}}, save() {{}}, restore() {{}},
+              translate() {{}}, rotate() {{}}, scale() {{}}, fillRect() {{}},
+              beginPath() {{}}, moveTo() {{}}, lineTo() {{}}, stroke() {{}}, fill() {{}}
+            }};
+          }}
+          getContext() {{ return this.context; }}
         }}
 
         const elements = new Map(
           ["speed", "speedValue", "notice", "modeToggle",
-           "linearVelocity", "angularVelocity", "feedbackState"].map(
+           "linearVelocity", "angularVelocity", "feedbackState",
+           "manualPanel", "mapCanvas", "mapZoomIn", "mapZoomOut",
+           "mapFit", "mapCenterRobot"].map(
              (id) => [id, new FakeElement(id)]
            )
         );
+        elements.set("mapCanvas", new FakeCanvas());
         const directionButtons = ["forward", "backward", "left", "right"].map(
           (direction) => {{
             const button = new FakeElement(direction);
@@ -253,6 +290,7 @@ def _run_browser_scenario(scenario):
           if (scenario === "initial-and-authoritative-interlock") {{
             assert.strictEqual(currentMode, null);
             assert(directionButtons.every((button) => button.disabled));
+            assert.strictEqual(elements.get("manualPanel").hidden, true);
             assert.strictEqual(elements.get("modeToggle").disabled, true);
             assert.strictEqual(
               elements.get("modeToggle").textContent,
@@ -271,6 +309,7 @@ def _run_browser_scenario(scenario):
             applyMode("manual");
             assert.strictEqual(currentMode, "manual");
             assert(directionButtons.every((button) => !button.disabled));
+            assert.strictEqual(elements.get("manualPanel").hidden, false);
             assert.strictEqual(elements.get("modeToggle").disabled, false);
             assert.strictEqual(
               elements.get("modeToggle").textContent,
@@ -281,6 +320,7 @@ def _run_browser_scenario(scenario):
             applyMode("automatic");
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(desiredDirection, "stop");
+            assert.strictEqual(elements.get("manualPanel").hidden, true);
             assert.deepStrictEqual(heldMovementKeys, []);
             assert(directionButtons.every((button) => button.disabled));
             assert.strictEqual(elements.get("modeToggle").disabled, false);
@@ -294,6 +334,7 @@ def _run_browser_scenario(scenario):
             applyMode(null);
             assert.strictEqual(currentMode, null);
             assert.strictEqual(desiredDirection, "stop");
+            assert.strictEqual(elements.get("manualPanel").hidden, true);
             assert(directionButtons.every((button) => button.disabled));
             assert.strictEqual(elements.get("modeToggle").disabled, true);
             assert.strictEqual(

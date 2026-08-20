@@ -21,23 +21,44 @@
       margin: 0;
       min-height: 100vh;
       min-height: 100dvh;
-      display: grid;
-      place-items: center;
       overflow: hidden;
       overscroll-behavior: none;
       background: var(--canvas);
       color: var(--text);
     }
     main {
-      width: min(100%, 430px);
-      padding: max(16px, env(safe-area-inset-top))
-        16px max(16px, env(safe-area-inset-bottom));
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+    }
+    #mapCanvas {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100dvh;
+      touch-action: none;
+    }
+    .overlay {
+      position: absolute;
+      left: 12px;
+      right: 12px;
+      pointer-events: auto;
+    }
+    #statusStrip {
+      top: max(12px, env(safe-area-inset-top));
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--surface);
     }
     header {
       display: flex;
       align-items: baseline;
-      justify-content: space-between;
-      margin-bottom: 12px;
+      gap: 8px;
     }
     h1 {
       margin: 0;
@@ -55,6 +76,13 @@
       border: 1px solid var(--line);
       border-radius: 16px;
       background: var(--surface);
+    }
+    #manualPanel {
+      bottom: max(12px, env(safe-area-inset-bottom));
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 12px;
     }
     .speed-row {
       display: grid;
@@ -106,13 +134,6 @@
     [data-direction="left"] { grid-column: 1; grid-row: 2; }
     [data-direction="right"] { grid-column: 3; grid-row: 2; }
     [data-direction="backward"] { grid-column: 2; grid-row: 3; }
-    .actions {
-      display: grid;
-    }
-    .actions button {
-      min-height: 52px;
-      padding: 8px;
-    }
     #modeToggle {
       border-color: #8e6726;
       background: #59431f;
@@ -142,9 +163,19 @@
       font-size: .85rem;
       line-height: 1.4;
     }
+    .map-actions {
+      position: absolute;
+      right: 12px;
+      top: calc(max(12px, env(safe-area-inset-top)) + 70px);
+      display: grid;
+      gap: 7px;
+      pointer-events: auto;
+    }
+    .map-actions button {
+      width: 44px;
+      min-height: 44px;
+    }
     @media (max-height: 620px) {
-      main { padding-top: 10px; padding-bottom: 10px; }
-      header { margin-bottom: 8px; }
       .controls {
         grid-template-rows: repeat(3, 62px);
         margin: 8px 0;
@@ -157,36 +188,43 @@
   </style>
 </head>
 <body>
+<canvas id="mapCanvas" aria-label="导航地图"></canvas>
 <main>
-  <header>
-    <h1>机器人控制</h1>
-    <p class="hint">按住移动，松开停止</p>
-  </header>
-
-  <section class="panel speed-row" aria-label="速度设置">
-    <label for="speed">速度</label>
-    <input id="speed" type="range" min="0" max="100" value="20" step="1">
-    <strong class="speed-value"><span id="speedValue">20</span>%</strong>
-  </section>
-
-  <section class="panel controls" aria-label="移动方向">
-    <button disabled data-direction="forward" aria-label="前进">前进</button>
-    <button disabled data-direction="left" aria-label="左转">左转</button>
-    <button disabled data-direction="right" aria-label="右转">右转</button>
-    <button disabled data-direction="backward" aria-label="后退">后退</button>
-  </section>
-
-  <section class="actions" aria-label="控制模式">
+  <section id="statusStrip" class="overlay" aria-label="导航状态">
+    <header>
+      <h1>机器人控制</h1>
+      <p class="hint">按住移动，松开停止</p>
+    </header>
     <button id="modeToggle" disabled>状态同步中…</button>
   </section>
-  <section class="panel feedback" aria-label="底盘反馈">
-    <span>线速度<strong id="linearVelocity">--</strong></span>
-    <span>角速度<strong id="angularVelocity">--</strong></span>
-    <p id="feedbackState">底盘反馈中断</p>
+  <section id="manualPanel" class="overlay" aria-label="手动控制" hidden>
+    <section class="panel speed-row" aria-label="速度设置">
+      <label for="speed">速度</label>
+      <input id="speed" type="range" min="0" max="100" value="20" step="1">
+      <strong class="speed-value"><span id="speedValue">20</span>%</strong>
+    </section>
+    <section class="panel controls" aria-label="移动方向">
+      <button disabled data-direction="forward" aria-label="前进">前进</button>
+      <button disabled data-direction="left" aria-label="左转">左转</button>
+      <button disabled data-direction="right" aria-label="右转">右转</button>
+      <button disabled data-direction="backward" aria-label="后退">后退</button>
+    </section>
+    <section class="panel feedback" aria-label="底盘反馈">
+      <span>线速度<strong id="linearVelocity">--</strong></span>
+      <span>角速度<strong id="angularVelocity">--</strong></span>
+      <p id="feedbackState">底盘反馈中断</p>
+    </section>
+    <p id="notice" class="notice" role="status" aria-live="polite"></p>
   </section>
-  <p id="notice" class="notice" role="status" aria-live="polite"></p>
+  <section class="map-actions" aria-label="地图视图">
+    <button id="mapZoomIn" aria-label="放大地图">+</button>
+    <button id="mapZoomOut" aria-label="缩小地图">−</button>
+    <button id="mapFit" aria-label="适配地图">适配</button>
+    <button id="mapCenterRobot" aria-label="居中机器人">居中</button>
+  </section>
 </main>
 
+<script src="/map_view.js"></script>
 <script>
   const speed = document.getElementById("speed");
   const speedValue = document.getElementById("speedValue");
@@ -195,6 +233,7 @@
   const linearVelocity = document.getElementById("linearVelocity");
   const angularVelocity = document.getElementById("angularVelocity");
   const feedbackState = document.getElementById("feedbackState");
+  const manualPanel = document.getElementById("manualPanel");
   let desiredDirection = "stop";
   let commandLoopRunning = false;
   let noticeOwner = null;
@@ -275,6 +314,7 @@
     motionButtons.forEach((button) => {
       button.disabled = currentMode !== "manual" || modePending;
     });
+    manualPanel.hidden = currentMode !== "manual";
   }
 
   function applyMode(mode) {
@@ -437,6 +477,17 @@
   window.addEventListener("blur", stopMotion);
   applyMode(null);
   commandLoop();
+  if (globalThis.RobotMapView) {
+    RobotMapView.create({
+      canvas: document.getElementById("mapCanvas"),
+      buttons: {
+        zoomIn: document.getElementById("mapZoomIn"),
+        zoomOut: document.getElementById("mapZoomOut"),
+        fit: document.getElementById("mapFit"),
+        centerRobot: document.getElementById("mapCenterRobot")
+      }
+    });
+  }
 </script>
 </body>
 </html>
