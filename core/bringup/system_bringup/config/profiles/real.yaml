@@ -1,0 +1,65 @@
+hardware:
+  chassis:
+    backend: can_8030d # 厂商 USB-CAN 8030D 底盘后端
+  lidar:
+    backend: vanjee # Vanjee 雷达驱动后端
+    model: vanjee_722 # 当前 32 线雷达型号
+    host_address: 192.168.2.88 # 本机雷达网口 IPv4
+    device_address: 192.168.2.86 # 雷达设备 IPv4
+    host_msop_port: 3001 # 本机接收 MSOP 的 UDP 端口
+    device_msop_port: 3333 # 雷达发送 MSOP 的 UDP 端口
+
+robot:
+  body:
+    front_extent: 0.480 # base_footprint 到车体前端，单位 m
+    rear_extent: 0.480 # base_footprint 到车体后端，单位 m
+    left_extent: 0.305 # base_footprint 到车体左侧，单位 m
+    right_extent: 0.305 # base_footprint 到车体右侧，单位 m
+    height: 0.377 # 车体外壳高度，单位 m
+    ground_clearance: 0.143 # 车体外壳底面离地高度，单位 m
+  drive:
+    wheel_radius: 0.1025 # 驱动轮有效半径，单位 m
+    wheel_width: 0.101 # 单个驱动轮宽度，单位 m
+    wheel_separation: 0.463 # 两驱动轮中心距，单位 m
+  mounts:
+    lidar:
+      x: 0.443 # 雷达相对 base_footprint 的前向位置，单位 m
+      y: 0.0 # 雷达相对 base_footprint 的左向位置，单位 m
+      z: 0.905 # 雷达相对 base_footprint 的高度，单位 m
+      roll: 0.0 # 雷达绕 x 轴安装角，单位 rad
+      pitch: 0.0 # 雷达绕 y 轴安装角，单位 rad
+      yaw: 0.0 # 雷达绕 z 轴安装角，单位 rad
+    imu:
+      x: 0.443 # IMU 相对 base_footprint 的前向位置，单位 m
+      y: 0.0 # IMU 相对 base_footprint 的左向位置，单位 m
+      z: 0.905 # IMU 相对 base_footprint 的高度，单位 m
+      roll: 0.0 # IMU 绕 x 轴安装角，单位 rad
+      pitch: 0.0 # IMU 绕 y 轴安装角，单位 rad
+      yaw: 0.0 # IMU 绕 z 轴安装角，单位 rad
+
+sensors:
+  lidar:
+    scan_lines: 32 # 垂直扫描线数
+    columns_per_scan: 1200 # 每帧每线水平点数
+    scan_rate_hz: 10.0 # 完整点云频率，单位 Hz
+    min_range: 0.05 # 驱动输出最小距离，单位 m
+    max_range: 70.0 # 驱动输出最大距离，单位 m
+    vertical_fov_angle: 0.523 # 雷达垂直视场角，单位 rad；real 暂待厂家资料确认
+    horizontal_start_angle: 0.0 # 水平输出起始角，单位 rad
+    horizontal_end_angle: 6.283185307179586 # 水平输出终止角，单位 rad
+    point_time_field: time # PointCloud2 逐点相对时间字段名
+    point_time_unit: seconds # 逐点时间数值单位
+    point_time_reference: scan_start # 逐点时间相对本帧起始时刻
+  imu:
+    rate_hz: 200.0 # IMU 标称发布频率，单位 Hz
+
+motion:
+  max_linear_velocity: 1.0 # 最大线速度，单位 m/s
+  max_angular_velocity: 0.4 # 最大角速度，单位 rad/s
+  max_linear_acceleration: 1.0 # 最大线加速度，单位 m/s²
+  max_angular_acceleration: 0.3 # 最大角加速度，单位 rad/s²
+
+perception:
+  obstacle_height:
+    min: -0.52 # Nav2 STVL 障碍/清除最低高度，单位 m
+    max: 2.0 # Nav2 STVL 障碍/清除最高高度，单位 m

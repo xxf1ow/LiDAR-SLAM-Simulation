@@ -1,5 +1,5 @@
 # bridge.yaml — ros_gz_bridge parameter_bridge 配置(Harmonic)。
-# 话题命名走 ros_gz 干净约定(lidar/imu)；SLAM 契约话题 /points_raw、/imu_plugin/out 不变。
+# 话题命名走 ros_gz 干净约定(lidar/imu)；SLAM 契约话题为 /points_raw、/imu/data。
 - ros_topic_name: "/clock"
   gz_topic_name: "/clock"
   ros_type_name: "rosgraph_msgs/msg/Clock"
@@ -12,7 +12,7 @@
   gz_type_name: "gz.msgs.PointCloudPacked"
   direction: GZ_TO_ROS
 
-- ros_topic_name: "/imu_plugin/out"
+- ros_topic_name: "/imu/data"
   gz_topic_name: "/imu"
   ros_type_name: "sensor_msgs/msg/Imu"
   gz_type_name: "gz.msgs.IMU"

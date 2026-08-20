@@ -3,7 +3,7 @@
 <package format="3">
   <name>robot_bringup</name>
   <version>0.0.0</version>
-  <description>差速机器人 mock/真机 bringup(ros2_control_node + 控制器)与 sim/real 共享的控制器配置。</description>
+  <description>Differential-drive mock and real ros2_control bringup using a required external controller configuration.</description>
   <maintainer email="20twenty.degree@gmail.com">xxf1ow</maintainer>
   <license>Apache-2.0</license>
 

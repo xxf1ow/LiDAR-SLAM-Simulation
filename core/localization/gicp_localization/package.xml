@@ -2,7 +2,7 @@
 <package format="3">
   <name>gicp_localization</name>
   <version>0.1.0</version>
-  <description>GICP prior-map localization for FAST-LIO2 in Gazebo sim (small_gicp).</description>
+  <description>GICP prior-map localization for the FAST-LIO2 localization chain using small_gicp.</description>
   <maintainer email="20twenty.degree@gmail.com">xxf1ow</maintainer>
   <license>MIT</license>
 

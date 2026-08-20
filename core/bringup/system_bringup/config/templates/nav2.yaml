@@ -1,25 +1,22 @@
 # 5e Nav2 最小打通参数。frame: 全局 costmap=map；局部 costmap+behavior=camera_init(连续、不随 GICP 跳变)。
 # 障碍源 /cloud_registered(sensor_frame=body)。odom_topic=/base_controller/odom(diff_drive 真实 twist;
 # FAST-LIO /Odometry twist 恒零)。值多取自 nav2 Humble 官方默认 + 旧栈实测，构建机按 spec §9 再调。
-# 真实部署中 vertical_fov_angle: 0.523 及相关障碍高度参数为待测临时值。
-# footprint 是模板占位值；完整 system_bringup 会按 bringup.yaml:real_geometry 生成后覆盖。
-# 限速、MPPI、Smac、STVL 暂沿用当前配置，不做动态调参。
 #
 # === CHASSIS-DEPENDENT（换底盘改这里）===
 #   planner_server.GridBased: minimum_turning_radius / motion_model_for_search
-#   controller_server.FollowPath: motion_model / vx_max / vx_min / wz_max / AckermannConstraints.min_turning_r
+#   controller_server.FollowPath: motion_model / vx_max / vx_min / wz_max
 #   global_costmap & local_costmap: footprint
 #   behavior_server: spin/backup 为原地机动，不能原地转的底盘需复审(spin→drive_on_heading 式)
 # ==========================================
 
 map_server:
   ros__parameters:
-    use_sim_time: false
+    use_sim_time: true
     yaml_filename: ""   # 由 launch 的 map 参数覆盖(OpaqueFunction expanduser)
 
 planner_server:
   ros__parameters:
-    use_sim_time: false
+    use_sim_time: true
     expected_planner_frequency: 1.0
     planner_plugins: ["GridBased"]
     GridBased:
@@ -51,7 +48,7 @@ planner_server:
 
 controller_server:
   ros__parameters:
-    use_sim_time: false
+    use_sim_time: true
     odom_topic: /base_controller/odom    # diff_drive 真实 twist(FAST-LIO /Odometry twist 恒零)
     controller_frequency: 10.0           # WSL 软渲下 20Hz 算不过来(missed rate)。MPPI 强约束:周期≤model_dt,
                                          # 故降频必须同步抬 model_dt(此处 1/10=0.1=model_dt)。再紧可继续等比降。
@@ -78,9 +75,9 @@ controller_server:
       batch_size: 1000          # 2000→1000 降算力(WSL 软渲算力紧);再紧可降到 500
       vx_std: 0.2
       vy_std: 0.2
-      wz_std: 0.6               # 0.4→0.6 多探索转向样本,改善弯道边走边转
+      wz_std: 0.2               # 已确认 real 转向采样标准差
       vx_max: 1.0               # CHASSIS: 0.5→1.0 提速(≤底盘 1.5)
-      vx_min: -0.35             # CHASSIS
+      vx_min: -0.1              # CHASSIS
       vy_max: 0.5
       wz_max: 1.8               # CHASSIS: 1.0→1.8 治弯道爬行(≤底盘 2.0);紧弯 vx=wz·r 不再被钳死
       iteration_count: 1
@@ -94,8 +91,6 @@ controller_server:
       TrajectoryVisualizer:
         trajectory_step: 5
         time_step: 3
-      AckermannConstraints:
-        min_turning_r: 0.2      # CHASSIS: 仅 motion_model=Ackermann 时生效
       critics: ["ConstraintCritic", "ObstaclesCritic", "GoalCritic", "GoalAngleCritic", "PathAlignCritic", "PathFollowCritic", "PathAngleCritic", "PreferForwardCritic"]
       ConstraintCritic:
         enabled: true
@@ -152,14 +147,14 @@ controller_server:
 global_costmap:
   global_costmap:
     ros__parameters:
-      use_sim_time: false
+      use_sim_time: true
       update_frequency: 1.0
       publish_frequency: 1.0
       global_frame: map
       robot_base_frame: base_footprint
       rolling_window: false
       track_unknown_space: true
-      footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # TEMPLATE: real bringup 运行时覆盖
+      footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # CHASSIS: 本车 0.75x0.55
       resolution: 0.05
       plugins: ["static_layer", "stvl_layer", "inflation_layer"]
       static_layer:
@@ -174,7 +169,6 @@ global_costmap:
         voxel_size: 0.05
         track_unknown_space: true
         mark_threshold: 0
-        origin_z: 0.0
         publish_voxel_map: false    # 全图层不发布 3D 体素(省带宽;调试临时开)
         transform_tolerance: 0.2
         mapping_mode: false
@@ -187,7 +181,7 @@ global_costmap:
           marking: true
           clearing: false
           obstacle_range: 20.0
-          min_obstacle_height: -0.52  # 待按正确真机 TF 实测；尚未由 real_geometry 自动派生
+          min_obstacle_height: -0.52  # 近地面阈值(地面-0.556+0.036 余量),只滤平地噪声;不用底盘间隙——后者会滤掉刚高于底盘的矮障碍(如托盘)下半部
           max_obstacle_height: 2.0
           expected_update_rate: 0.0
           observation_persistence: 0.0
@@ -202,7 +196,7 @@ global_costmap:
           marking: false
           clearing: true
           max_z: 2.0
-          min_z: -0.52  # 与临时 min_obstacle_height 同步，待实测
+          min_z: -0.52  # 与 min_obstacle_height 同步(近地面)
           vertical_fov_angle: 0.523   # VLP-16 垂直 FOV ~±15°
           vertical_fov_padding: 0.05
           horizontal_fov_angle: 6.29  # 360°
@@ -217,7 +211,7 @@ global_costmap:
 local_costmap:
   local_costmap:
     ros__parameters:
-      use_sim_time: false
+      use_sim_time: true
       update_frequency: 5.0
       publish_frequency: 2.0
       global_frame: camera_init        # 连续、不随 GICP 跳变(spec §4.4 / 前提②)
@@ -226,7 +220,7 @@ local_costmap:
       width: 6
       height: 6
       resolution: 0.05
-      footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # TEMPLATE: real bringup 运行时覆盖
+      footprint: "[ [0.375, 0.275], [0.375, -0.275], [-0.375, -0.275], [-0.375, 0.275] ]"  # CHASSIS
       plugins: ["stvl_layer", "inflation_layer"]
       stvl_layer:
         plugin: "spatio_temporal_voxel_layer/SpatioTemporalVoxelLayer"
@@ -237,7 +231,6 @@ local_costmap:
         voxel_size: 0.05
         track_unknown_space: true
         mark_threshold: 0
-        origin_z: 0.0               # STVL 视锥清除,0.0 起步;若刷 Sensor origin out of map bounds 则改 -1.0(见 Task 3 Step 6)
         publish_voxel_map: true     # 局部保留发布(调试;原 VoxelLayer 也发布)
         transform_tolerance: 0.2
         mapping_mode: false
@@ -249,7 +242,7 @@ local_costmap:
           marking: true
           clearing: false
           obstacle_range: 20.0
-          min_obstacle_height: -0.52  # 待按正确真机 TF 实测；尚未由 real_geometry 自动派生
+          min_obstacle_height: -0.52  # 近地面阈值(地面-0.556+0.036 余量),只滤平地噪声;不用底盘间隙——后者会滤掉刚高于底盘的矮障碍(如托盘)下半部
           max_obstacle_height: 2.0
           filter: "voxel"
           voxel_min_points: 0
@@ -261,7 +254,7 @@ local_costmap:
           marking: false
           clearing: true
           max_z: 2.0
-          min_z: -0.52  # 与临时 min_obstacle_height 同步，待实测
+          min_z: -0.52  # 与 min_obstacle_height 同步(近地面)
           vertical_fov_angle: 0.523
           vertical_fov_padding: 0.05
           horizontal_fov_angle: 6.29
@@ -275,7 +268,7 @@ local_costmap:
 
 behavior_server:
   ros__parameters:
-    use_sim_time: false
+    use_sim_time: true
     costmap_topic: local_costmap/costmap_raw
     footprint_topic: local_costmap/published_footprint
     cycle_frequency: 10.0
@@ -292,13 +285,13 @@ behavior_server:
     robot_base_frame: base_footprint
     transform_tolerance: 0.1
     simulate_ahead_time: 2.0
-    max_rotational_vel: 1.0
-    min_rotational_vel: 0.4
-    rotational_acc_lim: 3.2
+    max_rotational_vel: 0.2
+    min_rotational_vel: 0.1
+    rotational_acc_lim: 0.2
 
 bt_navigator:
   ros__parameters:
-    use_sim_time: false
+    use_sim_time: true
     global_frame: map
     robot_base_frame: base_footprint
     odom_topic: /base_controller/odom

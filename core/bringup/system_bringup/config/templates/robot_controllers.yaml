@@ -1,6 +1,7 @@
 controller_manager:
   ros__parameters:
     update_rate: 50  # Hz
+    use_sim_time: true
 
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
@@ -10,6 +11,7 @@ controller_manager:
 
 base_controller:
   ros__parameters:
+    use_sim_time: true
     left_wheel_names: ["left_wheel_joint"]
     right_wheel_names: ["right_wheel_joint"]
 
@@ -40,6 +42,7 @@ base_controller:
     linear.x.max_velocity: 1.5
     linear.x.min_velocity: -1.5
     linear.x.max_acceleration: 1.0
+    linear.x.min_acceleration: -1.0
     linear.x.max_jerk: 0.0
     linear.x.min_jerk: 0.0
 

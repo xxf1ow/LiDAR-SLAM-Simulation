@@ -1,10 +1,21 @@
-# system_bringup 运行配置 —— bringup.launch.py 运行时用 find_repo_root() 读**源码**本文件
-# (不经 install),故改这里不用 rebuild system_bringup。
-# 勿加进 setup.py data_files(不 install)——否则改了要 rebuild,失去本设计的意义。
+# system_bringup 运行配置 —— bringup.launch.py 从 colcon install 布局固定映射到**源码**本文件，
+# 再由 compile_runtime_configs() 编译到独立 /tmp 运行时目录；改本文件不用 rebuild。
+# 本文件仍不进入 setup.py data_files，避免 install 副本成为第二配置源。
 
 # === 顶层:改这两行切 4 组合(sim/real × navigation/mapping),不用 rebuild ===
 platform: sim              # sim | real
 mode: navigation           # navigation | mapping
+
+# === 平台事实 Profile：路径相对本文件解析 ===
+profiles:
+  sim: profiles/sim.yaml    # 仿真平台完整事实
+  real: profiles/real.yaml  # 当前实机完整事实
+
+# === 地图与算法工作目录：原样传给对应原生组件，不在编译期展开或创建 ===
+map_artifacts:
+  lio_sam_work_dir: /result/loam/ # LIO-SAM 使用 $HOME + 此路径，并会重建该专用子目录
+  prior_pcd: ~/result/GlobalMap.pcd # GICP 先验点云，由 6B launch 覆盖原生空占位
+  nav2_map: ~/result/factory_map.yaml # Nav2 栅格地图，由 6B launch 覆盖原生空占位
 
 # === 仿真底层:robot_gz_bringup(platform=sim 时生效)===
 robot_gz:
@@ -15,58 +26,6 @@ robot_gz:
   spawn_y: "0.0"
   spawn_z: "0.05"
 
-# === 真机底层:robot_bringup(platform=real 时生效,真实底盘 launch 已接线)===
-robot_bringup:
-  use_mock_hardware: false
-
-# === 真机几何唯一参数源 ===
-# 单位:m / rad。以下均为 2026-08-03 人工测量的暂定值；取得厂家尺寸图后只改本段。
-# 暂按驱动轴中点=车体几何中心，并将其地面投影定义为 base_footprint；待厂家图确认。
-# lidar xyz 是 base_footprint -> 雷达/内置 IMU 坐标原点。
-real_geometry:
-  body:
-    length: 0.960
-    width: 0.610
-    height: 0.377
-    ground_clearance: 0.143
-  drive_wheel:
-    diameter: 0.205
-    width: 0.101
-    separation: 0.463
-  lidar:
-    x: 0.443
-    y: 0.0
-    z: 0.905
-    roll: 0.0
-    pitch: 0.0
-    yaw: 0.0
-
-# === 真机雷达驱动 ===
-vanjee_lidar:
-  config: vanjee_722.yaml
-
-# === 共享上层:两套参数文件互不覆盖 ===
+# === 共享上层编排 ===
 slam_stack:
   settling: 20.0              # ready_gate 就绪后再等的稳定秒数(所有 gate 共用)
-  sim:
-    lio_sam:
-      config: params.yaml
-    fast_lio:
-      config: gazebo_velodyne.yaml
-    gicp_localization:
-      config: gicp_localization.yaml
-      prior_map_path: ~/result/GlobalMap.pcd     # 先验图(save_map.sh 落 ~/result)
-    robot_navigation:
-      config: nav2_params.yaml
-      map: ~/result/factory_map.yaml             # 占据栅格(pcd_to_occupancy 生成)
-  real:
-    lio_sam:
-      config: params_real.yaml
-    fast_lio:
-      config: vanjee_722.yaml
-    gicp_localization:
-      config: gicp_localization_real.yaml
-      prior_map_path: ~/result/GlobalMap.pcd
-    robot_navigation:
-      config: nav2_params_real.yaml
-      map: ~/result/factory_map.yaml

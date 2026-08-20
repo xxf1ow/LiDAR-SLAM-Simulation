@@ -8,6 +8,23 @@ from system_bringup.sensor_gate_logic import (
 )
 
 
+SYNTHETIC_SCAN_LINES = 7
+SYNTHETIC_COLUMNS_PER_SCAN = 313
+SYNTHETIC_POINTS_PER_SCAN = SYNTHETIC_SCAN_LINES * SYNTHETIC_COLUMNS_PER_SCAN
+
+
+@pytest.fixture
+def state():
+    return SensorGateState(
+        expected_points_per_scan=SYNTHETIC_POINTS_PER_SCAN,
+        minimum_point_hz=8.0,
+        minimum_imu_hz=150.0,
+        max_stamp_age=0.5,
+        rate_window=2.0,
+        stable_duration=2.0,
+    )
+
+
 def feed_healthy(state, duration, point_hz=10.0, imu_hz=200.0, start=0.0):
     events = [
         (start + index / point_hz, "point")
@@ -24,8 +41,8 @@ def feed_healthy(state, duration, point_hz=10.0, imu_hz=200.0, start=0.0):
                 stamp=100.0 + received,
                 now_ros=100.1 + received,
                 frame_id=POINT_FRAME,
-                height=32,
-                width=1200,
+                height=SYNTHETIC_SCAN_LINES,
+                width=SYNTHETIC_COLUMNS_PER_SCAN,
                 fields=POINT_FIELDS,
             )
         else:
@@ -38,38 +55,58 @@ def feed_healthy(state, duration, point_hz=10.0, imu_hz=200.0, start=0.0):
         state.status(received)
 
 
-def test_healthy_streams_become_ready_after_two_stable_seconds():
-    state = SensorGateState()
+def test_healthy_streams_become_ready_after_two_stable_seconds(state):
     feed_healthy(state, duration=2.3)
     ready, reason = state.status(2.3)
     assert ready, reason
 
 
-def test_wrong_point_shape_never_becomes_ready():
-    state = SensorGateState()
+@pytest.mark.parametrize(
+    "height, width",
+    [
+        (1, SYNTHETIC_POINTS_PER_SCAN),
+        (SYNTHETIC_SCAN_LINES, SYNTHETIC_COLUMNS_PER_SCAN),
+    ],
+)
+def test_expected_total_points_accepts_organized_or_unorganized_clouds(state, height, width):
+    state.observe_point(
+        received=0.0,
+        stamp=100.0,
+        now_ros=100.1,
+        frame_id=POINT_FRAME,
+        height=height,
+        width=width,
+        fields=POINT_FIELDS,
+    )
+    assert state.point_problem is None
+
+
+def test_wrong_total_points_never_becomes_ready_without_fixed_shape_assumption(state):
     state.observe_point(
         received=0.0,
         stamp=100.0,
         now_ros=100.1,
         frame_id="velodyne",
-        height=16,
-        width=1200,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN - 1,
         fields=POINT_FIELDS,
     )
     ready, reason = state.status(0.1)
     assert not ready
-    assert "32x1200" in reason
+    assert str(SYNTHETIC_POINTS_PER_SCAN) in reason
+    assert (
+        f"{SYNTHETIC_SCAN_LINES}x{SYNTHETIC_COLUMNS_PER_SCAN}" not in reason
+    )
 
 
-def test_wrong_frames_are_reported():
-    state = SensorGateState()
+def test_wrong_frames_are_reported(state):
     state.observe_point(
         received=0.0,
         stamp=100.0,
         now_ros=100.1,
         frame_id="wrong_lidar",
-        height=32,
-        width=1200,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=POINT_FIELDS,
     )
     state.observe_imu(
@@ -84,8 +121,7 @@ def test_wrong_frames_are_reported():
     assert "wrong_imu" in reason
 
 
-def test_stale_headers_are_reported():
-    state = SensorGateState()
+def test_stale_headers_are_reported(state):
     state.observe_imu(
         received=0.0,
         stamp=100.0,
@@ -97,8 +133,7 @@ def test_stale_headers_are_reported():
     assert "0.5" in reason
 
 
-def test_low_point_or_imu_rate_resets_stability():
-    state = SensorGateState()
+def test_low_point_or_imu_rate_resets_stability(state):
     feed_healthy(state, duration=2.3, point_hz=5.0, imu_hz=100.0)
     ready, reason = state.status(2.3)
     assert not ready
@@ -106,8 +141,7 @@ def test_low_point_or_imu_rate_resets_stability():
     assert "150" in reason
 
 
-def test_stream_stopping_drops_observed_rate():
-    state = SensorGateState()
+def test_stream_interruption_clears_ready_state(state):
     feed_healthy(state, duration=2.3)
     assert state.status(2.3)[0]
     ready, reason = state.status(4.6)
@@ -115,24 +149,22 @@ def test_stream_stopping_drops_observed_rate():
     assert "Hz" in reason
 
 
-def test_dense_burst_followed_by_silence_never_becomes_ready():
-    state = SensorGateState()
+def test_dense_burst_followed_by_silence_never_becomes_ready(state):
     feed_healthy(state, duration=0.1, point_hz=200.0, imu_hz=2000.0)
     ready, reason = state.status(2.01)
     assert not ready
     assert "Hz" in reason
 
 
-def test_identical_received_timestamps_are_unhealthy_without_crashing():
-    state = SensorGateState()
+def test_identical_received_timestamps_are_unhealthy_without_crashing(state):
     for _ in range(2):
         state.observe_point(
             received=1.0,
             stamp=101.0,
             now_ros=101.1,
             frame_id=POINT_FRAME,
-            height=32,
-            width=1200,
+            height=SYNTHETIC_SCAN_LINES,
+            width=SYNTHETIC_COLUMNS_PER_SCAN,
             fields=POINT_FIELDS,
         )
         state.observe_imu(
@@ -146,16 +178,15 @@ def test_identical_received_timestamps_are_unhealthy_without_crashing():
     assert "Hz" in reason
 
 
-def test_invalid_contract_resets_stability_before_a_fresh_two_seconds():
-    state = SensorGateState()
+def test_invalid_contract_resets_stability_before_a_fresh_two_seconds(state):
     feed_healthy(state, duration=1.0)
     state.observe_point(
         received=1.05,
         stamp=101.05,
         now_ros=101.15,
         frame_id="wrong_lidar",
-        height=32,
-        width=1200,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=POINT_FIELDS,
     )
     assert not state.status(1.05)[0]
@@ -173,15 +204,14 @@ def test_invalid_contract_resets_stability_before_a_fresh_two_seconds():
         ("y", "x", "z", "intensity", "ring", "time"),
     ],
 )
-def test_wrong_or_reordered_point_fields_are_reported(fields):
-    state = SensorGateState()
+def test_wrong_or_reordered_point_fields_are_reported(state, fields):
     state.observe_point(
         received=0.0,
         stamp=100.0,
         now_ros=100.1,
         frame_id=POINT_FRAME,
-        height=32,
-        width=1200,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=fields,
     )
     ready, reason = state.status(0.0)
@@ -193,17 +223,66 @@ def test_wrong_or_reordered_point_fields_are_reported(fields):
     "stamp, now_ros",
     [(100.0, 100.6), (100.1, 100.0)],
 )
-def test_stale_or_future_point_headers_are_reported(stamp, now_ros):
-    state = SensorGateState()
+def test_stale_or_future_point_headers_are_reported(state, stamp, now_ros):
     state.observe_point(
         received=0.0,
         stamp=stamp,
         now_ros=now_ros,
         frame_id=POINT_FRAME,
-        height=32,
-        width=1200,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
         fields=POINT_FIELDS,
     )
     ready, reason = state.status(0.0)
     assert not ready
     assert "header age" in reason
+
+
+def test_custom_rate_window_stable_duration_and_stamp_age_change_results():
+    state = SensorGateState(
+        expected_points_per_scan=SYNTHETIC_POINTS_PER_SCAN,
+        minimum_point_hz=20.0,
+        minimum_imu_hz=300.0,
+        max_stamp_age=0.1,
+        rate_window=0.5,
+        stable_duration=0.1,
+    )
+    feed_healthy(state, duration=0.6, point_hz=10.0, imu_hz=200.0)
+    ready, reason = state.status(0.6)
+    assert not ready
+    assert "20" in reason
+    assert "300" in reason
+
+    state.observe_point(
+        received=0.7,
+        stamp=100.5,
+        now_ros=100.7,
+        frame_id=POINT_FRAME,
+        height=SYNTHETIC_SCAN_LINES,
+        width=SYNTHETIC_COLUMNS_PER_SCAN,
+        fields=POINT_FIELDS,
+    )
+    assert "outside [0, 0.1]s" in state.point_problem
+
+
+def test_custom_rate_window_and_stable_duration_change_ready_timing():
+    state = SensorGateState(
+        expected_points_per_scan=SYNTHETIC_POINTS_PER_SCAN,
+        minimum_point_hz=8.0,
+        minimum_imu_hz=150.0,
+        max_stamp_age=10.0,
+        rate_window=0.5,
+        stable_duration=0.1,
+    )
+    feed_healthy(state, duration=0.2, point_hz=20.0, imu_hz=400.0)
+    assert state.status(0.2)[0]
+
+    ready, reason = state.status(0.71)
+    assert not ready
+    assert "Hz" in reason
+
+
+def test_nominal_ros_time_rates_pass_even_when_wall_time_is_slow(state):
+    feed_healthy(state, duration=2.3, start=1000.0)
+    ready, reason = state.status(1002.3)
+    assert ready, reason

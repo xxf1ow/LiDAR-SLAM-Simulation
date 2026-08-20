@@ -1,0 +1,7 @@
+robot_web_ui:
+  ros__parameters:
+    use_sim_time: true
+    max_linear_speed: 1.5
+    max_angular_speed: 2.0
+    host: "0.0.0.0"
+    port: 8080

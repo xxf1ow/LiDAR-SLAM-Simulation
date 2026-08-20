@@ -12,6 +12,8 @@ from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
                             LogInfo, OpaqueFunction)
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 from system_bringup.ready_gate import ready_gate
 
@@ -26,19 +28,11 @@ def _stack(context, *args, **kwargs):
     mode = LaunchConfiguration("mode").perform(context)
     use_sim = LaunchConfiguration("use_sim_time").perform(context)
     lio_sam_params = LaunchConfiguration("lio_sam_params_file").perform(context)
-    fast_cfg = LaunchConfiguration("fast_lio_config").perform(context)
     gicp_config = LaunchConfiguration("gicp_config_file").perform(context)
     prior = LaunchConfiguration("prior_map_path").perform(context)
     nav2_params = LaunchConfiguration("nav2_params_file").perform(context)
     nav_map = LaunchConfiguration("nav_map").perform(context)
     cmd_vel_output_topic = LaunchConfiguration("cmd_vel_output_topic").perform(context)
-    weld = {
-        name: LaunchConfiguration(name).perform(context)
-        for name in (
-            "weld_x", "weld_y", "weld_z",
-            "weld_roll", "weld_pitch", "weld_yaw",
-        )
-    }
     settling = float(LaunchConfiguration("settling").perform(context))
     flow = lambda m: LogInfo(msg="======== [slam_stack] %s" % m)
 
@@ -49,56 +43,90 @@ def _stack(context, *args, **kwargs):
             _inc("lio_sam", "launch/run.launch.py", {"params_file": lio_sam_params}),
         ]
     if mode == "navigation":
-        fast_lio = _inc("fast_lio", "launch/mapping.launch.py",
-                        {"config_file": fast_cfg, "use_sim_time": use_sim, "rviz": "false"})
+        fast_lio_params_file = LaunchConfiguration(
+            "fast_lio_params_file"
+        ).perform(context)
+        fast_lio_config_path = os.path.dirname(fast_lio_params_file)
+        fast_lio_config_file = os.path.basename(fast_lio_params_file)
+        if not os.path.isabs(fast_lio_params_file) or not fast_lio_config_file:
+            raise RuntimeError(
+                "fast_lio_params_file must be an absolute generated YAML path"
+            )
+
+        bridge = {
+            name: LaunchConfiguration(
+                f"fast_lio_body_bridge_{name}"
+            ).perform(context)
+            for name in ("x", "y", "z", "qx", "qy", "qz", "qw")
+        }
+
+        fast_lio = _inc(
+            "fast_lio",
+            "launch/mapping.launch.py",
+            {
+                "config_path": fast_lio_config_path,
+                "config_file": fast_lio_config_file,
+                "use_sim_time": use_sim,
+                "rviz": "false",
+            },
+        )
+        body_bridge = Node(
+            package="tf2_ros",
+            executable="static_transform_publisher",
+            name="fast_lio_body_to_base_footprint",
+            output="screen",
+            arguments=[
+                "--x", bridge["x"], "--y", bridge["y"], "--z", bridge["z"],
+                "--qx", bridge["qx"], "--qy", bridge["qy"],
+                "--qz", bridge["qz"], "--qw", bridge["qw"],
+                "--frame-id", "body", "--child-frame-id", "base_footprint",
+            ],
+            parameters=[
+                {
+                    "use_sim_time": ParameterValue(
+                        LaunchConfiguration("use_sim_time"), value_type=bool
+                    )
+                }
+            ],
+        )
         gicp = _inc("gicp_localization", "launch/localization.launch.py",
-                    {"config_file": gicp_config, "prior_map_path": prior,
-                     "use_sim_time": use_sim})
+                    {"config_file": gicp_config, "prior_map_path": prior})
         nav2 = _inc("robot_navigation", "launch/navigation.launch.py",
                     {"params_file": nav2_params, "map": nav_map, "use_rviz": "true",
-                     "use_sim_time": use_sim, "cmd_vel_output_topic": cmd_vel_output_topic,
-                     **weld})
+                     "use_sim_time": use_sim, "cmd_vel_output_topic": cmd_vel_output_topic})
         # 链式就绪闸门(非阻塞):等上游真发出关键话题 + settling 后才起下个,超时中止
         return [
             flow("MODE=navigation → ② fast_lio → gate(/Odometry+/cloud_registered) → gicp → gate(/localization+/base_controller/odom) → nav2"),
+            body_bridge,
             fast_lio,
         ] + ready_gate(["/Odometry", "/cloud_registered"], 60.0,
                        "fast_lio→/Odometry+/cloud_registered",
                        [gicp] + ready_gate(
                            ["/localization", "/base_controller/odom"], 60.0,
                            "gicp+base_controller→/localization+/base_controller/odom",
-                           [nav2], settling=settling),
-                       settling=settling)
+                           [nav2], use_sim_time=use_sim, settling=settling),
+                       use_sim_time=use_sim, settling=settling)
     raise RuntimeError("未知 mode='%s'(应为 navigation|mapping)" % mode)
 
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument("mode", default_value="navigation"),
-        DeclareLaunchArgument("use_sim_time", default_value="true"),
-        DeclareLaunchArgument(
-            "lio_sam_params_file",
-            default_value=os.path.join(
-                get_package_share_directory("lio_sam"), "config", "params.yaml")),
-        DeclareLaunchArgument("fast_lio_config", default_value="gazebo_velodyne.yaml"),
-        DeclareLaunchArgument(
-            "gicp_config_file",
-            default_value=os.path.join(
-                get_package_share_directory("gicp_localization"), "config",
-                "gicp_localization.yaml")),
-        DeclareLaunchArgument("prior_map_path", default_value="~/result/GlobalMap.pcd"),
-        DeclareLaunchArgument(
-            "nav2_params_file",
-            default_value=os.path.join(
-                get_package_share_directory("robot_navigation"), "config", "nav2_params.yaml")),
-        DeclareLaunchArgument("nav_map", default_value="~/result/factory_map.yaml"),
+        DeclareLaunchArgument("mode"),
+        DeclareLaunchArgument("use_sim_time"),
+        DeclareLaunchArgument("lio_sam_params_file"),
+        DeclareLaunchArgument("fast_lio_params_file"),
+        DeclareLaunchArgument("gicp_config_file"),
+        DeclareLaunchArgument("prior_map_path"),
+        DeclareLaunchArgument("nav2_params_file"),
+        DeclareLaunchArgument("nav_map"),
         DeclareLaunchArgument("cmd_vel_output_topic", default_value="/cmd_vel"),
-        DeclareLaunchArgument("weld_x", default_value="0.0"),
-        DeclareLaunchArgument("weld_y", default_value="0.0"),
-        DeclareLaunchArgument("weld_z", default_value="-0.5560"),
-        DeclareLaunchArgument("weld_roll", default_value="0.0"),
-        DeclareLaunchArgument("weld_pitch", default_value="0.0"),
-        DeclareLaunchArgument("weld_yaw", default_value="0.0"),
-        DeclareLaunchArgument("settling", default_value="20.0"),
+        DeclareLaunchArgument("fast_lio_body_bridge_x"),
+        DeclareLaunchArgument("fast_lio_body_bridge_y"),
+        DeclareLaunchArgument("fast_lio_body_bridge_z"),
+        DeclareLaunchArgument("fast_lio_body_bridge_qx"),
+        DeclareLaunchArgument("fast_lio_body_bridge_qy"),
+        DeclareLaunchArgument("fast_lio_body_bridge_qz"),
+        DeclareLaunchArgument("fast_lio_body_bridge_qw"),
+        DeclareLaunchArgument("settling"),
         OpaqueFunction(function=_stack),
     ])

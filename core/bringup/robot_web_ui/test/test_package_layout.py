@@ -2,9 +2,38 @@ import ast
 from pathlib import Path
 from xml.etree import ElementTree
 
+import yaml
+
 
 ROOT = Path(__file__).parents[1]
 NODE_PATH = ROOT / "robot_web_ui" / "web_ui_node.py"
+TEMPLATE_PATH = (
+    ROOT.parent
+    / "system_bringup"
+    / "config"
+    / "templates"
+    / "robot_web_ui.yaml"
+)
+
+
+def _native_parameter_type(value):
+    return {
+        bool: "Parameter.Type.BOOL",
+        int: "Parameter.Type.INTEGER",
+        float: "Parameter.Type.DOUBLE",
+        str: "Parameter.Type.STRING",
+    }[type(value)]
+
+
+def _template_parameter_types():
+    parameters = yaml.safe_load(TEMPLATE_PATH.read_text(encoding="utf-8"))[
+        "robot_web_ui"
+    ]["ros__parameters"]
+    return {
+        name: _native_parameter_type(value)
+        for name, value in parameters.items()
+        if name != "use_sim_time"
+    }
 
 
 def test_package_declares_runtime_dependencies():
@@ -97,21 +126,38 @@ def test_node_has_exact_ros_contract_and_parameters():
         ("Trigger", "/cmd_vel_gate/resume_automatic"),
     }
 
-    parameters = {
+    parameters = [
         (
             ast.literal_eval(call.args[0]),
-            ast.literal_eval(call.args[1]),
+            ast.unparse(call.args[1]) if len(call.args) > 1 else None,
+            len(call.args),
+            len(call.keywords),
         )
         for call in calls
         if isinstance(call.func, ast.Attribute)
         and call.func.attr == "declare_parameter"
-    }
-    assert parameters == {
-        ("max_linear_speed", 1.5),
-        ("max_angular_speed", 2.0),
-        ("host", "0.0.0.0"),
-        ("port", 8080),
-    }
+    ]
+    expected_parameters = _template_parameter_types()
+    parameter_names = [name for name, _type, _args, _keywords in parameters]
+    assert len(parameters) == len(expected_parameters)
+    assert len(parameter_names) == len(set(parameter_names))
+    assert {
+        name: parameter_type
+        for name, parameter_type, _args, _keywords in parameters
+    } == expected_parameters
+    assert all(
+        argument_count == 2 and keyword_count == 0
+        for _name, _type, argument_count, keyword_count in parameters
+    )
+    assert any(
+        isinstance(node, ast.ImportFrom)
+        and node.module == "rclpy.parameter"
+        and any(
+            alias.name == "Parameter" and alias.asname is None
+            for alias in node.names
+        )
+        for node in tree.body
+    )
 
 
 def test_node_stamps_manual_messages_and_bounds_service_wait():

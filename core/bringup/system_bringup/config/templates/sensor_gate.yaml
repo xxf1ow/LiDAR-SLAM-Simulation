@@ -1,0 +1,12 @@
+sensor_contract_gate:
+  ros__parameters:
+    use_sim_time: false
+    expected_points_per_scan: 38400
+    expected_point_hz: 10.0
+    expected_imu_hz: 200.0
+    minimum_point_rate_ratio: 0.8
+    minimum_imu_rate_ratio: 0.75
+    max_stamp_age: 0.5
+    rate_window: 2.0
+    stable_duration: 2.0
+    timeout: 300.0

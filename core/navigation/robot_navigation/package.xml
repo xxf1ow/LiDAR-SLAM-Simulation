@@ -3,7 +3,7 @@
 <package format="3">
   <name>robot_navigation</name>
   <version>0.1.0</version>
-  <description>5e Nav2 最小打通：先验图 2D 化、twist_stamper、nav2 参数与 bringup（Gz Harmonic 重建栈）</description>
+  <description>Nav2 planning, control, PCD map conversion, and Twist adaptation for the robot navigation stack.</description>
   <maintainer email="20twenty.degree@gmail.com">xxf1ow</maintainer>
   <license>MIT</license>
 
@@ -19,7 +19,6 @@
   <exec_depend>nav2_lifecycle_manager</exec_depend>
   <exec_depend>nav2_smac_planner</exec_depend>
   <exec_depend>nav2_mppi_controller</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 

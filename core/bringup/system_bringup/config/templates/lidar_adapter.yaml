@@ -1,0 +1,7 @@
+lidar_pointcloud_adapter:
+  ros__parameters:
+    use_sim_time: true
+    input_topic: /lidar/points
+    output_topic: /points_raw
+    output_frame: velodyne
+    scan_period: 0.1

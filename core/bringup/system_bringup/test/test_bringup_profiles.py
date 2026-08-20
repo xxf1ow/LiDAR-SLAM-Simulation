@@ -1,70 +1,155 @@
+import math
 from pathlib import Path
 
+import pytest
 import yaml
 
 
 CONFIG = Path(__file__).resolve().parents[1] / "config" / "bringup.yaml"
+PROFILE_DIR = CONFIG.parent / "profiles"
 
 
 def _load():
     return yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
 
 
-def test_default_platform_and_mode_remain_sim_navigation():
+def _leaf_paths(value, prefix=()):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            yield from _leaf_paths(child, prefix + (key,))
+        return
+    yield prefix
+
+
+def _load_profile(name):
+    return yaml.safe_load(
+        (PROFILE_DIR / name).read_text(encoding="utf-8")
+    )
+
+
+def test_runtime_selection_uses_supported_platform_and_mode_schema():
     cfg = _load()
-    assert cfg["platform"] == "sim"
-    assert cfg["mode"] == "navigation"
+    assert cfg["platform"] in {"sim", "real"}
+    assert cfg["mode"] in {"mapping", "navigation"}
 
 
-def test_sim_profile_preserves_existing_files_and_maps():
-    sim = _load()["slam_stack"]["sim"]
-    assert sim["lio_sam"]["config"] == "params.yaml"
-    assert sim["fast_lio"]["config"] == "gazebo_velodyne.yaml"
-    assert sim["gicp_localization"] == {
-        "config": "gicp_localization.yaml",
-        "prior_map_path": "~/result/GlobalMap.pcd",
+def test_bringup_has_only_runtime_selection_resources_and_orchestration():
+    cfg = _load()
+    assert set(cfg) == {
+        "platform", "mode", "profiles", "map_artifacts", "robot_gz", "slam_stack"
     }
-    assert sim["robot_navigation"] == {
-        "config": "nav2_params.yaml",
-        "map": "~/result/factory_map.yaml",
+    assert set(cfg["slam_stack"]) == {"settling"}
+    settling = cfg["slam_stack"]["settling"]
+    assert not isinstance(settling, bool)
+    assert isinstance(settling, (int, float))
+    assert math.isfinite(settling) and settling >= 0.0
+    assert set(cfg["map_artifacts"]) == {
+        "lio_sam_work_dir", "prior_pcd", "nav2_map"
     }
+    assert all(
+        isinstance(value, str) and value.strip()
+        for value in cfg["map_artifacts"].values()
+    )
 
 
-def test_real_profile_selects_only_real_parameter_files():
-    real = _load()["slam_stack"]["real"]
-    assert real["lio_sam"]["config"] == "params_real.yaml"
-    assert real["fast_lio"]["config"] == "vanjee_722.yaml"
-    assert real["gicp_localization"]["config"] == "gicp_localization_real.yaml"
-    assert real["robot_navigation"]["config"] == "nav2_params_real.yaml"
-    assert real["gicp_localization"]["prior_map_path"] == "~/result/GlobalMap.pcd"
-    assert real["robot_navigation"]["map"] == "~/result/factory_map.yaml"
+def test_bringup_selects_relative_sim_and_real_profiles():
+    profiles = _load()["profiles"]
+    assert set(profiles) == {"sim", "real"}
+    resolved = []
+    for value in profiles.values():
+        path = Path(value)
+        assert not path.is_absolute()
+        resolved.append((CONFIG.parent / path).resolve())
+    assert len(set(resolved)) == len(resolved)
+    assert all(path.is_file() for path in resolved)
 
 
-def test_real_driver_selects_vanjee_722_config():
-    assert _load()["vanjee_lidar"]["config"] == "vanjee_722.yaml"
+def test_profiles_are_complete_and_have_identical_leaf_paths():
+    sim = _load_profile("sim.yaml")
+    real = _load_profile("real.yaml")
+    assert set(_leaf_paths(sim)) == set(_leaf_paths(real))
 
 
-def test_real_geometry_keeps_all_measured_values_in_bringup():
-    geometry = _load()["real_geometry"]
+@pytest.mark.parametrize("name", ["sim.yaml", "real.yaml"])
+def test_profiles_define_obstacle_geometry_facts(name):
+    profile = _load_profile(name)
+    vertical_fov = profile["sensors"]["lidar"]["vertical_fov_angle"]
+    obstacle_height = profile["perception"]["obstacle_height"]
+    assert math.isfinite(vertical_fov) and 0.0 < vertical_fov <= math.pi
+    assert set(obstacle_height) == {"min", "max"}
+    assert all(math.isfinite(value) for value in obstacle_height.values())
+    assert obstacle_height["min"] < obstacle_height["max"]
 
-    assert geometry == {
-        "body": {
-            "length": 0.960,
-            "width": 0.610,
-            "height": 0.377,
-            "ground_clearance": 0.143,
-        },
-        "drive_wheel": {
-            "diameter": 0.205,
-            "width": 0.101,
-            "separation": 0.463,
-        },
-        "lidar": {
-            "x": 0.443,
-            "y": 0.0,
-            "z": 0.905,
-            "roll": 0.0,
-            "pitch": 0.0,
-            "yaw": 0.0,
-        },
+
+@pytest.mark.parametrize("name", ["sim.yaml", "real.yaml"])
+def test_profiles_define_complete_positive_motion_limits(name):
+    motion = _load_profile(name)["motion"]
+    assert set(motion) == {
+        "max_linear_velocity",
+        "max_angular_velocity",
+        "max_linear_acceleration",
+        "max_angular_acceleration",
     }
+    assert all(
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and value > 0.0
+        for value in motion.values()
+    )
+
+
+@pytest.mark.parametrize("name", ["sim.yaml", "real.yaml"])
+def test_every_profile_scalar_has_an_inline_comment(name):
+    path = PROFILE_DIR / name
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or stripped.endswith(":"):
+            continue
+        assert " #" in line, f"{path.name}:{line_number} 缺少字段注释"
+
+
+@pytest.mark.parametrize("name", ["sim.yaml", "real.yaml"])
+def test_profiles_define_positive_geometry_and_sensor_capabilities(name):
+    profile = _load_profile(name)
+    for section in (profile["robot"]["body"], profile["robot"]["drive"]):
+        assert all(
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and math.isfinite(value)
+            and value > 0.0
+            for value in section.values()
+        )
+
+    lidar = profile["sensors"]["lidar"]
+    assert type(lidar["scan_lines"]) is int and lidar["scan_lines"] > 0
+    assert type(lidar["columns_per_scan"]) is int
+    assert lidar["columns_per_scan"] > 0
+    assert lidar["scan_rate_hz"] > 0.0
+    assert 0.0 <= lidar["min_range"] < lidar["max_range"]
+    assert profile["sensors"]["imu"]["rate_hz"] > 0.0
+
+
+def test_sim_and_real_profiles_keep_backend_and_network_schema_separate():
+    sim_lidar = _load_profile("sim.yaml")["hardware"]["lidar"]
+    real_lidar = _load_profile("real.yaml")["hardware"]["lidar"]
+
+    assert sim_lidar["backend"] == "gazebo"
+    assert all(
+        sim_lidar[key] is None
+        for key in (
+            "host_address", "device_address", "host_msop_port",
+            "device_msop_port",
+        )
+    )
+    assert real_lidar["backend"] == "vanjee"
+    assert all(
+        isinstance(real_lidar[key], str) and real_lidar[key]
+        for key in ("host_address", "device_address")
+    )
+    assert all(
+        type(real_lidar[key]) is int and 1 <= real_lidar[key] <= 65535
+        for key in ("host_msop_port", "device_msop_port")
+    )

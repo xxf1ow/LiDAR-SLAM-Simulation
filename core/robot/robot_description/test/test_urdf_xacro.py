@@ -19,6 +19,9 @@ COMBOS = [
     ("false", "true"),   # mock 硬件分支
     ("true", "false"),   # Gz 仿真分支
 ]
+GENERATED_CONTROLLERS_PATH = (
+    "/tmp/system_bringup-runtime-test/generated_robot_controllers.yaml"
+)
 
 
 @pytest.mark.parametrize("use_gazebo,use_mock_hardware", COMBOS)
@@ -33,7 +36,7 @@ def test_xacro_expands_to_valid_urdf(use_gazebo, use_mock_hardware):
             xacro_bin, XACRO,
             f"use_gazebo:={use_gazebo}",
             f"use_mock_hardware:={use_mock_hardware}",
-            "gz_controllers_file:=/tmp/robot_controllers.yaml",
+            f"gz_controllers_file:={GENERATED_CONTROLLERS_PATH}",
         ],
         text=True,
     )
@@ -70,6 +73,14 @@ def test_xacro_expands_to_valid_urdf(use_gazebo, use_mock_hardware):
     if use_gazebo == "true":
         assert "gz_ros2_control/GazeboSimSystem" in urdf
         assert "gz_ros2_control-system" in urdf  # gazebo 插件标签也注入了
+        plugin = next(
+            item
+            for item in root.findall("./gazebo/plugin")
+            if item.attrib.get("filename") == "gz_ros2_control-system"
+        )
+        parameters = plugin.find("parameters")
+        assert parameters is not None
+        assert (parameters.text or "").strip() == GENERATED_CONTROLLERS_PATH
     elif use_mock_hardware == "true":
         assert "mock_components/GenericSystem" in urdf
     else:
@@ -84,7 +95,7 @@ def test_xacro_expands_to_valid_urdf(use_gazebo, use_mock_hardware):
         os.remove(path)
 
 
-def test_real_geometry_arguments_place_body_wheels_and_sensor():
+def test_real_geometry_arguments_place_body_wheels_and_independent_sensor_mounts():
     xacro_bin = shutil.which("xacro")
     assert xacro_bin, "xacro 不在 PATH"
     urdf = subprocess.check_output(
@@ -99,12 +110,18 @@ def test_real_geometry_arguments_place_body_wheels_and_sensor():
             "wheel_radius:=0.1025",
             "wheel_width:=0.101",
             "wheel_separation:=0.463",
-            "sensor_x:=0.443",
-            "sensor_y:=0.0",
-            "sensor_z:=0.5735",
-            "sensor_roll:=0.0",
-            "sensor_pitch:=0.0",
-            "sensor_yaw:=0.0",
+            "lidar_x:=0.443",
+            "lidar_y:=0.071",
+            "lidar_z:=0.5735",
+            "lidar_roll:=0.13",
+            "lidar_pitch:=-0.21",
+            "lidar_yaw:=0.34",
+            "imu_x:=0.317",
+            "imu_y:=-0.052",
+            "imu_z:=0.491",
+            "imu_roll:=-0.19",
+            "imu_pitch:=0.27",
+            "imu_yaw:=-0.38",
         ],
         text=True,
     )
@@ -122,6 +139,44 @@ def test_real_geometry_arguments_place_body_wheels_and_sensor():
     assert numbers(origin("base_footprint_joint")["xyz"]) == [0.0, 0.0, 0.3315]
     assert numbers(origin("left_wheel_joint")["xyz"]) == [0.0, 0.2315, -0.229]
     assert numbers(origin("right_wheel_joint")["xyz"]) == [0.0, -0.2315, -0.229]
-    assert numbers(origin("velodyne_joint")["xyz"]) == [0.443, 0.0, 0.5735]
-    assert numbers(origin("velodyne_joint")["rpy"]) == [0.0, 0.0, 0.0]
-    assert origin("imu_joint") == origin("velodyne_joint")
+    assert numbers(origin("velodyne_joint")["xyz"]) == [0.443, 0.071, 0.5735]
+    assert numbers(origin("velodyne_joint")["rpy"]) == [0.13, -0.21, 0.34]
+    assert numbers(origin("imu_joint")["xyz"]) == [0.317, -0.052, 0.491]
+    assert numbers(origin("imu_joint")["rpy"]) == [-0.19, 0.27, -0.38]
+    assert origin("imu_joint") != origin("velodyne_joint")
+
+
+def test_gazebo_sensor_arguments_set_profile_owned_values():
+    xacro_bin = shutil.which("xacro")
+    assert xacro_bin, "xacro 不在 PATH"
+    urdf = subprocess.check_output(
+        [
+            xacro_bin, XACRO,
+            "use_gazebo:=true",
+            f"gz_controllers_file:={GENERATED_CONTROLLERS_PATH}",
+            "lidar_scan_lines:=32",
+            "lidar_columns_per_scan:=1024",
+            "lidar_scan_rate_hz:=15",
+            "lidar_min_range:=1.2",
+            "lidar_max_range:=72.5",
+            "lidar_horizontal_start_angle:=-2.4",
+            "lidar_horizontal_end_angle:=2.7",
+            "imu_rate_hz:=250",
+        ],
+        text=True,
+    )
+    root = ET.fromstring(urdf)
+
+    def text(path):
+        return root.find(path).text.strip()
+
+    lidar = "./gazebo[@reference='velodyne']/sensor[@name='gpu_lidar']"
+    imu = "./gazebo[@reference='imu_link']/sensor[@name='imu']"
+    assert text(f"{lidar}/lidar/scan/vertical/samples") == "32"
+    assert text(f"{lidar}/lidar/scan/horizontal/samples") == "1024"
+    assert text(f"{lidar}/update_rate") == "15"
+    assert text(f"{lidar}/lidar/range/min") == "1.2"
+    assert text(f"{lidar}/lidar/range/max") == "72.5"
+    assert text(f"{lidar}/lidar/scan/horizontal/min_angle") == "-2.4"
+    assert text(f"{lidar}/lidar/scan/horizontal/max_angle") == "2.7"
+    assert text(f"{imu}/update_rate") == "250"

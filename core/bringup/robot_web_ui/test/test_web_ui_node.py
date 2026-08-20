@@ -6,6 +6,10 @@ import types
 import pytest
 
 
+SYNTHETIC_MAX_LINEAR_SPEED = 1.7
+SYNTHETIC_MAX_ANGULAR_SPEED = 2.3
+
+
 @pytest.fixture
 def node_module(monkeypatch):
     class FakeNode:
@@ -13,6 +17,12 @@ def node_module(monkeypatch):
             self.base_destroy_calls = (
                 getattr(self, "base_destroy_calls", 0) + 1
             )
+
+    class FakeParameter:
+        class Type:
+            DOUBLE = object()
+            STRING = object()
+            INTEGER = object()
 
     class FakeTwistStamped:
         def __init__(self):
@@ -42,6 +52,8 @@ def node_module(monkeypatch):
     rclpy = types.ModuleType("rclpy")
     rclpy_node = types.ModuleType("rclpy.node")
     rclpy_node.Node = FakeNode
+    rclpy_parameter = types.ModuleType("rclpy.parameter")
+    rclpy_parameter.Parameter = FakeParameter
     rclpy_qos = types.ModuleType("rclpy.qos")
     rclpy_qos.QoSProfile = object
     rclpy_qos.HistoryPolicy = types.SimpleNamespace(KEEP_LAST=object())
@@ -68,6 +80,7 @@ def node_module(monkeypatch):
     modules = {
         "rclpy": rclpy,
         "rclpy.node": rclpy_node,
+        "rclpy.parameter": rclpy_parameter,
         "rclpy.qos": rclpy_qos,
         "ament_index_python": ament,
         "ament_index_python.packages": ament_packages,
@@ -149,12 +162,21 @@ def bare_node(module):
     return object.__new__(module.WebUiNode)
 
 
+def set_clock(node, *seconds):
+    readings = iter(seconds)
+    node.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(
+            nanoseconds=int(next(readings) * 1_000_000_000)
+        )
+    )
+
+
 def test_manual_command_publishes_one_stamped_base_link_message(node_module):
     node = bare_node(node_module)
     publisher = FakePublisher()
     stamp = object()
-    node._max_linear = 1.5
-    node._max_angular = 2.0
+    node._max_linear = SYNTHETIC_MAX_LINEAR_SPEED
+    node._max_angular = SYNTHETIC_MAX_ANGULAR_SPEED
     node._gate_mode = "manual"
     node._manual_publisher = publisher
     node.get_clock = lambda: types.SimpleNamespace(
@@ -167,15 +189,17 @@ def test_manual_command_publishes_one_stamped_base_link_message(node_module):
     message = publisher.messages[0]
     assert message.header.stamp is stamp
     assert message.header.frame_id == "base_link"
-    assert message.twist.linear.x == pytest.approx(0.3)
+    assert message.twist.linear.x == pytest.approx(
+        SYNTHETIC_MAX_LINEAR_SPEED * 20 / 100.0
+    )
     assert message.twist.angular.z == 0.0
 
 
 def test_nonzero_manual_command_is_rejected_outside_manual_mode(node_module):
     node = bare_node(node_module)
     publisher = FakePublisher()
-    node._max_linear = 1.5
-    node._max_angular = 2.0
+    node._max_linear = SYNTHETIC_MAX_LINEAR_SPEED
+    node._max_angular = SYNTHETIC_MAX_ANGULAR_SPEED
     node._gate_mode = "automatic"
     node._manual_publisher = publisher
 
@@ -194,8 +218,8 @@ def test_zero_manual_command_remains_a_safe_noop_outside_manual_mode(
 ):
     node = bare_node(node_module)
     publisher = FakePublisher()
-    node._max_linear = 1.5
-    node._max_angular = 2.0
+    node._max_linear = SYNTHETIC_MAX_LINEAR_SPEED
+    node._max_angular = SYNTHETIC_MAX_ANGULAR_SPEED
     node._gate_mode = "automatic"
     node._manual_publisher = publisher
     node.get_clock = lambda: types.SimpleNamespace(
@@ -230,21 +254,17 @@ def test_motion_status_is_absent_before_odometry_feedback(node_module):
 
 
 def test_motion_status_returns_fresh_odometry_snapshot(
-    node_module, monkeypatch
+    node_module,
 ):
-    clock = iter((10.0, 10.49))
-    monkeypatch.setattr(
-        node_module.time,
-        "monotonic",
-        lambda: next(clock),
-    )
     node = bare_node(node_module)
+    set_clock(node, 10.0, 10.49)
     message = node_module.Odometry()
     message.twist.twist.linear.x = 0.3
     message.twist.twist.angular.z = -0.2
 
     node._odom_callback(message)
 
+    assert node._odom_feedback == (0.3, -0.2, 10.0)
     assert node.motion_status() == {
         "linear_x": 0.3,
         "angular_z": -0.2,
@@ -253,15 +273,10 @@ def test_motion_status_returns_fresh_odometry_snapshot(
 
 
 def test_motion_status_expires_at_timeout_boundary(
-    node_module, monkeypatch
+    node_module,
 ):
-    clock = iter((10.0, 10.5))
-    monkeypatch.setattr(
-        node_module.time,
-        "monotonic",
-        lambda: next(clock),
-    )
     node = bare_node(node_module)
+    set_clock(node, 10.0, 10.5)
     message = node_module.Odometry()
     message.twist.twist.linear.x = 0.3
     message.twist.twist.angular.z = -0.2

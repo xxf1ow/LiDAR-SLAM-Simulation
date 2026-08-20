@@ -73,7 +73,7 @@ ament_target_dependencies(gicp_localization_node
   rclcpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_eigen pcl_conversions)
 
 install(TARGETS gicp_localization_node DESTINATION lib/${PROJECT_NAME})
-install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)

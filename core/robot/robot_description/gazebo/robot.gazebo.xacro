@@ -2,7 +2,7 @@
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <!-- prefix: link 名前缀(与本体宏一致)；gz_controllers_file: gz_ros2_control 读取的控制器 yaml 绝对路径，由 launch 注入 -->
-  <xacro:macro name="robot_gazebo" params="prefix gz_controllers_file">
+  <xacro:macro name="robot_gazebo" params="prefix gz_controllers_file lidar_scan_lines lidar_columns_per_scan lidar_scan_rate_hz lidar_min_range lidar_max_range lidar_horizontal_start_angle lidar_horizontal_end_angle imu_rate_hz">
 
     <!-- gz_ros2_control：controller_manager 随 Gz 进程起 -->
     <gazebo>
@@ -23,45 +23,44 @@
       <preserveFixedJoint>true</preserveFixedJoint>
     </gazebo>
 
-    <!-- 雷达：Gz 原生 gpu_lidar，16 线 / ±15° / 1800 水平(对齐 N_SCAN=16、Horizon_SCAN=1800)。
-         参数取自已验证的 Phase 0 spike。显式 topic=lidar(点云在 lidar/points)，避免 spawn 模型作用域前缀。 -->
+    <!-- 雷达：Gz 原生 gpu_lidar。显式 topic=lidar(点云在 lidar/points)，避免 spawn 模型作用域前缀。 -->
     <gazebo reference="${prefix}velodyne">
       <sensor name="gpu_lidar" type="gpu_lidar">
         <topic>lidar</topic>
         <gz_frame_id>${prefix}velodyne</gz_frame_id>
-        <update_rate>10</update_rate>
+        <update_rate>${lidar_scan_rate_hz}</update_rate>
         <always_on>1</always_on>
         <visualize>true</visualize>
         <lidar>
           <scan>
             <horizontal>
-              <samples>1800</samples>
+              <samples>${lidar_columns_per_scan}</samples>
               <resolution>1</resolution>
-              <min_angle>-3.14159</min_angle>
-              <max_angle>3.14159</max_angle>
+              <min_angle>${lidar_horizontal_start_angle}</min_angle>
+              <max_angle>${lidar_horizontal_end_angle}</max_angle>
             </horizontal>
             <vertical>
-              <samples>16</samples>
+              <samples>${lidar_scan_lines}</samples>
               <resolution>1</resolution>
               <min_angle>-0.261799</min_angle>
               <max_angle>0.261799</max_angle>
             </vertical>
           </scan>
           <range>
-            <min>0.9</min>
-            <max>100.0</max>
+            <min>${lidar_min_range}</min>
+            <max>${lidar_max_range}</max>
             <resolution>0.01</resolution>
           </range>
         </lidar>
       </sensor>
     </gazebo>
 
-    <!-- IMU：Gz 原生 imu，与 velodyne 共位。显式 topic=imu。 -->
+    <!-- IMU：Gz 原生 imu。显式 topic=imu。 -->
     <gazebo reference="${prefix}imu_link">
       <sensor name="imu" type="imu">
         <topic>imu</topic>
         <gz_frame_id>${prefix}imu_link</gz_frame_id>
-        <update_rate>200</update_rate>
+        <update_rate>${imu_rate_hz}</update_rate>
         <always_on>1</always_on>
       </sensor>
     </gazebo>

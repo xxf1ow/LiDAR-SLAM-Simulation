@@ -12,12 +12,26 @@
   <xacro:arg name="wheel_radius" default="0.12"/>
   <xacro:arg name="wheel_width" default="0.06"/>
   <xacro:arg name="wheel_separation" default="0.55"/>
-  <xacro:arg name="sensor_x" default="0.0"/>
-  <xacro:arg name="sensor_y" default="0.0"/>
-  <xacro:arg name="sensor_z" default="0.236"/>
-  <xacro:arg name="sensor_roll" default="0.0"/>
-  <xacro:arg name="sensor_pitch" default="0.0"/>
-  <xacro:arg name="sensor_yaw" default="0.0"/>
+  <xacro:arg name="lidar_x" default="0.0"/>
+  <xacro:arg name="lidar_y" default="0.0"/>
+  <xacro:arg name="lidar_z" default="0.236"/>
+  <xacro:arg name="lidar_roll" default="0.0"/>
+  <xacro:arg name="lidar_pitch" default="0.0"/>
+  <xacro:arg name="lidar_yaw" default="0.0"/>
+  <xacro:arg name="imu_x" default="0.0"/>
+  <xacro:arg name="imu_y" default="0.0"/>
+  <xacro:arg name="imu_z" default="0.236"/>
+  <xacro:arg name="imu_roll" default="0.0"/>
+  <xacro:arg name="imu_pitch" default="0.0"/>
+  <xacro:arg name="imu_yaw" default="0.0"/>
+  <xacro:arg name="lidar_scan_lines" default="16"/>
+  <xacro:arg name="lidar_columns_per_scan" default="1800"/>
+  <xacro:arg name="lidar_scan_rate_hz" default="10"/>
+  <xacro:arg name="lidar_min_range" default="0.9"/>
+  <xacro:arg name="lidar_max_range" default="100.0"/>
+  <xacro:arg name="lidar_horizontal_start_angle" default="-3.14159"/>
+  <xacro:arg name="lidar_horizontal_end_angle" default="3.14159"/>
+  <xacro:arg name="imu_rate_hz" default="200"/>
   <!-- 仅 Gz 模式用：gz_ros2_control 读取的控制器 yaml 绝对路径 -->
   <xacro:arg name="gz_controllers_file" default=""/>
 
@@ -36,6 +50,16 @@
 
   <xacro:if value="$(arg use_gazebo)">
     <xacro:include filename="$(find robot_description)/gazebo/robot.gazebo.xacro"/>
-    <xacro:robot_gazebo prefix="$(arg prefix)" gz_controllers_file="$(arg gz_controllers_file)"/>
+    <xacro:robot_gazebo
+      prefix="$(arg prefix)"
+      gz_controllers_file="$(arg gz_controllers_file)"
+      lidar_scan_lines="$(arg lidar_scan_lines)"
+      lidar_columns_per_scan="$(arg lidar_columns_per_scan)"
+      lidar_scan_rate_hz="$(arg lidar_scan_rate_hz)"
+      lidar_min_range="$(arg lidar_min_range)"
+      lidar_max_range="$(arg lidar_max_range)"
+      lidar_horizontal_start_angle="$(arg lidar_horizontal_start_angle)"
+      lidar_horizontal_end_angle="$(arg lidar_horizontal_end_angle)"
+      imu_rate_hz="$(arg imu_rate_hz)"/>
   </xacro:if>
 </robot>

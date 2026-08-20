@@ -1,37 +1,57 @@
-# core/bringup/system_bringup — 全模块启动 + 启动前一致性闸门
+# core/bringup/system_bringup — Profile 编译 + 全模块启动
 
-把"跨模块魔法值一致性检查"焊成**全模块启动的强制前置闸门**:每次启动先跑检查,不一致即中止、**不拉任何节点**;通过后错峰拉起全栈。
+正式入口先把所选 Profile 编译成一次性 runtime 配置，再执行启动前一致性检查；失败即
+中止且不创建任何节点，通过后按所选 platform/mode 拉起全栈。
 
 ## 设计要点
-- **唯一入口 + 集中配置**:`bringup.launch.py` 读 `config/bringup.yaml` 的 `platform`(sim/real) + `mode`(navigation/mapping) 选底层与模式;可变参数按节点分组(`robot_gz`/`robot_bringup`/`slam_stack.*`)。launch 用 `find_repo_root()` 读**源码** config(不经 install),**改 config 不用 rebuild**。无命令行参数。
-- **闸门**:`consistency_check.run()` 同步先跑,失败 `raise`(launch 直接报错、零节点)。启动所选
-  SLAM 模式前还会检查 FAST-LIO/LIO-SAM 的安装态配置是否存在，缺少 patch 或未重建时直接给出
-  明确错误，不让外部节点带空配置启动。无逃生口。
-- **共享上层** `slam_stack.launch.py`:`mode=navigation` 错峰起 fast_lio→gicp→nav2;`mode=mapping` 起 lio_sam(互斥)。
+- **唯一入口 + 单次编译**：`bringup.launch.py` 从安装位置确定工作区内唯一的源码
+  `config/bringup.yaml`，读取一次并调用一次 `compile_runtime_configs()`。platform、mode、
+  `use_sim_time`、几何和生成配置路径随后全部来自同一 manifest；无命令行覆盖。
+- **共享完整 templates**：sim/real 共用 `config/templates/` 下的 controller、Web UI、Nav2、
+  FAST-LIO、LIO-SAM、GICP 和 sensor gate 原生 YAML；sensor backend 按平台选择 adapter 或
+  Vanjee template。每个平台一次生成八份模块 YAML 到唯一
+  `/tmp/system_bringup-runtime-*` 目录：`robot_controllers.generated.yaml`、
+  `robot_web_ui.generated.yaml`、`nav2.generated.yaml`、`fast_lio.generated.yaml`、
+  `lio_sam.generated.yaml`、`gicp.generated.yaml`、`sensor_gate.generated.yaml`，以及当前平台的
+  `lidar_adapter.generated.yaml` 或 `vanjee_lidar.generated.yaml`。
+  `effective_profile.generated.yaml` 是单独的完成报告。进程内 manifest 保存这些绝对路径；源码和
+  install 均不被改写。
+- **传感器配置单一来源**：sim adapter、real Vanjee 和两平台共享的
+  `sensor_contract_gate` 分别只加载 manifest 指定的一份完整 generated YAML，不叠加 clock、
+  timeout 或旧 backend 配置。主动接口固定为 `/points_raw`、`/imu/data`、`velodyne`、
+  `imu_link` 和点字段 `x/y/z/intensity/ring/time`。
+- **运行时闸门**：`run_runtime_consistency()` 检查 manifest、生成产物、effective report、
+  所选配置和源码/安装态新鲜度，失败即 `raise`（零节点）。精确节点数、参数字典、launch
+  表达式及旧路径不可达等拓扑断言只属于测试；生产启动不解析源码 AST、不维护第二份拓扑。
+- **共享上层** `slam_stack.launch.py`：`mode=navigation` 错峰起
+  fast_lio→gicp→nav2，并永久拥有 `body -> base_footprint` bridge；`mode=mapping` 起
+  lio_sam（互斥）。`robot_navigation` 不拥有该 TF。
 - **唯一控制出口**:完整 bringup 中 Nav2 发 `/cmd_vel_auto`、Web 发 `/cmd_vel_manual`，
   只有 `cmd_vel_gate` 发布 `/cmd_vel`；仿真和真机共用这条控制器入口。
-- **一致性检查**(`consistency_check.py`,纯 Python、本机可跑):几何 G1–G5(footprint / 轮参 / weld / 共位外参 / 限速 ≤ 底盘)、雷达 L1–L4(线数 / 水平 / 频率 / 盲区)。仿真默认仍以 xacro 为源；真机几何唯一源是 `bringup.yaml:real_geometry`。
+- **单时钟**：所有功能状态使用节点自身的 `node.get_clock()`。graph-only `ready_gate` 的
+  墙钟 `discovery_timeout` 只约束必需 topic 是否出现；topic 出现后的 settling 只累计节点
+  时钟；shared sensor gate 的频率、新鲜度、稳定窗口和功能 timeout 也只使用同一节点时钟。
+  仿真暂停、低 RTF 或 `/clock` 冻结时保持等待，时钟恢复后继续。
 
-## 本机自查(无需 ROS/构建)
+## 快速 Python 回归
 ```bash
-pip install pyyaml
-python -m pytest core/bringup/system_bringup/test -q
-# 或仅跑检查:
-cd core/bringup/system_bringup && python -c "from system_bringup import consistency_check as c; import sys; sys.exit(c.main(['--repo-root','../../..']))"
+python3 -m pytest core/bringup/system_bringup/test -q
 ```
 
-## 本机:构建 + 测试 + 运行
+## WSL 构建、测试与运行
 前提:`core/` 在工作区;各下游包可建(robot_gz_bringup/fast_lio/gicp_localization/robot_navigation/lio_sam);先验图在 `~/result/GlobalMap.pcd`、2D 图在 `~/result/factory_map.yaml`(`pcd_to_occupancy` 生成)。
 
 ```bash
 cd core
+source /opt/ros/humble/setup.bash
+source ~/res2_ws/install/setup.bash
 colcon build --packages-select system_bringup
 source install/setup.bash
-colcon test --packages-select system_bringup && colcon test-result --verbose   # 一致性全过
+colcon test --packages-select system_bringup
+colcon test-result --all --verbose
 
-# 全栈启动。切 platform/mode 改 config/bringup.yaml 顶层两行,不用 rebuild。不带任何 arg:=
+# 全栈启动。切 platform/mode 改源码 config/bringup.yaml 顶层两行，不用 rebuild。不带 arg:=
 ros2 launch system_bringup bringup.launch.py
-#   源码根自动检测(从 launch 文件上溯 core/bringup/system_bringup 或 .git),无需配置。
 ```
 
 ## 手机手动控制
@@ -55,14 +75,19 @@ include；完整 bringup 运行时不要直接发布 `/cmd_vel`，因为它必�
 |---|---|---|---|
 | sim | navigation | robot_gz | fast_lio→gicp→nav2 |
 | sim | mapping | robot_gz | lio_sam 建图 |
-| real | navigation | 真实 8030D 底盘 + Vanjee 722 + 真实传感器 gate | FAST-LIO(real) → GICP(real) → Nav2(real) |
-| real | mapping | 真实 8030D 底盘 + Vanjee 722 + 真实传感器 gate | LIO-SAM(real) 建图 |
+| real | navigation | 真实 8030D 底盘 + Vanjee 722 + shared sensor contract gate | FAST-LIO(real) → GICP(real) → Nav2(real) |
+| real | mapping | 真实 8030D 底盘 + Vanjee 722 + shared sensor contract gate | LIO-SAM(real) 建图 |
 
-改 config 顶层 `platform` + `mode` 即切,不用 rebuild `system_bringup`。`use_sim_time` 从 platform 推断(sim=true, real=false)。首次使用新增 launch/YAML 或下游包时，仍须先构建对应包。
+改 config 顶层 `platform` + `mode` 即切，不用 rebuild `system_bringup`。`use_sim_time` 由所选
+Profile 编译一次并写入 manifest 和生成 YAML，后续模块不再自行推断。首次使用新增
+launch/YAML 或下游包时，仍须先构建对应包。
 
 ### 真机几何参数
 
-真机尺寸只维护 `config/bringup.yaml` 的 `real_geometry`。启动 real profile 时会在系统临时目录生成 controller/Nav2 参数，并把同一组派生值传给 URDF 和 `body → base_footprint`；不会修改源码或 install。以后复测尺寸只改这一段。
+真机尺寸只维护 `config/profiles/real.yaml`。启动 real Profile 时会在系统临时目录生成前述
+八份模块 YAML 和单独的 effective report，并把同一 manifest 的几何传给 URDF 和由
+`slam_stack` 发布的 `body → base_footprint` bridge；不会修改源码或 install。以后复测尺寸
+只改该 Profile。
 
 | 参数 | 当前值 | 状态/派生用途 |
 |---|---:|---|
@@ -76,29 +101,42 @@ include；完整 bringup 运行时不要直接发布 `/cmd_vel`，因为它必�
 | 雷达原点(base_footprint) x/y/z | 0.443 / 0 / 0.905 m | 原点暂按底座与半球盖之间中线 |
 | 雷达 roll/pitch/yaw | 0 / 0 / 0 rad | 重新安装后正向、水平 |
 | 雷达原点(base_link) x/y/z | 0.443 / 0 / 0.5735 m | 派生值 |
+| IMU 原点(base_footprint) x/y/z | 0.443 / 0 / 0.905 m | 独立 Profile mount；当前值与雷达相同 |
+| IMU roll/pitch/yaw | 0 / 0 / 0 rad | 独立 Profile mount；当前值与雷达相同 |
+| IMU 原点(base_link) x/y/z | 0.443 / 0 / 0.5735 m | 独立派生值 |
 | body → base_footprint x/y/z | -0.443 / 0 / -0.905 m | 派生值；当前零旋转 |
 
-向厂家核对：WLR-722 机壳内坐标原点、XYZ 正方向/正面定义、雷达与内置 IMU 的精确外参、32 线垂直角表/FOV、整机与安装孔尺寸；底盘厂家还需确认有效滚动半径、轮中心距、驱动轴相对车体前后方向的位置、前后悬长度、减速比及反馈单位。当前暂按驱动轴通过车体几何中心；若厂家图显示不是这样，必须先重定义 `base_footprint` 并复测雷达 x/footprint。当前非零安装角会被一致性闸门明确拒绝，避免用错误的简单取反生成刚体逆变换。
+向厂家核对：WLR-722 机壳内坐标原点、XYZ 正方向/正面定义、雷达与内置 IMU 的精确外参、32 线垂直角表/FOV、整机与安装孔尺寸；底盘厂家还需确认有效滚动半径、轮中心距、驱动轴相对车体前后方向的位置、前后悬长度、减速比及反馈单位。当前暂按驱动轴通过车体几何中心；若厂家图显示不是这样，必须先重定义 `base_footprint` 并复测雷达 x/footprint。非零安装角使用完整 SE(3) 逆变换派生 permanent bridge，不做平移量简单取反。
 
-### 真机传感器 gate
+### Shared sensor contract gate
 
-`platform: real` 时，在真实底盘和 Vanjee 722 启动后，`real_sensor_ready_gate`
-才会放行共享 SLAM 栈。它连续观察 **2 秒**，同时要求：
+sim/real 都使用同一个 `sensor_contract_gate`。sim 在 `/joint_states` discovery 与既有 settling
+完成后启动它；real 在真实底盘和 Vanjee 722 启动后启动它。gate 连续观察 **2 秒**，成功后
+才放行共享 SLAM 栈，并同时要求：
 
-- `/points_raw` 是 `velodyne`、字段严格为 `x/y/z/intensity/ring/time`、组织形状 **32×1200**、频率至少 **8 Hz**；
+- `/points_raw` 是 `velodyne`、字段严格为 `x/y/z/intensity/ring/time`、总点数为当前 Profile
+  的 `scan_lines × columns_per_scan`（sim 28800、real 38400）、频率至少 **8 Hz**；
 - `/imu/data` 是 `imu_link`、频率至少 **150 Hz**；
 - 两个消息的 header stamp 都是 fresh（相对当前 ROS 时钟年龄在 0–0.5 s）。
 
-任一契约、频率或新鲜度不满足都会重置连续观察时间；超时则整个 launch 中止而不启动上层。仿真的 graph-only `ready_gate` 保持原有 `/points_raw + /joint_states + settling` 行为，不受此真机 gate 替代。
+任一契约、频率或新鲜度不满足都会重置连续观察时间；超时则整个 launch 中止而不启动上层。
+仿真的 graph-only `ready_gate` 只等待 `/joint_states`：墙钟 `discovery_timeout` 只处理 topic
+始终未出现，topic 出现后的 settling 和 sensor gate 都只使用各自的节点时钟。因此暂停仿真、
+低 RTF 或 `/clock` 冻结时保持等待，时钟恢复后继续累计。
 
-独立检查真机 gate（正常数据应约 2 秒后以 0 退出；停雷达后的失败路径应非 0）：
+独立检查 gate 时必须为本次运行新建随机 runtime 目录，并加载 compiler 刚生成的完整参数
+文件；不要硬编码目录、跨次复用生成物或用 launch 参数覆盖：
 
 ```bash
-ros2 run system_bringup real_sensor_ready_gate
-echo $?
+cd core
+runtime_dir="$(mktemp -d /tmp/system_bringup-runtime-XXXXXX)"
+trap 'rm -rf -- "$runtime_dir"' EXIT
 
-ros2 run system_bringup real_sensor_ready_gate \
-  --ros-args -p timeout:=5.0
+ros2 run system_bringup compile_runtime_configs \
+  --bringup-config "$PWD/bringup/system_bringup/config/bringup.yaml" \
+  --output-dir "$runtime_dir"
+ros2 run system_bringup sensor_contract_gate \
+  --ros-args --params-file "$runtime_dir/sensor_gate.generated.yaml"
 echo $?
 ```
 
@@ -108,8 +146,8 @@ echo $?
 `mode: mapping` 或 `mode: navigation`，启动 `ros2 launch system_bringup bringup.launch.py`。
 验收后必须恢复仓库默认 `platform: sim`、`mode: navigation`；该切换不需要 rebuild。
 
-建图模式应复验真实底盘、Vanjee、control gate、Web 与 LIO-SAM real 均启动，日志选用
-`params_real.yaml`，`/lio_sam/mapping/odometry` 持续发布，且 `map → base_footprint`
+建图模式应复验真实底盘、Vanjee、control gate、Web 与 LIO-SAM real 均启动，正式参数使用
+`lio_sam.generated.yaml`，`/lio_sam/mapping/odometry` 持续发布，且 `map → base_footprint`
 可查询。这是既有 LIO-SAM 真机集成的静态复验，非重新调参。
 
 车身静止、雷达节点和 `robot_state_publisher` 正常运行时，录约 30 秒回归 bag 到仓库外：
@@ -117,11 +155,11 @@ echo $?
 ```bash
 mkdir -p ~/result/rosbag
 ros2 bag record \
-  -o ~/result/rosbag/vanjee_722_static_2026-07-31 \
+  -o ~/result/rosbag/vanjee_722_static_latest \
   /points_raw /imu/data /tf /tf_static
 
 # 约 30 秒后 Ctrl-C
-ros2 bag info ~/result/rosbag/vanjee_722_static_2026-07-31
+ros2 bag info ~/result/rosbag/vanjee_722_static_latest
 ```
 
 预期约 300 条 `/points_raw`、约 6000 条 `/imu/data`（以 `ros2 bag info` 实际值为准）。
@@ -131,19 +169,37 @@ bag 保留在 `~/result/rosbag/`，不提交 `.db3` 或 metadata；可用 `ros2 
 1. `colcon build` / `colcon test` 全绿;本机 `pytest core/bringup/system_bringup/test` 通过。
 2. `ros2 launch system_bringup bringup.launch.py`(config `platform: sim, mode: navigation`):闸门通过 → 错峰起 robot_gz + fast_lio + gicp + nav2,全链可导航。
 3. 改 config `mode: mapping`(**不用 rebuild**)再起:闸门通过 → robot_gz + lio_sam,可建图存先验图。
-4. **闸门有效性**:临时把 `robot_controllers.yaml` 轮径改 0.10 → `ros2 launch system_bringup bringup.launch.py` 报"一致性闸门未通过 + [G2] wheel_radius ..."且**无任何节点启动**;改回即恢复。
-5. 仿真 weld 保持 `z=-0.556`；真机由 `real_geometry` 派生 `body→base_footprint=[-0.443,0,-0.905]`，`tf2_echo body base_footprint` 应与其一致。
-6. `platform: real` 时 bringup 启动真实 8030D 底盘和 Vanjee 722，经真实传感器 gate 后选择 real SLAM/Nav2 参数。仅源码与纯测试已在本 Windows checkout 验证；真机运行验收须在 Ubuntu/ROS 2 与目标硬件上完成。
+4. **闸门有效性**：`test_runtime_consistency.py` 覆盖 manifest/产物/report 不一致、缺失文件和
+   源码/安装态陈旧等失败路径；正式入口在创建任何节点前中止。拓扑精确断言由
+   `test_control_topology.py` 等静态测试负责，不进入生产闸门。
+5. sim/real 的 `body→base_footprint` bridge 均由本次 selected Profile 派生；
+   `tf2_echo body base_footprint` 必须与本次 `effective_profile.generated.yaml` 中对应的派生变换一致，
+   不以本文档中的某组历史数值作为 PASS 常量。
+6. `platform: real` 时 bringup 启动真实 8030D 底盘和 generated Vanjee 722，经 shared sensor
+   contract gate 后选择
+   real SLAM/Nav2 参数。静态/fake/mock 链已验收；无人看护的真机动态运动未执行。
 
 ## 改参数去哪
-- 启动相关(platform/mode/gui/rviz/world/spawn/先验图路径/settling):**`config/bringup.yaml`** —— 按节点分组(`robot_gz`/`robot_bringup`/`slam_stack.*`),`bringup.launch.py` 读**源码** config,**改它不用 rebuild**。源码根由闸门自动检测。
-- 调参(Nav2 vx_max 等、GICP fitness 等):仍在各自模块 yaml。
-- 真机车体/车轮/雷达安装几何:只改 **`config/bringup.yaml:real_geometry`**；运行时自动生成 controller/Nav2 参数并下发 URDF/TF。
-- 仿真几何:仍改 `robot.urdf.xacro` 默认值及仿真配置；真机改动不会读取或覆盖它。
-- 雷达协议参数(线数/频率/盲区等):改驱动和对应 SLAM profile，`consistency_check` 守住一致性。
+- 启动选择和编排参数（platform/mode/gui/rviz/world/spawn/先验图路径/settling）：
+  **`config/bringup.yaml`**。正式 launch 固定读取工作区源码文件，修改后不用 rebuild。
+- 平台事实（车体/车轮/雷达安装几何、运动上限、传感器和后端选择）：
+  **`config/profiles/sim.yaml`** 或 **`config/profiles/real.yaml`**。
+- controller、Web UI、Nav2、FAST-LIO、LIO-SAM、GICP、sensor gate 及 sensor backend 的完整原生参数：
+  **`config/templates/*.yaml`**。共享模块由 sim/real 共用 template；adapter/Vanjee 按当前
+  backend 选择，Profile 字段只覆盖编译器明确负责的值。
+- 正式 real mapping 使用 manifest 指定的 `lio_sam.generated.yaml`；正式 navigation 使用
+  `fast_lio.generated.yaml`、`gicp.generated.yaml` 和 `nav2.generated.yaml`。安装副本仅证明打包。
+- 雷达设备协议和厂家标定仍归驱动/设备配置；Profile 维护跨模块需要共享的平台事实。
 
-> 为什么 config 不进 `setup.py data_files`(不 install):ament_python 的 launch/config 是 data_files 拷贝到 install、改了要 rebuild。launch 用 `find_repo_root()` 读**源码** config 绕开 install。见 `consistency_check.load_bringup_config`。
+> `bringup.yaml` 与 Profiles 是运行时源码事实，不复制到 install；launch 从已安装 package share
+> 固定映射回同一 colcon 工作区的源码路径，所以改配置不用 rebuild。该 source config tree 是唯一
+> active template source；installed templates 只由 packaging/static acceptance 验证。production
+> runtime gate 的 source/install byte freshness 仅覆盖 ROS 实际加载的 launch/Python runtime 文件。
 
 ## 已知边界
-- 契约类(帧/话题)不入仿真 graph-only gate;真实传感器 gate 对真机接口作独立强制检查。lio-sam `savePCDDirectory` 用 `/result/loam/`(存图以 `save_map` 服务 `destination` 为准,见 mapping 模块 `save_map.sh`)。
-- G3 守住 navigation.launch.py 的几何常量 == xacro,但不解析 weld_z 计算式本身。
+- 契约类（帧/话题/字段）由 sim/real 共用的 `sensor_contract_gate` 强制检查；仿真
+  graph-only gate 只负责 `/joint_states` discovery。lio-sam `savePCDDirectory` 用
+  `/result/loam/`（存图以 `save_map` 服务 `destination` 为准，见 mapping 模块
+  `save_map.sh`）。
+- runtime 闸门只验证实际消费的 manifest 与产物，不复述 launch 拓扑；精确拓扑和表达式结构
+  由测试在源码侧验证。

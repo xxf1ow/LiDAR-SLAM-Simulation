@@ -1,473 +1,329 @@
-"""跨模块一致性:对真实仓库源文件跑(纯解析,无 ROS,本机 pytest 可跑)。"""
-import copy
+"""Cross-module source contracts that do not belong to runtime validation."""
 import os
 from pathlib import Path
+import re
+import subprocess
 
 import pytest
+import yaml
 
 from system_bringup import consistency_check as cc
+from system_bringup import runtime_config_compiler as rcc
 
 
-def _root():
-    return cc.find_repo_root(__file__)
+ROOT = Path(__file__).resolve().parents[4]
+FAST_LIO_PATCH = ROOT / "core/localization/fast-lio2.patch"
+GICP_TEMPLATE = ROOT / "core/bringup/system_bringup/config/templates/gicp.yaml"
+GICP_NODE_SOURCE = ROOT / "core/localization/gicp_localization/src/gicp_localization_node.cpp"
+GICP_ALIGNER_HEADER = ROOT / "core/localization/gicp_localization/include/gicp_localization/gicp_aligner.hpp"
+GICP_NODE_HEADER = ROOT / "core/localization/gicp_localization/include/gicp_localization/gicp_localization_node.hpp"
+VANJEE_TEMPLATE = ROOT / "core/bringup/system_bringup/config/templates/vanjee_lidar.yaml"
+VANJEE_NODE_SOURCE = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/src/vanjee_lidar_node.cpp"
+VANJEE_DRIVER_CONFIG = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/include/vanjee_lidar_ros/driver_config.hpp"
+VANJEE_LAUNCH = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/launch/vanjee_lidar.launch.py"
+VANJEE_CMAKE = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/CMakeLists.txt"
+RETIRED_VANJEE_CONFIG = ROOT / "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/config/vanjee_722.yaml"
 
 
-def _guarded_read(monkeypatch, forbidden):
-    original_read = cc._read
-    seen = []
-
-    def guarded_read(repo_root, relpath):
-        seen.append(relpath)
-        if relpath in forbidden:
-            raise AssertionError("不应读取跨 platform 源: %s" % relpath)
-        return original_read(repo_root, relpath)
-
-    monkeypatch.setattr(cc, "_read", guarded_read)
-    return seen
+def _load_yaml(path):
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _guarded_added_file(monkeypatch, forbidden):
-    original_added_file = cc._patch_added_file
-    seen = []
-
-    def guarded_added_file(text, relative_path):
-        seen.append(relative_path)
-        if relative_path in forbidden:
-            raise AssertionError("不应读取跨 platform patch 目标: %s" % relative_path)
-        return original_added_file(text, relative_path)
-
-    monkeypatch.setattr(cc, "_patch_added_file", guarded_added_file)
-    return seen
+def _patch_file_section(text, relative_path):
+    marker = f"diff --git a/{relative_path} b/{relative_path}"
+    start = text.find(marker)
+    if start < 0:
+        raise ValueError(f"patch missing file: {relative_path}")
+    return text[start:].split("\ndiff --git ", 1)[0]
 
 
-def test_repo_root_found():
-    assert os.path.isdir(os.path.join(_root(), "core", "bringup", "system_bringup"))
+def _calls_named(source, marker):
+    calls = []
+    start = 0
+    while True:
+        index = source.find(marker, start)
+        if index < 0:
+            return calls
+        open_index = source.find("(", index + len(marker))
+        depth = 0
+        for end in range(open_index, len(source)):
+            if source[end] == "(":
+                depth += 1
+            elif source[end] == ")":
+                depth -= 1
+                if depth == 0:
+                    calls.append(source[index:end + 1])
+                    start = end + 1
+                    break
+        else:
+            raise AssertionError(f"unterminated call: {marker}")
 
 
-def test_runtime_config_file_must_exist():
-    existing = Path(__file__)
-
-    assert cc.require_runtime_config_file(existing, "FAST-LIO") == str(existing)
-
-    missing = existing.with_name("missing.yaml")
-    with pytest.raises(RuntimeError, match="FAST-LIO.*missing.yaml.*apply.*rebuild"):
-        cc.require_runtime_config_file(missing, "FAST-LIO")
-
-
-def test_xacro_args_keep_existing_sim_geometry_defaults():
-    defaults = cc._xacro_args(cc._read(_root(), cc.F_ROBOT_XACRO))
-    assert defaults["wheel_radius"] == 0.12
-    assert defaults["wheel_separation"] == 0.55
-    assert defaults["base_width"] == 0.55
-    assert defaults["base_height"] == 0.40
-    assert defaults["sensor_z"] == 0.236
+def _top_level_argument_count(call):
+    inner = call[call.find("(") + 1:-1]
+    depth = 0
+    count = 1
+    for char in inner:
+        if char in "(<[{":
+            depth += 1
+        elif char in ")>]}":
+            depth -= 1
+        elif char == "," and depth == 0:
+            count += 1
+    return count
 
 
-def test_xacro_joint_origin_colocated():
-    macro = cc._read(_root(), cc.F_MACRO)
-    assert cc._xacro_joint_origin_xyz(macro, "velodyne_joint") == \
-        cc._xacro_joint_origin_xyz(macro, "imu_joint")
+def _native_cpp_parameter_type(value):
+    if type(value) is list:
+        assert value and all(type(item) is float for item in value)
+        return "std::vector<double>"
+    return {
+        bool: "bool",
+        int: "int",
+        float: "double",
+        str: "std::string",
+    }[type(value)]
 
 
-def test_fastlio_sim_patch_yaml_reconstructed_by_path():
-    patch = cc._read(_root(), cc.F_FASTLIO_PATCH)
-    params = cc._yaml(
-        cc._patch_added_file(patch, "config/gazebo_velodyne.yaml")
-    )["/**"]["ros__parameters"]
-    assert params["preprocess"] == {
-        "lidar_type": 2,
-        "scan_line": 16,
-        "scan_rate": 10,
-        "timestamp_unit": 2,
-        "blind": 1.0,
+def _template_cpp_parameter_types(path, node_name):
+    parameters = _load_yaml(path)[node_name]["ros__parameters"]
+    return {
+        name: _native_cpp_parameter_type(value)
+        for name, value in parameters.items()
+        if name != "use_sim_time"
     }
 
 
-def test_fastlio_patch_uses_sensor_data_qos_for_imu_subscription():
-    patch = cc._read(_root(), cc.F_FASTLIO_PATCH)
-    section = cc._patch_file_section(patch, "src/laserMapping.cpp")
-    assert (
-        "-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
-        "(imu_topic, 10, imu_cbk);"
-    ) in section
-    assert (
-        "+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
-        "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);"
-    ) in section
+def _cpp_parameter_declarations(source):
+    declarations = []
+    for call in _calls_named(source, "declare_parameter"):
+        match = re.match(
+            r'^declare_parameter<(?P<type>.+)>\s*\(\s*"(?P<name>[^"]+)"',
+            call,
+            flags=re.DOTALL,
+        )
+        assert match is not None, f"untyped parameter declaration: {call}"
+        declarations.append(
+            (
+                match.group("name"),
+                match.group("type"),
+                _top_level_argument_count(call),
+            )
+        )
+    return declarations
 
 
-def test_liosam_sim_patch_values_are_scoped_by_path():
-    patch = cc._read(_root(), cc.F_LIOSAM_PATCH)
-    assert cc._patch_added_value(
-        patch, "config/params.yaml", "N_SCAN"
-    ) == "16"
-    assert cc._patch_added_value(
-        patch, "config/params.yaml", "Horizon_SCAN"
-    ) == "1800"
-    assert cc._patch_added_value(
-        patch, "config/params.yaml", "lidarFrame"
-    ) == "velodyne"
+def _assert_cpp_parameter_contract(source, expected_types):
+    declarations = _cpp_parameter_declarations(source)
+    names = [name for name, _type, _arguments in declarations]
+    assert len(declarations) == len(expected_types), (
+        "declaration count differs"
+    )
+    assert len(names) == len(set(names)), "duplicate parameter declaration"
+    assert set(names) == set(expected_types), "parameter keys differ"
+    actual_types = {
+        name: parameter_type
+        for name, parameter_type, _arguments in declarations
+    }
+    assert actual_types == expected_types, "native declaration types differ"
+    assert all(
+        argument_count == 1
+        for _name, _type, argument_count in declarations
+    ), "parameter declaration has a usable default"
 
 
-def test_patch_added_file_rejects_modified_sim_liosam_params():
-    with pytest.raises(ValueError, match="不是新增文件"):
-        cc._patch_added_file(
-            cc._read(_root(), cc.F_LIOSAM_PATCH),
-            cc.LIOSAM_CONFIG["sim"],
+def _install_directory_sources(source):
+    uncommented = re.sub(r"#.*", "", source)
+    blocks = re.finditer(
+        r"\binstall\s*\(\s*DIRECTORY\b(?P<directories>.*?)\bDESTINATION\b",
+        uncommented,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    return [
+        token.strip("\"'")
+        for block in blocks
+        for token in re.findall(
+            r'"[^"]*"|[^\s()]+', block.group("directories")
+        )
+    ]
+
+
+def _assert_no_config_directory_install(source):
+    directories = _install_directory_sources(source)
+    assert directories, "missing install(DIRECTORY ... DESTINATION ...) block"
+    for directory in directories:
+        path_parts = directory.replace("\\", "/").rstrip("/").split("/")
+        assert "config" not in {part.lower() for part in path_parts}, (
+            f"retired config directory is installed: {directory}"
         )
 
 
-def test_gazebo_lidar_block():
-    gz = cc._gazebo_lidar(cc._read(_root(), cc.F_GAZEBO))
-    assert gz["v_samples"] == 16
-    assert gz["h_samples"] == 1800
-    assert gz["update_rate"] == 10
-    assert gz["range_min"] == 0.9
+def test_repository_fixture_resolves_from_test_location():
+    assert (ROOT / "core/bringup/system_bringup").is_dir()
 
 
-def test_adapter_scan_period():
-    assert cc._adapter_scan_period(cc._read(_root(), cc.F_GZ_LAUNCH)) == 0.1
-
-
-def test_geometry_consistent():
-    fails = cc.check_geometry(_root())
-    assert fails == [], "几何不一致:\n" + "\n".join(fails)
-
-
-def test_lidar_consistent():
-    fails = cc.check_lidar(_root())
-    assert fails == [], "雷达不一致:\n" + "\n".join(fails)
-
-
-def test_sim_lidar_consistent_without_reading_real_profile():
-    assert cc.check_lidar(_root(), "sim") == []
-
-
-def test_sim_lidar_reads_only_sim_sources(monkeypatch):
-    reads = _guarded_read(monkeypatch, {cc.F_NAV_PARAMS_REAL, cc.F_VANJEE_PARAMS})
-    added_files = _guarded_added_file(monkeypatch, {cc.FASTLIO_CONFIG["real"]})
-
-    assert cc.check_lidar(_root(), "sim") == []
-    assert set(reads) == {cc.F_FASTLIO_PATCH, cc.F_LIOSAM_PATCH, cc.F_GAZEBO, cc.F_GZ_LAUNCH}
-    assert added_files == [cc.FASTLIO_CONFIG["sim"]]
-
-
-def test_real_lidar_consistent_without_reading_gazebo_geometry():
-    assert cc.check_lidar(_root(), "real") == []
-
-
-def test_real_lidar_reads_only_real_sources(monkeypatch):
-    reads = _guarded_read(monkeypatch, {cc.F_GAZEBO, cc.F_GZ_LAUNCH, cc.F_NAV_PARAMS})
-    added_files = _guarded_added_file(
-        monkeypatch,
-        {cc.FASTLIO_CONFIG["sim"], cc.LIOSAM_CONFIG["sim"]},
-    )
-
-    assert cc.check_lidar(_root(), "real") == []
-    assert set(reads) == {cc.F_FASTLIO_PATCH, cc.F_LIOSAM_PATCH, cc.F_VANJEE_PARAMS}
-    assert added_files == [cc.FASTLIO_CONFIG["real"], cc.LIOSAM_CONFIG["real"]]
-
-
-def test_sim_geometry_consistent():
-    assert cc.check_geometry(_root(), "sim") == []
-
-
-def test_sim_geometry_reads_only_sim_sources(monkeypatch):
-    reads = _guarded_read(monkeypatch, {cc.F_NAV_PARAMS_REAL, cc.F_VANJEE_PARAMS})
-    added_files = _guarded_added_file(monkeypatch, {cc.FASTLIO_CONFIG["real"]})
-
-    assert cc.check_geometry(_root(), "sim") == []
-    assert set(reads) == {
-        cc.F_MACRO,
-        cc.F_ROBOT_XACRO,
-        cc.F_NAV_PARAMS,
-        cc.F_CONTROLLERS,
-        cc.F_NAV_LAUNCH,
-        cc.F_FASTLIO_PATCH,
-    }
-    assert added_files == [cc.FASTLIO_CONFIG["sim"]]
-
-
-def test_real_geometry_consistent():
-    assert cc.check_geometry(_root(), "real") == []
-
-
-def test_real_geometry_derives_runtime_values_from_bringup_only():
-    values = cc.derive_real_geometry(cc.load_bringup_config(_root()))
-
-    assert values["body"] == {
-        "length": 0.960,
-        "width": 0.610,
-        "height": 0.377,
-        "base_link_height": 0.3315,
-    }
-    assert values["drive_wheel"] == {
-        "radius": 0.1025,
-        "width": 0.101,
-        "separation": 0.463,
-    }
-    assert values["sensor"] == {
-        "x": 0.443,
-        "y": 0.0,
-        "z": 0.5735,
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0,
-    }
-    assert values["body_to_base_footprint"] == {
-        "x": -0.443,
-        "y": 0.0,
-        "z": -0.905,
-        "roll": 0.0,
-        "pitch": 0.0,
-        "yaw": 0.0,
-    }
-    assert values["footprint"] == [
-        [0.480, 0.305],
-        [0.480, -0.305],
-        [-0.480, -0.305],
-        [-0.480, 0.305],
+def test_fast_lio_patch_contains_only_the_imu_qos_source_change():
+    patch = FAST_LIO_PATCH.read_text(encoding="utf-8")
+    headers = [
+        line for line in patch.splitlines() if line.startswith("diff --git ")
+    ]
+    assert headers == [
+        "diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp"
+    ]
+    assert "config/gazebo_velodyne.yaml" not in patch
+    assert "config/vanjee_722.yaml" not in patch
+    section = _patch_file_section(patch, "src/laserMapping.cpp")
+    hunks = [line for line in section.splitlines() if line.startswith("@@ ")]
+    assert hunks == ["@@ -926,7 +926,7 @@ public:"]
+    removed = [
+        line
+        for line in section.splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    added = [
+        line
+        for line in section.splitlines()
+        if line.startswith("+") and not line.startswith("+++")
+    ]
+    assert removed == [
+        "-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
+        "(imu_topic, 10, imu_cbk);"
+    ]
+    assert added == [
+        "+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
+        "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);"
     ]
 
 
-def test_real_geometry_rejects_nonphysical_wheel_dimensions():
-    config = copy.deepcopy(cc.load_bringup_config(_root()))
-    config["real_geometry"]["drive_wheel"]["diameter"] = -0.205
+def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
+    source = tmp_path / "src/laserMapping.cpp"
+    source.parent.mkdir(parents=True)
+    source.write_text(
+        "// pinned-equivalent filler\n" * 925
+        + "        {\n"
+        + "            sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);\n"
+        + "        }\n"
+        + "        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);\n"
+        + "        pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_registered\", 20);\n"
+        + "        pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_registered_body\", 20);\n"
+        + "        pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_effected\", 20);\n",
+        encoding="utf-8",
+    )
 
-    with pytest.raises(ValueError, match="drive_wheel.diameter"):
-        cc.derive_real_geometry(config)
+    result = subprocess.run(
+        [
+            "git",
+            "apply",
+            "--check",
+            "--no-index",
+            "--verbose",
+            str(FAST_LIO_PATCH),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path.parent)},
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
-def test_real_geometry_rejects_wheels_outside_body_width():
-    config = copy.deepcopy(cc.load_bringup_config(_root()))
-    config["real_geometry"]["drive_wheel"]["separation"] = 0.60
-
-    with pytest.raises(ValueError, match="轮子外缘宽度"):
-        cc.derive_real_geometry(config)
+def test_legacy_checker_does_not_parse_generated_adapter_config_from_launch():
+    assert not hasattr(cc, "_adapter_scan_period")
 
 
-@pytest.mark.parametrize(
-    "path,value,expected",
-    [
-        (("body", "length"), 0.0, "body.length"),
-        (("body", "width"), -0.610, "body.width"),
-        (("body", "height"), 0.0, "body.height"),
-        (("body", "ground_clearance"), -0.001, "body.ground_clearance"),
-        (("drive_wheel", "width"), 0.0, "drive_wheel.width"),
-        (("drive_wheel", "separation"), 0.0, "drive_wheel.separation"),
-        (("lidar", "z"), 0.0, "lidar.z"),
-        (("body", "length"), float("nan"), "有限数"),
-        (("lidar", "x"), float("inf"), "有限数"),
-    ],
+def test_retired_legacy_source_interfaces_are_absent():
+    assert not hasattr(cc, "FASTLIO_CONFIG")
+    assert not hasattr(cc, "F_NAV_LAUNCH")
+    assert not hasattr(cc, "_launch_floats")
+
+
+def test_gicp_template_parameters_are_declared_once_without_defaults():
+    expected = _template_cpp_parameter_types(
+        GICP_TEMPLATE, "gicp_localization"
+    )
+    _assert_cpp_parameter_contract(
+        GICP_NODE_SOURCE.read_text(encoding="utf-8"), expected
+    )
+
+
+def test_cpp_parameter_contract_oracle_rejects_wrong_native_type():
+    source = GICP_NODE_SOURCE.read_text(encoding="utf-8")
+    wrong_type = source.replace(
+        'declare_parameter<std::string>("map_frame")',
+        'declare_parameter<bool>("map_frame")',
+        1,
+    )
+    assert wrong_type != source
+    expected = _template_cpp_parameter_types(
+        GICP_TEMPLATE, "gicp_localization"
+    )
+
+    with pytest.raises(AssertionError, match="native declaration types differ"):
+        _assert_cpp_parameter_contract(wrong_type, expected)
+
+
+def test_gicp_source_structs_and_members_have_no_tuning_fallbacks():
+    aligner_header = GICP_ALIGNER_HEADER.read_text(encoding="utf-8")
+    node_header = GICP_NODE_HEADER.read_text(encoding="utf-8")
+
+    for field in (
+        "map_voxel_size",
+        "scan_voxel_size",
+        "max_corr_dist",
+        "num_neighbors",
+        "num_threads",
+        "max_iterations",
+    ):
+        assert f"{field} =" not in aligner_header
+    assert "fitness_threshold_{" not in node_header
+    assert "min_scan_points_{" not in node_header
+
+
+def test_vanjee_template_parameters_are_declared_once_without_defaults():
+    expected = _template_cpp_parameter_types(VANJEE_TEMPLATE, "vanjee_lidar")
+    _assert_cpp_parameter_contract(
+        VANJEE_NODE_SOURCE.read_text(encoding="utf-8"), expected
+    )
+
+
+def test_vanjee_launch_requires_an_explicit_generated_config_file():
+    source = VANJEE_LAUNCH.read_text(encoding="utf-8")
+    calls = _calls_named(source, "DeclareLaunchArgument")
+    config_file_call = next(call for call in calls if '"config_file"' in call)
+
+    assert "default_value" not in config_file_call
+    assert "FindPackageShare" not in source
+    assert "PathJoinSubstitution" not in source
+
+
+def test_vanjee_retired_package_config_is_not_protected_or_installed():
+    assert not RETIRED_VANJEE_CONFIG.exists()
+    assert "vanjee_722.yaml" not in Path(rcc.__file__).read_text(encoding="utf-8")
+    _assert_no_config_directory_install(
+        VANJEE_CMAKE.read_text(encoding="utf-8")
+    )
+
+
+def test_vanjee_retirement_guard_rejects_multiline_multi_directory_config():
+    source = """\
+install(
+  DIRECTORY launch
+            doc
+            config/
+  DESTINATION share/${PROJECT_NAME}
 )
-def test_real_geometry_rejects_invalid_measurements(path, value, expected):
-    config = copy.deepcopy(cc.load_bringup_config(_root()))
-    config["real_geometry"][path[0]][path[1]] = value
+"""
 
-    with pytest.raises(ValueError, match=expected):
-        cc.derive_real_geometry(config)
+    with pytest.raises(AssertionError, match="retired config directory"):
+        _assert_no_config_directory_install(source)
 
 
-def test_real_runtime_configs_are_generated_from_measured_geometry():
-    runtime = cc.build_real_runtime_configs(
-        _root(), cc.load_bringup_config(_root())
+def test_vanjee_driver_config_has_only_empty_or_zero_unconfigured_members():
+    source = VANJEE_DRIVER_CONFIG.read_text(encoding="utf-8")
+
+    assert not re.search(
+        r"\b(?:std::string|uint16_t|float|bool)\s+\w+\s*\{[^}]+\};",
+        source,
     )
-
-    controller = runtime["controllers"]["base_controller"]["ros__parameters"]
-    assert controller["wheel_radius"] == 0.1025
-    assert controller["wheel_separation"] == 0.463
-
-    footprint = "[ [0.480, 0.305], [0.480, -0.305], [-0.480, -0.305], [-0.480, 0.305] ]"
-    nav = runtime["nav2"]
-    assert nav["global_costmap"]["global_costmap"]["ros__parameters"]["footprint"] == footprint
-    assert nav["local_costmap"]["local_costmap"]["ros__parameters"]["footprint"] == footprint
-
-    # 非几何真机调参仍来自原模板，不被生成过程重写。
-    assert nav["local_costmap"]["local_costmap"]["ros__parameters"]["width"] == 6
-    assert controller["publish_rate"] == 50.0
-
-
-def test_real_launch_arguments_are_derived_without_repeating_measurements():
-    geometry = cc.derive_real_geometry(cc.load_bringup_config(_root()))
-    arguments = cc.real_geometry_launch_arguments(geometry)
-
-    assert arguments["robot"] == {
-        "base_length": "0.96",
-        "base_width": "0.61",
-        "base_height": "0.377",
-        "base_link_height": "0.3315",
-        "wheel_radius": "0.1025",
-        "wheel_width": "0.101",
-        "wheel_separation": "0.463",
-        "sensor_x": "0.443",
-        "sensor_y": "0.0",
-        "sensor_z": "0.5735",
-        "sensor_roll": "0.0",
-        "sensor_pitch": "0.0",
-        "sensor_yaw": "0.0",
-    }
-    assert arguments["navigation"] == {
-        "weld_x": "-0.443",
-        "weld_y": "0.0",
-        "weld_z": "-0.905",
-        "weld_roll": "0.0",
-        "weld_pitch": "0.0",
-        "weld_yaw": "0.0",
-    }
-
-
-def test_real_runtime_configs_are_written_outside_the_repository(tmp_path):
-    paths = cc.write_real_runtime_configs(
-        _root(), cc.load_bringup_config(_root()), tmp_path
-    )
-
-    assert set(paths) == {"controllers", "nav2"}
-    assert all(path.parent == tmp_path for path in paths.values())
-    assert cc._yaml(paths["controllers"].read_text(encoding="utf-8"))[
-        "base_controller"
-    ]["ros__parameters"]["wheel_radius"] == 0.1025
-    assert cc._yaml(paths["nav2"].read_text(encoding="utf-8"))[
-        "global_costmap"
-    ]["global_costmap"]["ros__parameters"]["footprint"].startswith(
-        "[ [0.480, 0.305]"
-    )
-
-
-def test_default_runtime_output_uses_a_private_unique_directory(
-    tmp_path, monkeypatch
-):
-    calls = []
-
-    def fake_mkdtemp(prefix):
-        calls.append(prefix)
-        private = tmp_path / "system_bringup-private"
-        private.mkdir()
-        return str(private)
-
-    monkeypatch.setattr(cc.tempfile, "mkdtemp", fake_mkdtemp)
-
-    paths = cc.write_real_runtime_configs(
-        _root(), cc.load_bringup_config(_root())
-    )
-
-    assert calls == ["system_bringup-"]
-    assert {path.parent for path in paths.values()} == {
-        tmp_path / "system_bringup-private"
-    }
-
-
-def test_real_geometry_reads_only_real_sources(monkeypatch):
-    reads = _guarded_read(monkeypatch, {cc.F_GAZEBO, cc.F_GZ_LAUNCH, cc.F_NAV_PARAMS})
-    added_files = _guarded_added_file(monkeypatch, {cc.FASTLIO_CONFIG["sim"]})
-
-    assert cc.check_geometry(_root(), "real") == []
-    assert set(reads) == {
-        cc.F_MACRO,
-        cc.F_NAV_PARAMS_REAL,
-        cc.F_CONTROLLERS,
-        cc.F_FASTLIO_PATCH,
-    }
-    assert added_files == [cc.FASTLIO_CONFIG["real"]]
-
-
-@pytest.mark.parametrize("checker", [cc.check_geometry, cc.check_lidar])
-def test_unknown_platform_fails_explicitly(checker):
-    assert checker(_root(), "unsupported") == ["未知 platform='unsupported'(应为 sim|real)。"]
-
-
-def test_real_lidar_uses_added_files_not_added_values(monkeypatch):
-    added_files = _guarded_added_file(monkeypatch, set())
-    monkeypatch.setattr(
-        cc,
-        "_patch_added_value",
-        lambda *args: pytest.fail("real LIO-SAM 参数必须从新增文件重建"),
-    )
-
-    assert cc.check_lidar(_root(), "real") == []
-    assert added_files == [cc.FASTLIO_CONFIG["real"], cc.LIOSAM_CONFIG["real"]]
-
-
-def test_sim_lidar_uses_added_values_for_modified_liosam_params(monkeypatch):
-    original_added_value = cc._patch_added_value
-    added_values = []
-
-    def guarded_added_value(text, relative_path, key):
-        added_values.append((relative_path, key))
-        return original_added_value(text, relative_path, key)
-
-    monkeypatch.setattr(cc, "_patch_added_value", guarded_added_value)
-    added_files = _guarded_added_file(monkeypatch, {cc.LIOSAM_CONFIG["sim"]})
-
-    assert cc.check_lidar(_root(), "sim") == []
-    assert added_values == [
-        (cc.LIOSAM_CONFIG["sim"], "N_SCAN"),
-        (cc.LIOSAM_CONFIG["sim"], "Horizon_SCAN"),
-    ]
-    assert added_files == [cc.FASTLIO_CONFIG["sim"]]
-
-
-def test_real_lidar_accepts_quoted_numeric_yaml_values(monkeypatch):
-    original_yaml = cc._yaml
-
-    def quoted_numeric_yaml(text):
-        value = original_yaml(text)
-        if "/**" in value:
-            params = value["/**"]["ros__parameters"]
-            if "preprocess" in params:
-                params["preprocess"].update({
-                    "lidar_type": "2",
-                    "scan_line": "32",
-                    "scan_rate": "10",
-                    "timestamp_unit": "0",
-                    "blind": "0.3",
-                })
-            else:
-                params["N_SCAN"] = "32"
-                params["Horizon_SCAN"] = "1200"
-        else:
-            value["vanjee_lidar"]["ros__parameters"]["min_distance"] = "0.05"
-        return value
-
-    monkeypatch.setattr(cc, "_yaml", quoted_numeric_yaml)
-
-    assert cc.check_lidar(_root(), "real") == []
-
-
-def test_real_lidar_reports_quoted_invalid_scan_rate_without_type_error(monkeypatch):
-    original_yaml = cc._yaml
-
-    def quoted_invalid_rate_yaml(text):
-        value = original_yaml(text)
-        if "/**" in value and "preprocess" in value["/**"]["ros__parameters"]:
-            value["/**"]["ros__parameters"]["preprocess"]["scan_rate"] = "11"
-        return value
-
-    monkeypatch.setattr(cc, "_yaml", quoted_invalid_rate_yaml)
-
-    assert cc.check_lidar(_root(), "real") == ["[R3] fast-lio scan_rate=11(应为 10)。"]
-
-
-@pytest.mark.parametrize("platform", ["sim", "real"])
-def test_run_checks_only_selected_platform(monkeypatch, platform):
-    calls = []
-    monkeypatch.setattr(
-        cc,
-        "load_bringup_config",
-        lambda repo_root: {"platform": platform},
-    )
-    monkeypatch.setattr(
-        cc,
-        "check_geometry",
-        lambda repo_root, selected: calls.append(("geometry", selected)) or [],
-    )
-    monkeypatch.setattr(
-        cc,
-        "check_lidar",
-        lambda repo_root, selected: calls.append(("lidar", selected)) or [],
-    )
-    assert cc.run(_root()) == []
-    assert calls == [("geometry", platform), ("lidar", platform)]
-
-
-def test_run_all_consistent():
-    assert cc.run(_root()) == []

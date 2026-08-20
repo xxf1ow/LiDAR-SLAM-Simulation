@@ -20,4 +20,5 @@ drivers/
   `/cmd_vel` 控制器路径，不放在厂商驱动目录。
 - 正式运行时，同一个串口、CAN 或 USB 设备只能有一个进程独占。
 - [Vanjee 722 ROS 2 驱动](lidar_vanjee_722/vanjee_lidar_ros/README.md)
-  向上层提供 `/points_raw` 和 IMU 标准消息契约。
+  向上层提供 `/points_raw` 和 `/imu/data` 标准消息契约。正式运行参数由
+  `system_bringup` 根据所选 Profile 生成，不在驱动目录维护第二份平台事实。

@@ -1,6 +1,4 @@
-# Purpose: 为 FAST-LIO 新增 Gazebo Harmonic 仿真与 Vanjee 722 真实配置，并适配 IMU QoS
-#          (gazebo_velodyne.yaml: 16线仿真; vanjee_722.yaml: 32线真实雷达;
-#           laserMapping.cpp: SensorDataQoS 对齐 Vanjee BEST_EFFORT IMU)
+# Purpose: FAST-LIO 生成配置归 system_bringup 管理；本 patch 仅适配 IMU QoS
 # Base:    FAST_LIO @ a4743b0 (ROS2 branch)
 # Apply:   cd core/localization/FAST_LIO && git apply ../fast-lio2.patch
 # Depends: 需配合 core/localization/livox_ros_driver2 消息桩包方可编译
@@ -8,14 +6,12 @@
 #          避免默认 RELIABLE 订阅与发布端不兼容。
 #          去畸变:lidar_pointcloud_adapter 已给点云补(合成)time,FAST-LIO 自动 given_offset_time=true
 #          并据此去畸变,无需额外补丁。Gz 是瞬时快照云,若旋转拖影,治本在 adapter 发常量 time。
-#          外参 [0,0,0]:新机器人 velodyne 与 imu_link 同位置(robot_macro.urdf.xacro,均挂 base_link
-#          的 xyz="0 0 sensor_z"),雷达-IMU 外参恒等;与 mapping(LIO-SAM)的 extrinsicTrans:[0,0,0] 一致。
 #
 diff --git a/src/laserMapping.cpp b/src/laserMapping.cpp
 index e5d9950..4337f0f 100644
 --- a/src/laserMapping.cpp
 +++ b/src/laserMapping.cpp
-@@ -925,7 +925,7 @@
+@@ -926,7 +926,7 @@ public:
          {
              sub_pcl_pc_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(lid_topic, rclcpp::SensorDataQoS(), standard_pcl_cbk);
          }
@@ -24,107 +20,3 @@ index e5d9950..4337f0f 100644
          pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered", 20);
          pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_registered_body", 20);
          pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/cloud_effected", 20);
-diff --git a/config/gazebo_velodyne.yaml b/config/gazebo_velodyne.yaml
-new file mode 100644
-index 0000000..1111111
---- /dev/null
-+++ b/config/gazebo_velodyne.yaml
-@@ -0,0 +1,46 @@
-+/**:
-+    ros__parameters:
-+        feature_extract_enable: false
-+        point_filter_num: 4
-+        max_iteration: 3
-+        filter_size_surf: 0.5
-+        filter_size_map: 0.5
-+        cube_side_length: 1000.0
-+        runtime_pos_log_enable: false
-+        map_file_path: "./test.pcd"
-+
-+        common:
-+            lid_topic:  "points_raw"
-+            imu_topic:  "/imu_plugin/out"
-+            time_sync_en: false
-+            time_offset_lidar_to_imu: 0.0
-+
-+        preprocess:
-+            lidar_type: 2
-+            scan_line: 16
-+            scan_rate: 10
-+            timestamp_unit: 2
-+            blind: 1.0
-+
-+        mapping:
-+            acc_cov: 0.1
-+            gyr_cov: 0.1
-+            b_acc_cov: 0.0001
-+            b_gyr_cov: 0.0001
-+            fov_degree:    360.0
-+            det_range:     100.0
-+            extrinsic_est_en:  true
-+            extrinsic_T: [ 0.0, 0.0, 0.0 ]
-+            extrinsic_R: [ 1., 0., 0.,
-+                           0., 1., 0.,
-+                           0., 0., 1.]
-+
-+        publish:
-+            path_en:  false
-+            scan_publish_en:  true
-+            dense_publish_en: true
-+            scan_bodyframe_pub_en: true
-+
-+        pcd_save:
-+            pcd_save_en: false
-+            interval: -1
-diff --git a/config/vanjee_722.yaml b/config/vanjee_722.yaml
-new file mode 100644
-index 0000000..2222222
---- /dev/null
-+++ b/config/vanjee_722.yaml
-@@ -0,0 +1,46 @@
-+/**:
-+    ros__parameters:
-+        feature_extract_enable: false
-+        point_filter_num: 4
-+        max_iteration: 3
-+        filter_size_surf: 0.5
-+        filter_size_map: 0.5
-+        cube_side_length: 1000.0
-+        runtime_pos_log_enable: false
-+        map_file_path: "./test.pcd"
-+
-+        common:
-+            lid_topic: "/points_raw"
-+            imu_topic: "/imu/data"
-+            time_sync_en: false
-+            time_offset_lidar_to_imu: 0.0
-+
-+        preprocess:
-+            lidar_type: 2
-+            scan_line: 32
-+            scan_rate: 10
-+            timestamp_unit: 0
-+            blind: 0.3
-+
-+        mapping:
-+            acc_cov: 0.1
-+            gyr_cov: 0.1
-+            b_acc_cov: 0.0001
-+            b_gyr_cov: 0.0001
-+            fov_degree: 360.0
-+            det_range: 100.0
-+            extrinsic_est_en: true
-+            extrinsic_T: [0.0, 0.0, 0.0]
-+            extrinsic_R: [1., 0., 0.,
-+                          0., 1., 0.,
-+                          0., 0., 1.]
-+
-+        publish:
-+            path_en: false
-+            scan_publish_en: true
-+            dense_publish_en: true
-+            scan_bodyframe_pub_en: true
-+
-+        pcd_save:
-+            pcd_save_en: false
-+            interval: -1
