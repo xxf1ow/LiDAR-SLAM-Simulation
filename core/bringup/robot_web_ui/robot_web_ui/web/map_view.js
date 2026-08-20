@@ -7,11 +7,18 @@
     local_costmap: "/api/map/local-costmap",
     path: "/api/navigation-path"
   };
+  const STATIC_PALETTE = {
+    free: [229, 231, 235, 255],
+    unknown: [102, 112, 133, 255],
+    occupied: [217, 79, 79, 255]
+  };
+  const COSTMAP_PALETTE = {
+    free: [0, 0, 0, 0],
+    unknown: [102, 112, 133, 128],
+    inflated: [240, 191, 104, 160],
+    lethal: [217, 79, 79, 200]
+  };
   const PALETTE = {
-    free: "#e5e7eb",
-    unknown: "#667085",
-    inflated: "#f0bf68",
-    lethal: "#d94f4f",
     path: "#4db7d6",
     robot: "#ffffff"
   };
@@ -20,7 +27,7 @@
 
   function gridToWorld(info, column, row) {
     const localX = (column + 0.5) * info.resolution;
-    const localY = (info.height - row - 0.5) * info.resolution;
+    const localY = (row + 0.5) * info.resolution;
     const [originX, originY, yaw] = info.origin;
     const cosine = Math.cos(yaw);
     const sine = Math.sin(yaw);
@@ -40,7 +47,7 @@
     const localY = -dx * sine + dy * cosine;
     return {
       column: Math.floor(localX / info.resolution),
-      row: info.height - 1 - Math.floor(localY / info.resolution)
+      row: Math.floor(localY / info.resolution)
     };
   }
 
@@ -78,16 +85,34 @@
       return rect;
     }
 
-    function color(cell) {
-      if (cell === 255) return PALETTE.unknown;
-      if (cell >= 253) return PALETTE.lethal;
-      if (cell >= 100) return PALETTE.inflated;
-      return PALETTE.free;
+    function cellRgba(name, cell) {
+      if (name === "static") {
+        if (cell === 255) return STATIC_PALETTE.unknown;
+        if (cell >= 100) return STATIC_PALETTE.occupied;
+        return STATIC_PALETTE.free;
+      }
+      if (cell === 255) return COSTMAP_PALETTE.unknown;
+      if (cell >= 99) return COSTMAP_PALETTE.lethal;
+      if (cell >= 1) return COSTMAP_PALETTE.inflated;
+      return COSTMAP_PALETTE.free;
+    }
+
+    function buildGridRaster(name, info, cells) {
+      const raster = document.createElement("canvas");
+      raster.width = info.width;
+      raster.height = info.height;
+      const rasterContext = raster.getContext("2d");
+      const imageData = rasterContext.createImageData(info.width, info.height);
+      for (let index = 0; index < cells.length; index += 1) {
+        imageData.data.set(cellRgba(name, cells[index]), index * 4);
+      }
+      rasterContext.putImageData(imageData, 0, 0);
+      return raster;
     }
 
     function drawGrid(name, info) {
       const layer = cache[name];
-      if (!layer || !info || !layer.cells) return;
+      if (!layer || !info || !layer.raster) return;
       if (name === "local_costmap" && !validLocalAffine(info)) return;
       context.save();
       if (name === "local_costmap") {
@@ -97,13 +122,7 @@
       context.translate(info.origin[0], info.origin[1]);
       context.rotate(info.origin[2]);
       context.scale(info.resolution, info.resolution);
-      for (let row = 0; row < info.height; row += 1) {
-        for (let column = 0; column < info.width; column += 1) {
-          const cell = layer.cells[row * info.width + column];
-          context.fillStyle = color(cell);
-          context.fillRect(column, info.height - row - 1, 1, 1);
-        }
-      }
+      context.drawImage(layer.raster, 0, 0, info.width, info.height);
       context.restore();
     }
 
@@ -135,7 +154,9 @@
       context.rotate(pose.yaw || 0);
       context.fillStyle = PALETTE.robot;
       context.beginPath();
-      context.arc(0, 0, 0.24, 0, Math.PI * 2);
+      context.moveTo(0.32, 0);
+      context.lineTo(-0.2, 0.2);
+      context.lineTo(-0.2, -0.2);
       context.fill();
       context.restore();
     }
@@ -176,10 +197,12 @@
         return;
       }
       if (!response.ok) return;
+      const cells = new Uint8Array(await response.arrayBuffer());
       cache[name] = {
         revision: info.revision,
         etag: info.etag || response.headers.get("ETag"),
-        cells: new Uint8Array(await response.arrayBuffer())
+        cells,
+        raster: name === "path" ? null : buildGridRaster(name, info, cells)
       };
     }
 
