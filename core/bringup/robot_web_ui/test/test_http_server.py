@@ -13,6 +13,7 @@ import pytest
 import robot_web_ui.http_server as http_server
 from robot_web_ui.http_server import ActionUnavailable, create_server
 from robot_web_ui.manual_command import command_values
+from robot_web_ui.map_snapshot import BinarySnapshot
 
 
 SYNTHETIC_MAX_LINEAR_SPEED = 1.7
@@ -34,6 +35,39 @@ class FakeActions:
         self.pending = False
         self.mode = "manual"
         self.motion_status_calls = 0
+        self.asset_read_started = threading.Event()
+        self.allow_asset_read = threading.Event()
+        self.blocked_asset_name = None
+        self.assets = {
+            "static": BinarySnapshot(
+                3,
+                '"static-revision-3"',
+                "application/octet-stream",
+                b"static-map",
+                b"gzip-static-map",
+            ),
+            "global_costmap": BinarySnapshot(
+                5,
+                '"global-costmap-revision-5"',
+                "application/octet-stream",
+                b"global-costmap",
+                b"gzip-global-costmap",
+            ),
+            "local_costmap": BinarySnapshot(
+                7,
+                '"local-costmap-revision-7"',
+                "application/octet-stream",
+                b"local-costmap",
+                b"gzip-local-costmap",
+            ),
+            "path": BinarySnapshot(
+                11,
+                '"path-revision-11"',
+                "application/octet-stream",
+                b"path-points",
+                b"gzip-path-points",
+            ),
+        }
 
     def motion_status(self):
         self.motion_status_calls += 1
@@ -42,6 +76,26 @@ class FakeActions:
             "angular_z": -0.1,
             "feedback_fresh": True,
         }
+
+    def navigation_state(self):
+        return {
+            "map_error": None,
+            "localized": True,
+            "layers": {
+                name: {
+                    "revision": snapshot.revision,
+                    "etag": snapshot.etag,
+                }
+                for name, snapshot in self.assets.items()
+            },
+        }
+
+    def navigation_asset(self, name):
+        if name == self.blocked_asset_name:
+            self.asset_read_started.set()
+            if not self.allow_asset_read.wait(timeout=1.0):
+                raise AssertionError("test did not release blocked asset")
+        return self.assets.get(name)
 
     def manual_command(self, direction, speed_percent):
         command_values(
@@ -107,11 +161,19 @@ def running_server(actions, html_path):
         thread.join(timeout=1.0)
 
 
-def request(base_url, path, body=None, content_type="application/json"):
+def request(
+    base_url,
+    path,
+    body=None,
+    content_type="application/json",
+    headers=None,
+):
     data = None if body is None else body
     req = urllib.request.Request(base_url + path, data=data)
     if body is not None:
         req.add_header("Content-Type", content_type)
+    for name, value in (headers or {}).items():
+        req.add_header(name, value)
     try:
         return urllib.request.urlopen(req)
     except urllib.error.HTTPError as exc:
@@ -143,6 +205,201 @@ def test_root_returns_exact_asset_without_caching(tmp_path):
         assert response.headers["Cache-Control"] == "no-store"
         assert response.read() == html
         assert actions.calls == []
+
+
+def test_navigation_state_returns_small_no_store_json(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        response = request(base_url, "/api/navigation-state")
+        body = response.read()
+
+        assert response.status == 200
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers.get("Content-Encoding") is None
+        assert json.loads(body) == actions.navigation_state()
+        assert b'"data"' not in body
+        assert b"gzip" not in body
+
+
+@pytest.mark.parametrize(
+    ("path", "asset_name"),
+    [
+        ("/api/map/static", "static"),
+        ("/api/map/global-costmap", "global_costmap"),
+        ("/api/map/local-costmap", "local_costmap"),
+        ("/api/navigation-path", "path"),
+    ],
+)
+def test_binary_assets_send_cached_gzip_etag_and_exact_length(
+    tmp_path, path, asset_name
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    snapshot = actions.assets[asset_name]
+
+    with running_server(actions, html_path) as base_url:
+        response = request(base_url, path)
+
+        assert response.status == 200
+        assert response.headers["Content-Type"] == snapshot.media_type
+        assert response.headers["Content-Encoding"] == "gzip"
+        assert response.headers["ETag"] == snapshot.etag
+        assert response.headers["Cache-Control"] == "no-cache"
+        assert response.headers["Content-Length"] == str(
+            len(snapshot.gzip_data)
+        )
+        assert response.read() == snapshot.gzip_data
+
+
+def test_matching_if_none_match_returns_304_without_body(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    snapshot = actions.assets["static"]
+
+    with running_server(actions, html_path) as base_url:
+        response = request(
+            base_url,
+            "/api/map/static",
+            headers={"If-None-Match": snapshot.etag},
+        )
+
+        assert response.status == 304
+        assert response.headers["ETag"] == snapshot.etag
+        assert response.headers["Cache-Control"] == "no-cache"
+        assert response.headers.get("Content-Encoding") is None
+        assert response.headers.get("Content-Length") is None
+        assert response.read() == b""
+
+
+def test_missing_asset_returns_404_without_fabricated_metadata(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    actions.assets.pop("static")
+
+    with running_server(actions, html_path) as base_url:
+        response = request(base_url, "/api/map/static")
+
+        assert response.status == 404
+        assert response_json(response) == {"error": "not found"}
+        assert response.headers.get("ETag") is None
+        assert response.headers.get("Content-Encoding") is None
+
+
+def test_unknown_get_and_existing_post_contracts_are_unchanged(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        get_response = request(base_url, "/missing")
+        post_response = post_json(
+            base_url,
+            "/api/manual-command",
+            {"direction": "forward", "speed_percent": 20},
+        )
+
+        assert get_response.status == 404
+        assert response_json(get_response) == {"error": "not found"}
+        assert post_response.status == 200
+        assert response_json(post_response) == {
+            "ok": True,
+            "mode": "manual",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
+        }
+        assert actions.calls == [("manual_command", "forward", 20)]
+
+
+def test_map_download_does_not_block_manual_post(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    actions.blocked_asset_name = "static"
+    results = {}
+    download_done = threading.Event()
+    manual_done = threading.Event()
+
+    def download(base_url):
+        try:
+            response = request(base_url, "/api/map/static")
+            results["download"] = (response.status, response.read())
+        except BaseException as exc:
+            results["download_error"] = exc
+        finally:
+            download_done.set()
+
+    def manual_post(base_url):
+        try:
+            response = post_json(
+                base_url,
+                "/api/manual-command",
+                {"direction": "forward", "speed_percent": 20},
+            )
+            results["manual"] = (response.status, response_json(response))
+        except BaseException as exc:
+            results["manual_error"] = exc
+        finally:
+            manual_done.set()
+
+    with running_server(actions, html_path) as base_url:
+        download_thread = threading.Thread(target=download, args=(base_url,))
+        manual_thread = threading.Thread(target=manual_post, args=(base_url,))
+        download_thread.start()
+        try:
+            assert actions.asset_read_started.wait(timeout=1.0)
+            manual_thread.start()
+            assert manual_done.wait(timeout=1.0)
+            assert "manual_error" not in results
+            assert results["manual"][0] == 200
+            assert not download_done.is_set()
+        finally:
+            actions.allow_asset_read.set()
+            download_thread.join(timeout=1.0)
+            if manual_thread.is_alive():
+                manual_thread.join(timeout=1.0)
+
+    assert not download_thread.is_alive()
+    assert not manual_thread.is_alive()
+    assert "download_error" not in results
+    assert results["download"] == (200, actions.assets["static"].gzip_data)
+
+
+def test_abandoned_map_download_does_not_disrupt_manual_post(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    actions.blocked_asset_name = "static"
+
+    with running_server(actions, html_path) as base_url:
+        host, port = base_url.removeprefix("http://").split(":")
+        client = socket.create_connection((host, int(port)), timeout=1.0)
+        try:
+            client.sendall(
+                b"GET /api/map/static HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Connection: close\r\n"
+                b"\r\n"
+            )
+            assert actions.asset_read_started.wait(timeout=1.0)
+        finally:
+            client.close()
+
+        actions.allow_asset_read.set()
+        response = post_json(
+            base_url,
+            "/api/manual-command",
+            {"direction": "forward", "speed_percent": 20},
+        )
+
+        assert response.status == 200
+        assert response_json(response)["ok"] is True
 
 
 def test_manual_command_calls_action_once(tmp_path):
@@ -372,7 +629,7 @@ def test_pending_mode_switch_returns_202_with_observed_mode(tmp_path):
         assert actions.motion_status_calls == 1
 
 
-def test_create_server_is_serial_http_server(tmp_path):
+def test_create_server_uses_daemon_threading_http_server(tmp_path):
     html_path = tmp_path / "index.html"
     html_path.write_text("ok")
 
@@ -381,6 +638,7 @@ def test_create_server_is_serial_http_server(tmp_path):
     )
     try:
         assert isinstance(server, HTTPServer)
-        assert not isinstance(server, ThreadingHTTPServer)
+        assert isinstance(server, ThreadingHTTPServer)
+        assert server.daemon_threads is True
     finally:
         server.server_close()
