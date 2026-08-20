@@ -201,15 +201,19 @@ def _run_map_scenario(scenario):
             const secondPath = {revision: 2, etag: '"Q"'};
             responses.push(json(state({layers: {static: first, global_costmap: null, local_costmap: null, path: firstPath}})), bytes([0, 0, 0, 0], '"A"'), pathBytes([[1, 2]], '"P"'));
             await view.poll();
+            assert(canvas.operations.some((operation) => operation[0] === "stroke"));
+            canvas.operations.length = 0;
+            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([], '"B"'), bytes([], '"Q"'));
+            await view.poll();
+            const emptyRevisionOperations = canvas.operations.slice();
+            canvas.operations.length = 0;
             responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([], '"B"'), bytes([], '"Q"'));
             await view.poll();
             assert.strictEqual(offscreenCanvases.length, 1);
-            assert(canvas.operations.some((operation) => operation[0] === "move" && operation[1] === 1 && operation[2] === 2));
-            responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([100, 100, 100, 100], '"B"'), pathBytes([[9, 10]], '"Q"'));
-            await view.poll();
+            assert.strictEqual(emptyRevisionOperations.some((operation) => operation[0] === "stroke"), false);
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "stroke"), false);
             assert.strictEqual(requests.filter((request) => request.path === "/api/map/static").length, 3);
-            assert.strictEqual(requests.filter((request) => request.path === "/api/navigation-path").length, 3);
-            assert(canvas.operations.some((operation) => operation[0] === "move" && operation[1] === 9 && operation[2] === 10));
+            assert.strictEqual(requests.filter((request) => request.path === "/api/navigation-path").length, 2);
             return;
           }
           if (scenario === "not-modified-etag-mismatch") {
@@ -472,7 +476,7 @@ def test_malformed_grid_and_path_lengths_retain_cache_and_retry():
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
-def test_empty_grid_and_path_bodies_retain_cache_and_retry():
+def test_empty_path_clears_route_while_empty_grid_retries():
     _run_map_scenario("empty-assets")
 
 

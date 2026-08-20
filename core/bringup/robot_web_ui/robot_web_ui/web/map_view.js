@@ -221,7 +221,7 @@
       if (!response.ok) return;
       const cells = new Uint8Array(await response.arrayBuffer());
       if (name === "path") {
-        if (cells.byteLength === 0 || cells.byteLength % 8 !== 0) return;
+        if (cells.byteLength % 8 !== 0) return;
       } else if (
         !Number.isInteger(info.width)
         || !Number.isInteger(info.height)
