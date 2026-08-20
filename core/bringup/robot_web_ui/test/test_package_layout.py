@@ -36,7 +36,7 @@ def _template_parameter_types():
     }
 
 
-def test_package_declares_runtime_dependencies():
+def test_package_declares_only_required_map_tf_dependencies():
     tree = ElementTree.parse(ROOT / "package.xml")
     dependencies = {node.text for node in tree.findall(".//exec_depend")}
 
@@ -48,6 +48,7 @@ def test_package_declares_runtime_dependencies():
         "rclpy",
         "std_msgs",
         "std_srvs",
+        "tf2_ros",
     }
 
 
@@ -88,7 +89,7 @@ def test_map_yaml_path_is_the_only_required_runtime_only_parameter():
             ast.literal_eval(call.args[1]),
             ast.unparse(call.args[2]),
         )
-        for call in subscriptions
+        for call in subscriptions[:2]
     ] == [
         ("String", "/cmd_vel_gate/mode", "self._gate_mode_callback"),
         ("Odometry", "/base_controller/odom", "self._odom_callback"),
@@ -102,7 +103,7 @@ def test_map_yaml_path_is_the_only_required_runtime_only_parameter():
         if isinstance(call.func, ast.Name)
         and call.func.id == "QoSProfile"
     ]
-    assert len(qos_profiles) == 1
+    assert len(qos_profiles) == 3
     assert {
         keyword.arg: ast.unparse(keyword.value)
         for keyword in qos_profiles[0].keywords

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import (
@@ -16,8 +17,10 @@ from rclpy.qos import (
     QoSProfile,
     ReliabilityPolicy,
 )
+from rclpy.time import Time
 from std_msgs.msg import String
 from std_srvs.srv import Trigger
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from .http_server import (
     ActionConflict,
@@ -26,7 +29,13 @@ from .http_server import (
     create_server,
 )
 from .manual_command import command_values
-from .map_snapshot import BinarySnapshot, load_nav2_pgm
+from .map_snapshot import (
+    BinarySnapshot,
+    GridInfo,
+    load_nav2_pgm,
+    update_grid_snapshot,
+    update_path_snapshot,
+)
 
 
 ODOM_TIMEOUT = 0.5
@@ -60,6 +69,12 @@ class WebUiNode(Node):
         self._local_costmap = None
         self._path_snapshot = None
         self._localization_pose = None
+        self._localization_error = None
+        self._path_error = None
+        self._local_map_from_source = None
+        self._local_transform_available = None
+        self._local_transform_error = None
+        self._local_layer = (None, None, None, None)
         try:
             self._static_map = load_nav2_pgm(Path(map_yaml_path))
         except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
@@ -88,6 +103,44 @@ class WebUiNode(Node):
             self._odom_callback,
             10,
         )
+        visualization_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        costmap_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self._localization_subscription = self.create_subscription(
+            Odometry,
+            "/localization",
+            self._localization_callback,
+            visualization_qos,
+        )
+        self._plan_subscription = self.create_subscription(
+            NavPath,
+            "/plan",
+            self._plan_callback,
+            visualization_qos,
+        )
+        self._global_costmap_subscription = self.create_subscription(
+            OccupancyGrid,
+            "/global_costmap/costmap",
+            self._global_costmap_callback,
+            costmap_qos,
+        )
+        self._local_costmap_subscription = self.create_subscription(
+            OccupancyGrid,
+            "/local_costmap/costmap",
+            self._local_costmap_callback,
+            costmap_qos,
+        )
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
         self._takeover_client = self.create_client(
             Trigger,
             "/cmd_vel_gate/takeover_manual",
@@ -166,6 +219,125 @@ class WebUiNode(Node):
             self._now_seconds(),
         )
 
+    @staticmethod
+    def _yaw(rotation) -> float:
+        return math.atan2(
+            2.0 * (rotation.w * rotation.z + rotation.x * rotation.y),
+            1.0 - 2.0 * (rotation.y * rotation.y + rotation.z * rotation.z),
+        )
+
+    @staticmethod
+    def _finite(*values: float) -> bool:
+        return all(math.isfinite(value) for value in values)
+
+    def _localization_callback(self, message: Odometry) -> None:
+        try:
+            if message.header.frame_id != "map":
+                raise ValueError("expected map frame")
+            position = message.pose.pose.position
+            yaw = self._yaw(message.pose.pose.orientation)
+            x, y = float(position.x), float(position.y)
+            if not self._finite(x, y, yaw):
+                raise ValueError("expected finite pose")
+        except (AttributeError, TypeError, ValueError):
+            self._localization_error = "expected map pose"
+            return
+        self._localization_pose = (x, y, yaw)
+        self._localization_error = None
+
+    def _grid_fields(self, message: OccupancyGrid) -> tuple[GridInfo, bytes]:
+        width = message.info.width
+        height = message.info.height
+        resolution = float(message.info.resolution)
+        if (
+            isinstance(width, bool)
+            or isinstance(height, bool)
+            or not isinstance(width, int)
+            or not isinstance(height, int)
+            or width <= 0
+            or height <= 0
+            or resolution <= 0
+        ):
+            raise ValueError("invalid grid dimensions")
+        origin = message.info.origin
+        x, y = float(origin.position.x), float(origin.position.y)
+        yaw = self._yaw(origin.orientation)
+        if not self._finite(resolution, x, y, yaw):
+            raise ValueError("invalid grid geometry")
+        frame_id = message.header.frame_id
+        if not isinstance(frame_id, str) or not frame_id:
+            raise ValueError("invalid grid frame")
+        data = []
+        for value in message.data:
+            if value == -1:
+                data.append(255)
+            elif isinstance(value, int) and not isinstance(value, bool) and 0 <= value <= 100:
+                data.append(value)
+            else:
+                raise ValueError("invalid grid value")
+        if len(data) != width * height:
+            raise ValueError("invalid grid data length")
+        return GridInfo(width, height, resolution, x, y, yaw, frame_id), bytes(data)
+
+    def _global_costmap_callback(self, message: OccupancyGrid) -> None:
+        try:
+            info, data = self._grid_fields(message)
+        except (AttributeError, TypeError, ValueError):
+            return
+        self._global_costmap = update_grid_snapshot(
+            self._global_costmap, info, data
+        )
+
+    def _local_costmap_callback(self, message: OccupancyGrid) -> None:
+        try:
+            info, data = self._grid_fields(message)
+            candidate = update_grid_snapshot(self._local_costmap, info, data)
+            transform = self._tf_buffer.lookup_transform(
+                "map", info.frame_id, Time()
+            )
+            translation = transform.transform.translation
+            yaw = self._yaw(transform.transform.rotation)
+            x, y = float(translation.x), float(translation.y)
+            if not self._finite(x, y, yaw):
+                raise ValueError("invalid map transform")
+        except TransformException as exc:
+            self._local_layer = (
+                self._local_costmap,
+                None,
+                False,
+                str(exc),
+            )
+            self._local_transform_available = False
+            self._local_transform_error = str(exc)
+            self._local_map_from_source = None
+            return
+        except (AttributeError, TypeError, ValueError):
+            return
+        self._local_layer = (candidate, (x, y, yaw), True, None)
+        self._local_costmap = candidate
+        self._local_map_from_source = (x, y, yaw)
+        self._local_transform_available = True
+        self._local_transform_error = None
+
+    def _plan_callback(self, message: NavPath) -> None:
+        try:
+            if message.header.frame_id != "map":
+                raise ValueError("expected map frame")
+            points = []
+            for pose_stamped in message.poses:
+                position = pose_stamped.pose.position
+                x, y = float(position.x), float(position.y)
+                if not self._finite(x, y):
+                    raise ValueError("expected finite points")
+                points.append((x, y))
+        except (AttributeError, TypeError, ValueError):
+            self._path_error = "expected map path"
+            return
+        self._path_snapshot = update_path_snapshot(
+            self._path_snapshot, "map", points
+        )
+        self._path_error = None
+
     def motion_status(self) -> dict[str, object]:
         feedback = self._odom_feedback
         if (
@@ -185,26 +357,74 @@ class WebUiNode(Node):
 
     def navigation_state(self) -> dict[str, object]:
         static = self._static_map
+        localization = self._localization_pose
+        global_costmap = self._grid_state(self._global_costmap)
+        (
+            local_snapshot,
+            local_map_from_source,
+            local_transform_available,
+            local_transform_error,
+        ) = self._local_layer
+        local_costmap = self._grid_state(local_snapshot)
+        if local_costmap is None and local_transform_error is not None:
+            local_costmap = {}
+        if local_costmap is not None:
+            local_costmap["map_from_source"] = (
+                None
+                if local_map_from_source is None
+                else list(local_map_from_source)
+            )
+            local_costmap["transform_available"] = local_transform_available
+            local_costmap["transform_error"] = local_transform_error
+        path = self._path_snapshot
         return {
             "map_error": self._map_error,
-            "localized": self._localization_pose is not None,
+            "localized": localization is not None,
+            "localization": None if localization is None else {
+                "frame_id": "map",
+                "x": localization[0],
+                "y": localization[1],
+                "yaw": localization[2],
+            },
+            "localization_error": self._localization_error,
+            "path_error": self._path_error,
+            "gate_mode": self._gate_mode,
+            "motion": self.motion_status(),
             "layers": {
                 "static": None if static is None else {
                     **static.info.as_dict(),
                     "revision": static.binary.revision,
                     "etag": static.binary.etag,
                 },
-                "global_costmap": None,
-                "local_costmap": None,
-                "path": None,
+                "global_costmap": global_costmap,
+                "local_costmap": local_costmap,
+                "path": None if path is None else {
+                    "frame_id": path.frame_id,
+                    "revision": path.binary.revision,
+                    "etag": path.binary.etag,
+                },
             },
+        }
+
+    @staticmethod
+    def _grid_state(snapshot) -> dict[str, object] | None:
+        if snapshot is None:
+            return None
+        return {
+            **snapshot.info.as_dict(),
+            "revision": snapshot.binary.revision,
+            "etag": snapshot.binary.etag,
         }
 
     def navigation_asset(self, name: str) -> BinarySnapshot | None:
         if name == "static":
             return None if self._static_map is None else self._static_map.binary
-        if name in {"global_costmap", "local_costmap", "path"}:
-            return None
+        if name == "global_costmap":
+            return None if self._global_costmap is None else self._global_costmap.binary
+        if name == "local_costmap":
+            return None if self._local_costmap is None else self._local_costmap.binary
+        if name == "path":
+            return None if self._path_snapshot is None else self._path_snapshot.binary
         raise KeyError(name)
 
     def takeover_manual(self) -> str:

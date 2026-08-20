@@ -1,4 +1,5 @@
 import importlib
+import math
 import sys
 import threading
 import types
@@ -6,7 +7,12 @@ import types
 import pytest
 import yaml
 
-from robot_web_ui.map_snapshot import BinarySnapshot, GridInfo, GridSnapshot
+from robot_web_ui.map_snapshot import (
+    BinarySnapshot,
+    GridInfo,
+    GridSnapshot,
+    update_path_snapshot,
+)
 
 
 SYNTHETIC_MAX_LINEAR_SPEED = 1.7
@@ -19,6 +25,7 @@ def node_module(monkeypatch):
         def __init__(self, *_args):
             self.declared_parameters = {}
             self.publishers = []
+            self.subscriptions = []
             self.destroyed = False
 
         def declare_parameter(self, name, _parameter_type):
@@ -38,7 +45,8 @@ def node_module(monkeypatch):
             self.publishers.append(publisher)
             return publisher
 
-        def create_subscription(self, *_args):
+        def create_subscription(self, *args):
+            self.subscriptions.append(args)
             return object()
 
         def create_client(self, *_args):
@@ -83,6 +91,15 @@ def node_module(monkeypatch):
 
     class FakeOdometry:
         def __init__(self):
+            self.header = types.SimpleNamespace(frame_id="")
+            self.pose = types.SimpleNamespace(
+                pose=types.SimpleNamespace(
+                    position=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                    orientation=types.SimpleNamespace(
+                        x=0.0, y=0.0, z=0.0, w=1.0
+                    ),
+                )
+            )
             self.twist = types.SimpleNamespace(
                 twist=types.SimpleNamespace(
                     linear=types.SimpleNamespace(x=0.0),
@@ -95,6 +112,8 @@ def node_module(monkeypatch):
     rclpy_node.Node = FakeNode
     rclpy_parameter = types.ModuleType("rclpy.parameter")
     rclpy_parameter.Parameter = FakeParameter
+    rclpy_time = types.ModuleType("rclpy.time")
+    rclpy_time.Time = lambda: object()
     rclpy_qos = types.ModuleType("rclpy.qos")
     class FakeQoSProfile:
         def __init__(self, **kwargs):
@@ -104,7 +123,7 @@ def node_module(monkeypatch):
     rclpy_qos.HistoryPolicy = types.SimpleNamespace(KEEP_LAST=object())
     rclpy_qos.ReliabilityPolicy = types.SimpleNamespace(RELIABLE=object())
     rclpy_qos.DurabilityPolicy = types.SimpleNamespace(
-        TRANSIENT_LOCAL=object()
+        TRANSIENT_LOCAL=object(), VOLATILE=object()
     )
     ament = types.ModuleType("ament_index_python")
     ament_packages = types.ModuleType("ament_index_python.packages")
@@ -115,17 +134,66 @@ def node_module(monkeypatch):
     nav_msgs = types.ModuleType("nav_msgs")
     nav_msgs_msg = types.ModuleType("nav_msgs.msg")
     nav_msgs_msg.Odometry = FakeOdometry
+    class FakeOccupancyGrid:
+        def __init__(self):
+            self.header = types.SimpleNamespace(frame_id="")
+            self.info = types.SimpleNamespace(
+                width=0,
+                height=0,
+                resolution=0.0,
+                origin=types.SimpleNamespace(
+                    position=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                    orientation=types.SimpleNamespace(
+                        x=0.0, y=0.0, z=0.0, w=1.0
+                    ),
+                ),
+            )
+            self.data = []
+
+    nav_msgs_msg.OccupancyGrid = FakeOccupancyGrid
+
+    class FakePath:
+        def __init__(self):
+            self.header = types.SimpleNamespace(frame_id="")
+            self.poses = []
+
+    nav_msgs_msg.Path = FakePath
     std_srvs = types.ModuleType("std_srvs")
     std_srvs_srv = types.ModuleType("std_srvs.srv")
     std_srvs_srv.Trigger = FakeTrigger
     std_msgs = types.ModuleType("std_msgs")
     std_msgs_msg = types.ModuleType("std_msgs.msg")
     std_msgs_msg.String = FakeString
+    tf2_ros = types.ModuleType("tf2_ros")
+    class FakeTransformException(Exception):
+        pass
+
+    class FakeBuffer:
+        def __init__(self):
+            self.transform = None
+            self.error = None
+            self.lookups = []
+
+        def lookup_transform(self, *args):
+            self.lookups.append(args)
+            if self.error is not None:
+                raise self.error
+            return self.transform
+
+    class FakeTransformListener:
+        def __init__(self, buffer, node):
+            self.buffer = buffer
+            self.node = node
+
+    tf2_ros.Buffer = FakeBuffer
+    tf2_ros.TransformListener = FakeTransformListener
+    tf2_ros.TransformException = FakeTransformException
 
     modules = {
         "rclpy": rclpy,
         "rclpy.node": rclpy_node,
         "rclpy.parameter": rclpy_parameter,
+        "rclpy.time": rclpy_time,
         "rclpy.qos": rclpy_qos,
         "ament_index_python": ament,
         "ament_index_python.packages": ament_packages,
@@ -137,6 +205,7 @@ def node_module(monkeypatch):
         "std_msgs.msg": std_msgs_msg,
         "std_srvs": std_srvs,
         "std_srvs.srv": std_srvs_srv,
+        "tf2_ros": tf2_ros,
     }
     for name, module in modules.items():
         monkeypatch.setitem(sys.modules, name, module)
@@ -157,6 +226,10 @@ def node_module(monkeypatch):
     monkeypatch.setattr(
         module, "create_server", lambda *args, **kwargs: FakeServer()
     )
+    module.Buffer = FakeBuffer
+    module.TransformException = FakeTransformException
+    module.OccupancyGrid = FakeOccupancyGrid
+    module.FakePath = FakePath
     yield module
     sys.modules.pop(module_name, None)
 
@@ -228,6 +301,55 @@ def _static_snapshot():
     return GridSnapshot(info, binary)
 
 
+def occupancy_grid(module, *, frame_id="map", data=(0, 100)):
+    grid = module.OccupancyGrid()
+    grid.header.frame_id = frame_id
+    grid.info.width = 2
+    grid.info.height = 1
+    grid.info.resolution = 0.4
+    grid.info.origin.position.x = -3.0
+    grid.info.origin.position.y = 1.5
+    grid.info.origin.orientation.z = 0.0
+    grid.info.origin.orientation.w = 1.0
+    grid.data = list(data)
+    return grid
+
+
+def map_transform(x=4.0, y=-2.0, yaw=0.5):
+    return types.SimpleNamespace(
+        transform=types.SimpleNamespace(
+            translation=types.SimpleNamespace(x=x, y=y),
+            rotation=types.SimpleNamespace(
+                x=0.0, y=0.0,
+                z=math.sin(yaw / 2.0),
+                w=math.cos(yaw / 2.0),
+            ),
+        )
+    )
+
+
+def navigation_bare_node(module):
+    node = bare_node(module)
+    node._map_error = None
+    node._static_map = None
+    node._global_costmap = None
+    node._local_costmap = None
+    node._path_snapshot = None
+    node._localization_pose = None
+    node._localization_error = None
+    node._path_error = None
+    node._local_transform_available = None
+    node._local_transform_error = None
+    node._local_map_from_source = None
+    node._local_layer = (None, None, None, None)
+    node._gate_mode = "automatic"
+    node._odom_feedback = None
+    node.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(nanoseconds=0)
+    )
+    return node
+
+
 def test_static_map_load_success_exposes_state_and_asset(node_module, monkeypatch):
     snapshot = _static_snapshot()
     monkeypatch.setattr(node_module, "load_nav2_pgm", lambda _path: snapshot)
@@ -237,6 +359,15 @@ def test_static_map_load_success_exposes_state_and_asset(node_module, monkeypatc
     assert node.navigation_state() == {
         "map_error": None,
         "localized": False,
+        "localization": None,
+        "localization_error": None,
+        "path_error": None,
+        "gate_mode": None,
+        "motion": {
+            "linear_x": None,
+            "angular_z": None,
+            "feedback_fresh": False,
+        },
         "layers": {
             "static": {
                 **snapshot.info.as_dict(),
@@ -249,6 +380,202 @@ def test_static_map_load_success_exposes_state_and_asset(node_module, monkeypatc
         },
     }
     assert node.navigation_asset("static") is snapshot.binary
+    node.destroy_node()
+
+
+def test_localization_callback_exposes_map_pose_and_yaw(node_module):
+    node = navigation_bare_node(node_module)
+    rejected = node_module.Odometry()
+    rejected.header.frame_id = "odom"
+
+    node._localization_callback(rejected)
+
+    assert node.navigation_state()["localization"] is None
+    assert node.navigation_state()["localization_error"] == "expected map pose"
+    message = node_module.Odometry()
+    message.header.frame_id = "map"
+    message.pose.pose.position.x = 1.25
+    message.pose.pose.position.y = -2.5
+    message.pose.pose.orientation.z = math.sin(0.7 / 2.0)
+    message.pose.pose.orientation.w = math.cos(0.7 / 2.0)
+
+    node._localization_callback(message)
+
+    state = node.navigation_state()
+    assert state["localized"] is True
+    assert state["localization"] == {
+        "frame_id": "map", "x": 1.25, "y": -2.5, "yaw": pytest.approx(0.7)
+    }
+    assert state["localization_error"] is None
+
+
+def test_global_costmap_callback_revisions_only_on_content_or_metadata_change(
+    node_module,
+):
+    node = navigation_bare_node(node_module)
+    first = occupancy_grid(node_module, data=(-1, 37))
+
+    node._global_costmap_callback(first)
+    equal = node._global_costmap
+    node._global_costmap_callback(occupancy_grid(node_module, data=(-1, 37)))
+    assert node._global_costmap is equal
+    node._global_costmap_callback(occupancy_grid(node_module, data=(-1, 38)))
+    content_changed = node._global_costmap
+    origin_changed = occupancy_grid(node_module, data=(-1, 38))
+    origin_changed.info.origin.position.x += 0.1
+    node._global_costmap_callback(origin_changed)
+
+    assert equal.binary.data == bytes((255, 37))
+    assert node._global_costmap is not equal
+    assert content_changed.binary.revision == equal.binary.revision + 1
+    assert node._global_costmap.binary.revision == content_changed.binary.revision + 1
+
+
+def test_local_costmap_callback_stores_grid_and_separate_map_transform(
+    node_module,
+):
+    node = navigation_bare_node(node_module)
+    node._tf_buffer = node_module.Buffer()
+    node._tf_buffer.transform = map_transform()
+    grid = occupancy_grid(node_module, frame_id="odom", data=(12, 88))
+
+    node._local_costmap_callback(grid)
+
+    state = node.navigation_state()
+    assert node._local_costmap.info.frame_id == "odom"
+    assert node._local_costmap.binary.data == bytes((12, 88))
+    assert state["layers"]["local_costmap"]["map_from_source"] == pytest.approx(
+        [4.0, -2.0, 0.5]
+    )
+    assert state["layers"]["local_costmap"]["transform_available"] is True
+    assert node._tf_buffer.lookups[0][:2] == ("map", "odom")
+
+
+def test_local_costmap_tf_failure_preserves_other_layers_and_reports_unavailable(
+    node_module,
+):
+    node = navigation_bare_node(node_module)
+    node._global_costmap_callback(occupancy_grid(node_module))
+    node._static_map = _static_snapshot()
+    global_before = node._global_costmap
+    static_before = node._static_map
+    node._tf_buffer = node_module.Buffer()
+    node._tf_buffer.transform = map_transform()
+    node._local_costmap_callback(occupancy_grid(node_module, frame_id="odom"))
+    local_before = node._local_costmap
+    node._tf_buffer.error = node_module.TransformException("missing transform")
+
+    node._local_costmap_callback(
+        occupancy_grid(node_module, frame_id="odom", data=(1, 2))
+    )
+
+    assert node._global_costmap is global_before
+    assert node._static_map is static_before
+    assert node._local_costmap is local_before
+    local = node.navigation_state()["layers"]["local_costmap"]
+    assert local["map_from_source"] is None
+    assert local["transform_available"] is False
+    assert local["transform_error"] == "missing transform"
+
+
+def test_plan_callback_encodes_only_xy_and_reuses_equal_revision(node_module):
+    node = navigation_bare_node(node_module)
+    plan = node_module.FakePath()
+    plan.header.frame_id = "map"
+    plan.poses = [
+        types.SimpleNamespace(
+            pose=types.SimpleNamespace(
+                position=types.SimpleNamespace(x=1.0, y=2.0, z=9.0),
+                orientation=types.SimpleNamespace(x=1.0, y=2.0, z=3.0, w=4.0),
+            )
+        )
+    ]
+
+    node._plan_callback(plan)
+    equal = node._path_snapshot
+    plan.poses[0].pose.position.z = -9.0
+    plan.poses[0].pose.orientation.w = -4.0
+    node._plan_callback(plan)
+    assert node._path_snapshot is equal
+    plan.poses[0].pose.position.x = 1.5
+    node._plan_callback(plan)
+
+    assert node._path_snapshot.binary.revision == equal.binary.revision + 1
+    assert equal.binary.data != node._path_snapshot.binary.data
+    plan.header.frame_id = "odom"
+    node._plan_callback(plan)
+    assert node._path_snapshot.binary.revision == equal.binary.revision + 1
+    assert node.navigation_state()["path_error"] == "expected map path"
+
+
+def test_navigation_state_is_a_complete_immutable_projection(node_module):
+    node = navigation_bare_node(node_module)
+    node._static_map = _static_snapshot()
+    node._global_costmap_callback(occupancy_grid(node_module, data=(7, 8)))
+    node._local_costmap = node._global_costmap
+    node._local_transform_available = True
+    node._local_map_from_source = (1.0, 2.0, 0.3)
+    node._local_layer = (
+        node._local_costmap,
+        node._local_map_from_source,
+        node._local_transform_available,
+        node._local_transform_error,
+    )
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(3.0, 4.0)]
+    )
+    node._localization_pose = (5.0, 6.0, 0.7)
+
+    state = node.navigation_state()
+    state["layers"]["static"]["origin"][0] = 99.0
+    state["layers"]["local_costmap"]["map_from_source"][0] = 99.0
+    state["localization"]["x"] = 99.0
+    fresh = node.navigation_state()
+
+    assert set(fresh) == {
+        "map_error", "localized", "localization", "localization_error",
+        "path_error", "gate_mode", "motion", "layers",
+    }
+    assert fresh["motion"] == node.motion_status()
+    assert fresh["layers"]["static"]["origin"][0] == -1.0
+    assert fresh["layers"]["local_costmap"]["map_from_source"][0] == 1.0
+    assert fresh["localization"]["x"] == 5.0
+
+
+def test_local_costmap_state_reads_one_atomic_layer_projection(node_module):
+    node = navigation_bare_node(node_module)
+    node._tf_buffer = node_module.Buffer()
+    node._tf_buffer.transform = map_transform()
+    node._local_costmap_callback(occupancy_grid(node_module, data=(1, 2)))
+    old = node._local_costmap
+    node._local_costmap_callback(occupancy_grid(node_module, data=(3, 4)))
+    new = node._local_costmap
+    node._local_costmap = old
+    node._local_map_from_source = (1.0, 2.0, 0.3)
+    node._local_transform_available = True
+    node._local_transform_error = None
+    node._local_layer = (new, (7.0, 8.0, 0.9), True, None)
+
+    local = node.navigation_state()["layers"]["local_costmap"]
+
+    assert local["revision"] == new.binary.revision
+    assert local["map_from_source"] == [7.0, 8.0, 0.9]
+
+
+def test_node_declares_exact_visualization_subscriptions_and_qos(node_module):
+    node = node_module.WebUiNode()
+    visualization = node.subscriptions[2:]
+
+    assert [(kind.__name__, topic, callback.__name__) for kind, topic, callback, _qos in visualization] == [
+        ("FakeOdometry", "/localization", "_localization_callback"),
+        ("FakePath", "/plan", "_plan_callback"),
+        ("FakeOccupancyGrid", "/global_costmap/costmap", "_global_costmap_callback"),
+        ("FakeOccupancyGrid", "/local_costmap/costmap", "_local_costmap_callback"),
+    ]
+    assert visualization[0][3].settings["reliability"] is node_module.ReliabilityPolicy.RELIABLE
+    assert visualization[0][3].settings["depth"] == 1
+    assert visualization[2][3].settings["durability"] is node_module.DurabilityPolicy.TRANSIENT_LOCAL
+    assert len(node.subscriptions) == 6
     node.destroy_node()
 
 
