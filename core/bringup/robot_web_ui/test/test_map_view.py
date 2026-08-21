@@ -234,11 +234,34 @@ def _run_map_scenario(scenario):
             assert(tipSegment, "direction arrow needs a screen-space tip");
             const transformBeforeRotate = view.getTransform();
             await canvas.emit("pointerdown", {
-              clientX: tipSegment[1], clientY: tipSegment[2]
+              pointerId: 1, clientX: tipSegment[1], clientY: tipSegment[2]
             });
-            await canvas.emit("pointermove", {clientX: 100, clientY: 10});
-            await canvas.emit("pointerup", {clientX: 100, clientY: 10});
+            const yawBeforeForeignPointer = view.getPlacementPreview().yaw;
+            await canvas.emit("pointermove", {
+              pointerId: 2, clientX: 100, clientY: 10
+            });
+            assert.strictEqual(
+              view.getPlacementPreview().yaw,
+              yawBeforeForeignPointer,
+              "a second pointer must not rotate the owned arrow"
+            );
+            await canvas.emit("pointerup", {pointerId: 2});
+            await canvas.emit("pointercancel", {pointerId: 2});
+            await canvas.emit("pointermove", {
+              pointerId: 1, clientX: 100, clientY: 10
+            });
             assert(Math.abs(view.getPlacementPreview().yaw - Math.PI / 2) < 1e-12);
+            await canvas.emit("pointercancel", {pointerId: 2});
+            await canvas.emit("pointermove", {
+              pointerId: 1, clientX: 60, clientY: 50
+            });
+            assert(Math.abs(Math.abs(view.getPlacementPreview().yaw) - Math.PI) < 1e-12);
+            await canvas.emit("pointerup", {pointerId: 1});
+            const releasedYaw = view.getPlacementPreview().yaw;
+            await canvas.emit("pointermove", {
+              pointerId: 1, clientX: 140, clientY: 50
+            });
+            assert.strictEqual(view.getPlacementPreview().yaw, releasedYaw);
             assert.deepStrictEqual(view.getTransform(), transformBeforeRotate);
 
             const yawBeforePan = view.getPlacementPreview().yaw;

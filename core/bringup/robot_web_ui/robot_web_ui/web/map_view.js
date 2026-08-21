@@ -484,7 +484,7 @@
       placement = {
         mode,
         yaw: pose && Number.isFinite(pose.yaw) ? pose.yaw : 0,
-        rotating: false
+        rotatingPointerId: null
       };
       updateNavigationStatus();
       render();
@@ -569,6 +569,10 @@
 
     canvas.addEventListener("pointerdown", (event) => {
       if (placement) {
+        if (
+          placement.rotatingPointerId !== null
+          && event.pointerId !== placement.rotatingPointerId
+        ) return;
         const rect = canvas.getBoundingClientRect();
         const anchor = placementAnchor();
         const tipX = anchor.x + Math.cos(placement.yaw) * PLACEMENT_ARROW_LENGTH;
@@ -576,18 +580,19 @@
         const pointerX = event.clientX - rect.left;
         const pointerY = event.clientY - rect.top;
         if (Math.hypot(pointerX - tipX, pointerY - tipY) <= PLACEMENT_TIP_HIT_RADIUS) {
-          placement.rotating = true;
+          placement.rotatingPointerId = event.pointerId;
           dragging = null;
           canvas.setPointerCapture(event.pointerId);
           return;
         }
-        placement.rotating = false;
+        placement.rotatingPointerId = null;
       }
       dragging = {pointerId: event.pointerId, x: event.clientX, y: event.clientY};
       canvas.setPointerCapture(event.pointerId);
     });
     canvas.addEventListener("pointermove", (event) => {
-      if (placement && placement.rotating) {
+      if (placement && placement.rotatingPointerId !== null) {
+        if (event.pointerId !== placement.rotatingPointerId) return;
         const rect = canvas.getBoundingClientRect();
         const anchor = placementAnchor();
         const pointerX = event.clientX - rect.left;
@@ -605,7 +610,9 @@
     });
     ["pointerup", "pointercancel", "lostpointercapture"].forEach((name) => {
       canvas.addEventListener(name, (event) => {
-        if (placement && placement.rotating) placement.rotating = false;
+        if (placement && event.pointerId === placement.rotatingPointerId) {
+          placement.rotatingPointerId = null;
+        }
         if (dragging && event.pointerId === dragging.pointerId) dragging = null;
       });
     });
