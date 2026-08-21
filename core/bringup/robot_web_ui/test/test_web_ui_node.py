@@ -1292,6 +1292,83 @@ def test_repeated_initial_pose_requests_publish_once_per_call(node_module):
     assert node._initial_pose_publisher.messages[0] is not node._initial_pose_publisher.messages[1]
 
 
+def test_initial_pose_publish_is_atomic_with_navigation_goal_claim(node_module):
+    node = ready_initial_pose_node(node_module)
+    node._localization_pose = (0.0, 0.0, 0.0)
+    publish_started = threading.Event()
+    allow_publish = threading.Event()
+    goal_scheduled = threading.Event()
+    order = []
+    outcomes = []
+    real_publish = node._initial_pose_publisher.publish
+    real_send_goal = node._navigation_client.send_goal_async
+
+    def blocked_publish(message):
+        order.append("publish-started")
+        publish_started.set()
+        assert allow_publish.wait(timeout=1.0)
+        real_publish(message)
+        order.append("published")
+
+    def recorded_send_goal(goal, feedback_callback=None):
+        order.append("goal-scheduled")
+        goal_scheduled.set()
+        return real_send_goal(goal, feedback_callback=feedback_callback)
+
+    node._initial_pose_publisher.publish = blocked_publish
+    node._navigation_client.send_goal_async = recorded_send_goal
+    publish_thread = threading.Thread(
+        target=lambda: node.publish_initial_pose(initial_pose_payload())
+    )
+    goal_thread = threading.Thread(
+        target=lambda: outcomes.append(
+            node.send_navigation_goal(initial_pose_payload())
+        )
+    )
+
+    publish_thread.start()
+    assert publish_started.wait(timeout=1.0)
+    goal_thread.start()
+    scheduled_while_publishing = goal_scheduled.wait(timeout=0.05)
+    allow_publish.set()
+    publish_thread.join(timeout=1.0)
+    goal_thread.join(timeout=1.0)
+
+    assert not publish_thread.is_alive()
+    assert not goal_thread.is_alive()
+    assert not scheduled_while_publishing
+    assert outcomes == ["sending"]
+    assert len(node._initial_pose_publisher.messages) == 1
+    assert order == ["publish-started", "published", "goal-scheduled"]
+
+
+def test_navigation_goal_claim_blocks_initial_pose_publish(node_module):
+    node = ready_initial_pose_node(node_module)
+    node._localization_pose = (0.0, 0.0, 0.0)
+    goal_claimed = threading.Event()
+    allow_send = threading.Event()
+    real_send_goal = node._navigation_client.send_goal_async
+
+    def blocked_send_goal(goal, feedback_callback=None):
+        goal_claimed.set()
+        assert allow_send.wait(timeout=1.0)
+        return real_send_goal(goal, feedback_callback=feedback_callback)
+
+    node._navigation_client.send_goal_async = blocked_send_goal
+    goal_thread = threading.Thread(
+        target=lambda: node.send_navigation_goal(initial_pose_payload())
+    )
+
+    goal_thread.start()
+    assert goal_claimed.wait(timeout=1.0)
+    with pytest.raises(node_module.ActionConflict, match="active"):
+        node.publish_initial_pose(initial_pose_payload())
+    assert node._initial_pose_publisher.messages == []
+    allow_send.set()
+    goal_thread.join(timeout=1.0)
+    assert not goal_thread.is_alive()
+
+
 def test_navigation_projection_is_json_native_and_fresh(node_module):
     node = ready_initial_pose_node(node_module)
 
@@ -1516,6 +1593,19 @@ def test_navigation_goal_response_rejection_or_error_fails(
     assert isinstance(node._goal_message, str)
 
 
+@pytest.mark.parametrize("error", [KeyboardInterrupt(), SystemExit()])
+def test_navigation_goal_response_does_not_swallow_process_control_exceptions(
+    node_module, error
+):
+    node = ready_navigation_node(node_module)
+    node._goal_status = "sending"
+
+    with pytest.raises(type(error)):
+        node._navigation_goal_response_callback(FakeFuture(error=error))
+
+    assert node._goal_status == "sending"
+
+
 def test_navigation_goal_immediate_send_error_fails_without_scheduling(
     node_module,
 ):
@@ -1679,7 +1769,8 @@ def test_late_navigation_callbacks_cannot_reopen_terminal_phase(node_module):
         late_handle, navigation_feedback(1.0)
     )
     node._navigation_cancel_response_callback(
-        FakeFuture(response=cancel_response(node_module, accepted=False))
+        FakeFuture(response=cancel_response(node_module, accepted=False)),
+        late_handle,
     )
     node._navigation_result_callback(
         FakeFuture(
@@ -1694,6 +1785,29 @@ def test_late_navigation_callbacks_cannot_reopen_terminal_phase(node_module):
     assert node._goal_distance is None
     assert node._goal_message is None
     assert late_handle.get_result_calls == 0
+
+
+def test_stale_cancel_response_cannot_modify_a_new_canceling_goal(node_module):
+    node, handle_a = start_navigation(node_module)
+    node.cancel_navigation()
+    handle_a.result_future.set_result(
+        navigation_result(node_module.FakeGoalStatus.STATUS_CANCELED)
+    )
+
+    node._navigation_client.send_future = FakeFuture(complete=False)
+    handle_b = FakeClientGoalHandle()
+    assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+    node._navigation_client.send_future.set_result(handle_b)
+    assert node.cancel_navigation() == "canceling"
+    message_b = node._goal_message
+
+    handle_a.cancel_future.set_result(
+        cancel_response(node_module, accepted=False)
+    )
+
+    assert node._goal_status == "canceling"
+    assert node._goal_handle is handle_b
+    assert node._goal_message is message_b
 
 
 @pytest.mark.parametrize("terminal", ["succeeded", "canceled", "failed"])
@@ -1739,14 +1853,26 @@ def test_navigation_state_copies_locked_goal_facts_and_exact_cancel_availability
     fresh = node.navigation_state()["navigation"]
 
     assert fresh == {
-        "initial_pose_ready": status
-        not in {"sending", "navigating", "canceling"},
+        "initial_pose_ready": True,
         "action_server_ready": True,
         "goal_status": status,
         "cancel_available": cancel_available,
         "distance_remaining": 3.5,
         "message": "working",
     }
+
+
+def test_navigation_state_initial_pose_ready_is_subscriber_only(node_module):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "navigating"
+    node._goal_handle = FakeClientGoalHandle()
+    node._initial_pose_publisher.subscription_count = 1
+
+    state = node.navigation_state()
+
+    assert state["layers"]["static"] is None
+    assert state["navigation"]["goal_status"] == "navigating"
+    assert state["navigation"]["initial_pose_ready"] is True
 
 
 def test_navigation_state_reads_live_action_server_readiness(node_module):
@@ -1775,3 +1901,18 @@ def test_navigation_source_has_no_copied_status_or_extra_goal_mechanisms():
     assert "goal_generation" not in source
     assert "cancel_all_goals" not in source
     assert "wait_for_server" not in source
+
+
+def test_navigation_lifecycle_catches_only_ordinary_exceptions():
+    source = (
+        Path(__file__).parents[1]
+        / "robot_web_ui"
+        / "web_ui_node.py"
+    ).read_text(encoding="utf-8")
+    lifecycle = source[
+        source.index("    def send_navigation_goal"):
+        source.index("    def _now_seconds")
+    ]
+
+    assert "except BaseException" not in lifecycle
+    assert lifecycle.count("except Exception") == 6

@@ -241,11 +241,6 @@ class WebUiNode(Node):
         )
         if self._initial_pose_publisher.get_subscription_count() <= 0:
             raise ActionUnavailable("initial pose subscriber unavailable")
-        with self._goal_lock:
-            goal_status = self._goal_status
-        if goal_status in {"sending", "navigating", "canceling"}:
-            raise ActionConflict("navigation goal is active", self._gate_mode)
-
         message = PoseWithCovarianceStamped()
         message.header.stamp = self.get_clock().now().to_msg()
         message.header.frame_id = "map"
@@ -258,7 +253,10 @@ class WebUiNode(Node):
             yaw_quaternion(pose.yaw)
         )
         message.pose.covariance = [0.0] * 36
-        self._initial_pose_publisher.publish(message)
+        with self._goal_lock:
+            if self._goal_status in {"sending", "navigating", "canceling"}:
+                raise ActionConflict("navigation goal is active", self._gate_mode)
+            self._initial_pose_publisher.publish(message)
 
     def send_navigation_goal(self, payload: dict[str, object]) -> str:
         static = self._static_map
@@ -315,7 +313,7 @@ class WebUiNode(Node):
             future.add_done_callback(
                 self._navigation_goal_response_callback
             )
-        except BaseException as exc:
+        except Exception as exc:
             message = f"navigation send failed: {exc}"
             with self._goal_lock:
                 if self._goal_status == "sending":
@@ -329,7 +327,7 @@ class WebUiNode(Node):
     def _navigation_goal_response_callback(self, future) -> None:
         try:
             goal_handle = future.result()
-        except BaseException as exc:
+        except Exception as exc:
             message = f"navigation goal response failed: {exc}"
             with self._goal_lock:
                 if self._goal_status == "sending":
@@ -359,7 +357,7 @@ class WebUiNode(Node):
             result_future.add_done_callback(
                 self._navigation_result_callback
             )
-        except BaseException as exc:
+        except Exception as exc:
             message = f"navigation result request failed: {exc}"
             with self._goal_lock:
                 if (
@@ -405,7 +403,7 @@ class WebUiNode(Node):
             else:
                 goal_status = "failed"
                 message = f"navigation failed with status {status}"
-        except BaseException as exc:
+        except Exception as exc:
             goal_status = "failed"
             message = f"navigation result failed: {exc}"
 
@@ -433,9 +431,13 @@ class WebUiNode(Node):
         try:
             future = goal_handle.cancel_goal_async()
             future.add_done_callback(
-                self._navigation_cancel_response_callback
+                lambda completed_future, handle=goal_handle:
+                    self._navigation_cancel_response_callback(
+                        completed_future,
+                        handle,
+                    )
             )
-        except BaseException as exc:
+        except Exception as exc:
             message = f"navigation cancel failed: {exc}"
             with self._goal_lock:
                 if (
@@ -447,16 +449,19 @@ class WebUiNode(Node):
             raise ActionUnavailable(message) from exc
         return "canceling"
 
-    def _navigation_cancel_response_callback(self, future) -> None:
+    def _navigation_cancel_response_callback(self, future, goal_handle) -> None:
         try:
             accepted = bool(future.result().goals_canceling)
             message = None if accepted else "navigation cancel rejected"
-        except BaseException as exc:
+        except Exception as exc:
             accepted = False
             message = f"navigation cancel failed: {exc}"
 
         with self._goal_lock:
-            if self._goal_status != "canceling":
+            if (
+                self._goal_status != "canceling"
+                or self._goal_handle is not goal_handle
+            ):
                 return
             if not accepted:
                 self._goal_status = "navigating"
@@ -614,9 +619,7 @@ class WebUiNode(Node):
             goal_distance = self._goal_distance
             goal_message = self._goal_message
         initial_pose_ready = (
-            static is not None
-            and self._initial_pose_publisher.get_subscription_count() > 0
-            and goal_status not in {"sending", "navigating", "canceling"}
+            self._initial_pose_publisher.get_subscription_count() > 0
         )
         localization = self._localization_pose
         global_costmap = self._grid_state(self._global_costmap)
