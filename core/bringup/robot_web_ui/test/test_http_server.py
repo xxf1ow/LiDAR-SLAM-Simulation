@@ -778,6 +778,38 @@ def test_navigation_action_errors_use_the_existing_http_status_mapping(
         assert actions.calls == []
 
 
+def test_navigation_conflict_preserves_existing_motion_status_response(
+    tmp_path, monkeypatch
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    def fail(*_args):
+        raise http_server.ActionConflict(
+            "navigation goal is active",
+            "automatic",
+        )
+
+    monkeypatch.setattr(actions, "send_navigation_goal", fail)
+
+    with running_server(actions, html_path) as base_url:
+        response = post_json(
+            base_url,
+            "/api/navigation-goal",
+            navigation_pose_payload(),
+        )
+
+        assert response.status == 409
+        assert response.read() == (
+            b'{"error":"navigation goal is active","mode":"automatic",'
+            b'"linear_x":0.25,"angular_z":-0.1,'
+            b'"feedback_fresh":true}'
+        )
+        assert actions.motion_status_calls == 1
+        assert actions.calls == []
+
+
 @pytest.mark.parametrize(
     ("path", "payload", "action_name", "expected_status"),
     [
@@ -860,12 +892,28 @@ def test_abandoned_navigation_response_does_not_disrupt_later_post(
     html_path = tmp_path / "index.html"
     html_path.write_text("ok")
     actions = FakeActions()
+    response_write_reached = threading.Event()
+    allow_response_write = threading.Event()
     response_handled = threading.Event()
     original_handler_for = http_server._handler_for
 
     def handler_for(*args):
         handler = original_handler_for(*args)
         original_do_post = handler.do_POST
+        original_send_bytes = handler._send_bytes
+
+        def send_bytes(request_handler, status, content_type, body, **kwargs):
+            if status == 202 and body == b'{"goal_status":"sending"}':
+                response_write_reached.set()
+                if not allow_response_write.wait(timeout=1.0):
+                    raise AssertionError("test did not release response write")
+            return original_send_bytes(
+                request_handler,
+                status,
+                content_type,
+                body,
+                **kwargs,
+            )
 
         def do_POST(request_handler):
             try:
@@ -873,6 +921,7 @@ def test_abandoned_navigation_response_does_not_disrupt_later_post(
             finally:
                 response_handled.set()
 
+        handler._send_bytes = send_bytes
         handler.do_POST = do_POST
         return handler
 
@@ -891,6 +940,7 @@ def test_abandoned_navigation_response_does_not_disrupt_later_post(
                 + b"Connection: close\r\n\r\n"
                 + payload
             )
+            assert response_write_reached.wait(timeout=1.0)
         finally:
             client.setsockopt(
                 socket.SOL_SOCKET,
@@ -898,6 +948,7 @@ def test_abandoned_navigation_response_does_not_disrupt_later_post(
                 struct.pack("ii", 1, 0),
             )
             client.close()
+            allow_response_write.set()
 
         assert response_handled.wait(timeout=1.0)
         response = post_json(
