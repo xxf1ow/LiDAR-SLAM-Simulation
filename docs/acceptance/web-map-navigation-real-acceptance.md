@@ -2,7 +2,7 @@
 
 目标：只验证 Web-B 与 GICP readiness 合并后的真实链路，不重复算法调参或完整 GICP 验收。
 
-获准的组合代码基线：`4814a85b5fadcb70b9353f8589196279812a04ef`。
+获准的组合代码基线：`5361c6f5f20782a97574aa19a93874befca12878`。
 验收手册可以是该提交之后的 docs-only 提交，但 `core/` 不得再有差异；报告必须记录实际 HEAD。
 
 ## 1. 前置与安全
@@ -15,8 +15,8 @@
 ```bash
 cd /home/lxx/workspace/xxsim
 git merge-base --is-ancestor \
-  4814a85b5fadcb70b9353f8589196279812a04ef HEAD
-git diff --quiet 4814a85b5fadcb70b9353f8589196279812a04ef..HEAD -- core
+  5361c6f5f20782a97574aa19a93874befca12878 HEAD
+git diff --quiet 5361c6f5f20782a97574aa19a93874befca12878..HEAD -- core
 test "$(git worktree list --porcelain | grep -c '^worktree ')" = 1
 test -z "$(git status --porcelain --untracked-files=no)"
 test -r "$HOME/result/GlobalMap.pcd"
