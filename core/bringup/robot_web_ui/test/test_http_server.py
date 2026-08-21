@@ -15,6 +15,7 @@ import robot_web_ui.http_server as http_server
 from robot_web_ui.http_server import ActionUnavailable, create_server
 from robot_web_ui.manual_command import command_values
 from robot_web_ui.map_snapshot import BinarySnapshot
+from robot_web_ui.navigation_request import MapRevisionConflict
 
 
 SYNTHETIC_MAX_LINEAR_SPEED = 1.7
@@ -39,6 +40,9 @@ class FakeActions:
         self.asset_read_started = threading.Event()
         self.allow_asset_read = threading.Event()
         self.blocked_asset_name = None
+        self.navigation_action_started = threading.Event()
+        self.allow_navigation_action = threading.Event()
+        self.blocked_navigation_action = None
         self.navigation_state_override = None
         self.assets = {
             "static": BinarySnapshot(
@@ -142,6 +146,25 @@ class FakeActions:
         self.mode = "automatic"
         return self.mode
 
+    def publish_initial_pose(self, payload):
+        self.calls.append(("publish_initial_pose", payload))
+
+    def send_navigation_goal(self, payload):
+        self.calls.append(("send_navigation_goal", payload))
+        if self.blocked_navigation_action == "send_navigation_goal":
+            self.navigation_action_started.set()
+            if not self.allow_navigation_action.wait(timeout=1.0):
+                raise AssertionError("test did not release blocked navigation")
+        return "sending"
+
+    def cancel_navigation(self):
+        self.calls.append(("cancel_navigation",))
+        if self.blocked_navigation_action == "cancel_navigation":
+            self.navigation_action_started.set()
+            if not self.allow_navigation_action.wait(timeout=1.0):
+                raise AssertionError("test did not release blocked navigation")
+        return "canceling"
+
 
 def test_odometry_freshness_uses_only_the_ros_node_clock():
     source = WEB_UI_NODE_PATH.read_text(encoding="utf-8")
@@ -194,6 +217,15 @@ def post_json(base_url, path, payload):
 
 def response_json(response):
     return json.loads(response.read())
+
+
+def navigation_pose_payload():
+    return {
+        "x": 1.25,
+        "y": -0.75,
+        "yaw": 0.5,
+        "map_revision": 3,
+    }
 
 
 def test_root_returns_exact_asset_without_caching(tmp_path):
@@ -369,13 +401,17 @@ def test_unknown_get_and_existing_post_contracts_are_unchanged(tmp_path):
         assert get_response.status == 404
         assert response_json(get_response) == {"error": "not found"}
         assert post_response.status == 200
-        assert response_json(post_response) == {
+        expected_body = {
             "ok": True,
             "mode": "manual",
             "linear_x": 0.25,
             "angular_z": -0.1,
             "feedback_fresh": True,
         }
+        assert post_response.read() == json.dumps(
+            expected_body,
+            separators=(",", ":"),
+        ).encode()
         assert actions.calls == [("manual_command", "forward", 20)]
 
 
@@ -554,7 +590,7 @@ def test_mode_endpoints_call_corresponding_action_once(
         response = post_json(base_url, path, {})
 
         assert response.status == 200
-        assert response_json(response) == {
+        expected_body = {
             "ok": True,
             "mode": (
                 "manual"
@@ -565,6 +601,10 @@ def test_mode_endpoints_call_corresponding_action_once(
             "angular_z": -0.1,
             "feedback_fresh": True,
         }
+        assert response.read() == json.dumps(
+            expected_body,
+            separators=(",", ":"),
+        ).encode()
         assert actions.calls == [expected_call]
         assert actions.motion_status_calls == 1
 
@@ -607,6 +647,278 @@ def test_unknown_routes_return_404_without_actions(tmp_path):
         assert get_response.status == 404
         assert post_response.status == 404
         assert actions.calls == []
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "expected_status", "expected_body", "call"),
+    [
+        (
+            "/api/initial-pose",
+            navigation_pose_payload(),
+            200,
+            b'{"ok":true}',
+            ("publish_initial_pose", navigation_pose_payload()),
+        ),
+        (
+            "/api/navigation-goal",
+            navigation_pose_payload(),
+            202,
+            b'{"goal_status":"sending"}',
+            ("send_navigation_goal", navigation_pose_payload()),
+        ),
+        (
+            "/api/navigation-cancel",
+            {},
+            202,
+            b"{}",
+            ("cancel_navigation",),
+        ),
+    ],
+)
+def test_navigation_routes_dispatch_once_with_exact_responses(
+    tmp_path, path, payload, expected_status, expected_body, call
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        response = post_json(base_url, path, payload)
+
+        assert response.status == expected_status
+        assert response.read() == expected_body
+        assert actions.calls == [call]
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "action_name"),
+    [
+        ("/api/initial-pose", b"{", None),
+        ("/api/navigation-goal", b'{"x":1}', "send_navigation_goal"),
+        ("/api/navigation-cancel", b'{"unexpected":true}', None),
+    ],
+)
+def test_bad_navigation_requests_return_400_without_actions(
+    tmp_path, monkeypatch, path, body, action_name
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    if action_name is not None:
+        def fail(*_args):
+            raise ValueError("invalid pose")
+
+        monkeypatch.setattr(actions, action_name, fail)
+
+    with running_server(actions, html_path) as base_url:
+        response = request(base_url, path, body)
+
+        assert response.status == 400
+        assert "error" in response_json(response)
+        assert actions.calls == []
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "action_name", "error", "expected_status"),
+    [
+        (
+            "/api/initial-pose",
+            navigation_pose_payload(),
+            "publish_initial_pose",
+            ValueError("invalid pose"),
+            400,
+        ),
+        (
+            "/api/navigation-goal",
+            navigation_pose_payload(),
+            "send_navigation_goal",
+            MapRevisionConflict("map revision changed"),
+            409,
+        ),
+        (
+            "/api/navigation-goal",
+            navigation_pose_payload(),
+            "send_navigation_goal",
+            http_server.ActionConflict("navigation goal is active", "automatic"),
+            409,
+        ),
+        (
+            "/api/navigation-cancel",
+            {},
+            "cancel_navigation",
+            ActionUnavailable("navigation action unavailable"),
+            503,
+        ),
+    ],
+)
+def test_navigation_action_errors_use_the_existing_http_status_mapping(
+    tmp_path,
+    monkeypatch,
+    path,
+    payload,
+    action_name,
+    error,
+    expected_status,
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    def fail(*_args):
+        raise error
+
+    monkeypatch.setattr(actions, action_name, fail)
+
+    with running_server(actions, html_path) as base_url:
+        response = post_json(base_url, path, payload)
+
+        assert response.status == expected_status
+        assert response_json(response)["error"] == str(error)
+        assert actions.calls == []
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "action_name", "expected_status"),
+    [
+        (
+            "/api/navigation-goal",
+            navigation_pose_payload(),
+            "send_navigation_goal",
+            202,
+        ),
+        (
+            "/api/navigation-cancel",
+            {},
+            "cancel_navigation",
+            202,
+        ),
+    ],
+)
+def test_blocked_navigation_request_does_not_block_manual_post(
+    tmp_path, path, payload, action_name, expected_status
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    actions.blocked_navigation_action = action_name
+    results = {}
+    navigation_done = threading.Event()
+    manual_done = threading.Event()
+
+    def navigation_post(base_url):
+        try:
+            response = post_json(base_url, path, payload)
+            results["navigation"] = (response.status, response.read())
+        except BaseException as exc:
+            results["navigation_error"] = exc
+        finally:
+            navigation_done.set()
+
+    def manual_post(base_url):
+        try:
+            response = post_json(
+                base_url,
+                "/api/manual-command",
+                {"direction": "forward", "speed_percent": 20},
+            )
+            results["manual"] = (response.status, response_json(response))
+        except BaseException as exc:
+            results["manual_error"] = exc
+        finally:
+            manual_done.set()
+
+    with running_server(actions, html_path) as base_url:
+        navigation_thread = threading.Thread(
+            target=navigation_post,
+            args=(base_url,),
+        )
+        manual_thread = threading.Thread(target=manual_post, args=(base_url,))
+        navigation_thread.start()
+        try:
+            assert actions.navigation_action_started.wait(timeout=1.0)
+            manual_thread.start()
+            assert manual_done.wait(timeout=1.0)
+            assert "manual_error" not in results
+            assert results["manual"][0] == 200
+            assert not navigation_done.is_set()
+        finally:
+            actions.allow_navigation_action.set()
+            navigation_thread.join(timeout=1.0)
+            if manual_thread.is_alive():
+                manual_thread.join(timeout=1.0)
+
+    assert not navigation_thread.is_alive()
+    assert not manual_thread.is_alive()
+    assert "navigation_error" not in results
+    assert results["navigation"][0] == expected_status
+
+
+def test_abandoned_navigation_response_does_not_disrupt_later_post(
+    tmp_path, monkeypatch
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    response_handled = threading.Event()
+    original_handler_for = http_server._handler_for
+
+    def handler_for(*args):
+        handler = original_handler_for(*args)
+        original_do_post = handler.do_POST
+
+        def do_POST(request_handler):
+            try:
+                original_do_post(request_handler)
+            finally:
+                response_handled.set()
+
+        handler.do_POST = do_POST
+        return handler
+
+    monkeypatch.setattr(http_server, "_handler_for", handler_for)
+    payload = json.dumps(navigation_pose_payload()).encode("utf-8")
+
+    with running_server(actions, html_path) as base_url:
+        host, port = base_url.removeprefix("http://").split(":")
+        client = socket.create_connection((host, int(port)), timeout=1.0)
+        try:
+            client.sendall(
+                b"POST /api/navigation-goal HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Content-Type: application/json\r\n"
+                + f"Content-Length: {len(payload)}\r\n".encode()
+                + b"Connection: close\r\n\r\n"
+                + payload
+            )
+        finally:
+            client.setsockopt(
+                socket.SOL_SOCKET,
+                socket.SO_LINGER,
+                struct.pack("ii", 1, 0),
+            )
+            client.close()
+
+        assert response_handled.wait(timeout=1.0)
+        response = post_json(
+            base_url,
+            "/api/manual-command",
+            {"direction": "forward", "speed_percent": 20},
+        )
+
+        assert response.status == 200
+        assert response_json(response)["ok"] is True
+        assert actions.calls == [
+            ("send_navigation_goal", navigation_pose_payload()),
+            ("manual_command", "forward", 20),
+        ]
+
+
+def test_request_handler_never_waits_for_navigation_completion():
+    source = Path(http_server.__file__).read_text(encoding="utf-8")
+
+    assert ".result(" not in source
+    assert ".wait(" not in source
 
 
 def test_non_json_content_type_is_rejected_without_actions(tmp_path):

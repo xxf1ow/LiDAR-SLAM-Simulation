@@ -6,6 +6,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .navigation_request import MapRevisionConflict
+
 
 REQUEST_TIMEOUT = 0.5
 ASSET_PATHS = {
@@ -175,6 +177,9 @@ def _handler_for(actions, html_path: Path):
                 "/api/manual-command",
                 "/api/takeover-manual",
                 "/api/resume-automatic",
+                "/api/initial-pose",
+                "/api/navigation-goal",
+                "/api/navigation-cancel",
             }:
                 self._send_json(404, {"error": "not found"})
                 return
@@ -188,8 +193,28 @@ def _handler_for(actions, html_path: Path):
                     )
                 elif path == "/api/takeover-manual":
                     mode = actions.takeover_manual()
-                else:
+                elif path == "/api/resume-automatic":
                     mode = actions.resume_automatic()
+                elif path == "/api/initial-pose":
+                    actions.publish_initial_pose(payload)
+                    self._send_json(200, {"ok": True})
+                    return
+                elif path == "/api/navigation-goal":
+                    goal_status = actions.send_navigation_goal(payload)
+                    self._send_json(
+                        202,
+                        {"goal_status": goal_status},
+                    )
+                    return
+                else:
+                    if payload != {}:
+                        raise ValueError("navigation cancel request must be {}")
+                    actions.cancel_navigation()
+                    self._send_json(202, {})
+                    return
+            except MapRevisionConflict as exc:
+                self._send_json(409, {"error": str(exc)})
+                return
             except ValueError as exc:
                 self._send_json(400, {"error": str(exc)})
                 return
