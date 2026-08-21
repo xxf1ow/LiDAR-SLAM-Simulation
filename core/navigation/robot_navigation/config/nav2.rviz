@@ -43,6 +43,12 @@ Visualization Manager:
       Topic:
         Value: /plan
     - Class: rviz_default_plugins/PointCloud2
+      Name: GicpPriorMap
+      Enabled: true
+      Topic:
+        Value: /gicp_localization/prior_map
+        Durability Policy: Transient Local
+    - Class: rviz_default_plugins/PointCloud2
       Name: CloudRegistered
       Enabled: true
       Topic:

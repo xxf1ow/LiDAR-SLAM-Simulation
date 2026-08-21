@@ -281,6 +281,37 @@ def test_gicp_source_structs_and_members_have_no_tuning_fallbacks():
     assert "min_scan_points_{" not in node_header
 
 
+def test_gicp_advertises_localization_only_after_first_accepted_alignment():
+    source = GICP_NODE_SOURCE.read_text(encoding="utf-8")
+    header = GICP_NODE_HEADER.read_text(encoding="utf-8")
+
+    assert "has_accepted_alignment_" not in header
+    constructor = source.split("void GicpLocalizationNode::cloudCb", 1)[0]
+    assert 'create_publisher<nav_msgs::msg::Odometry>("/localization"' not in constructor
+    assert re.search(
+        r"if \(ok\) \{\s*"
+        r"T_map_odom_ = out\.T_map_odom;\s*"
+        r"if \(!loc_pub_\) \{\s*"
+        r"loc_pub_ = create_publisher<nav_msgs::msg::Odometry>\(\s*"
+        r'"/localization", rclcpp::QoS\(50\)\);',
+        source,
+    )
+
+    tf_callback = source.split("void GicpLocalizationNode::tfTimerCb()", 1)[1]
+    assert "decltype(loc_pub_) localization_publisher;" in tf_callback
+    assert "localization_publisher = loc_pub_;" in tf_callback
+    assert tf_callback.index("tf_broadcaster_->sendTransform(tf);") < (
+        tf_callback.index("if (odom && localization_publisher)")
+    )
+    assert re.search(
+        r"if \(odom && localization_publisher\) \{.*"
+        r"localization_publisher->publish\(o\);",
+        tf_callback,
+        re.DOTALL,
+    )
+    assert source.count("localization_publisher->publish(o);") == 1
+
+
 def test_vanjee_template_parameters_are_declared_once_without_defaults():
     expected = _template_cpp_parameter_types(VANJEE_TEMPLATE, "vanjee_lidar")
     _assert_cpp_parameter_contract(

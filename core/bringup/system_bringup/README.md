@@ -24,8 +24,9 @@
   所选配置和源码/安装态新鲜度，失败即 `raise`（零节点）。精确节点数、参数字典、launch
   表达式及旧路径不可达等拓扑断言只属于测试；生产启动不解析源码 AST、不维护第二份拓扑。
 - **共享上层** `slam_stack.launch.py`：`mode=navigation` 错峰起
-  fast_lio→gicp→nav2，并永久拥有 `body -> base_footprint` bridge；`mode=mapping` 起
-  lio_sam（互斥）。`robot_navigation` 不拥有该 TF。
+  fast_lio→gicp，同时提前启动 RViz；GICP 首次 accepted、`/localization` 出现后才起 Nav2，
+  并永久拥有 `body -> base_footprint` bridge。`mode=mapping` 起 lio_sam（互斥）。
+  `robot_navigation` 不拥有该 TF。
 - **唯一控制出口**:完整 bringup 中 Nav2 发 `/cmd_vel_auto`、Web 发 `/cmd_vel_manual`，
   只有 `cmd_vel_gate` 发布 `/cmd_vel`；仿真和真机共用这条控制器入口。
 - **单时钟**：所有功能状态使用节点自身的 `node.get_clock()`。graph-only `ready_gate` 的

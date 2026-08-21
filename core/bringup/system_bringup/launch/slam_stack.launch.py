@@ -91,14 +91,29 @@ def _stack(context, *args, **kwargs):
         )
         gicp = _inc("gicp_localization", "launch/localization.launch.py",
                     {"config_file": gicp_config, "prior_map_path": prior})
+        rviz = Node(
+            package="rviz2",
+            executable="rviz2",
+            name="rviz2",
+            output="log",
+            arguments=[
+                "-d",
+                os.path.join(
+                    get_package_share_directory("robot_navigation"),
+                    "config/nav2.rviz",
+                ),
+            ],
+            parameters=[{"use_sim_time": use_sim == "true"}],
+        )
         nav2 = _inc("robot_navigation", "launch/navigation.launch.py",
-                    {"params_file": nav2_params, "map": nav_map, "use_rviz": "true",
+                    {"params_file": nav2_params, "map": nav_map, "use_rviz": "false",
                      "use_sim_time": use_sim, "cmd_vel_output_topic": cmd_vel_output_topic})
         # 链式就绪闸门(非阻塞):等上游真发出关键话题 + settling 后才起下个,超时中止
         return [
             flow("MODE=navigation → ② fast_lio → gate(/Odometry+/cloud_registered) → gicp → gate(/localization+/base_controller/odom) → nav2"),
             body_bridge,
             fast_lio,
+            rviz,
         ] + ready_gate(["/Odometry", "/cloud_registered"], 60.0,
                        "fast_lio→/Odometry+/cloud_registered",
                        [gicp] + ready_gate(
