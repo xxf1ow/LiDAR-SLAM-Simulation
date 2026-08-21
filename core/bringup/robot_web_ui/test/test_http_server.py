@@ -1,3 +1,4 @@
+import ast
 import json
 import socket
 import struct
@@ -5,6 +6,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import Future
 from contextlib import contextmanager
 from http.server import HTTPServer, ThreadingHTTPServer
 from pathlib import Path
@@ -903,7 +905,10 @@ def test_abandoned_navigation_response_does_not_disrupt_later_post(
         original_send_bytes = handler._send_bytes
 
         def send_bytes(request_handler, status, content_type, body, **kwargs):
-            if status == 202 and body == b'{"goal_status":"sending"}':
+            if (
+                status == 202
+                and body == b'{"ok":true,"goal_status":"sending"}'
+            ):
                 response_write_reached.set()
                 if not allow_response_write.wait(timeout=1.0):
                     raise AssertionError("test did not release response write")
@@ -965,11 +970,76 @@ def test_abandoned_navigation_response_does_not_disrupt_later_post(
         ]
 
 
-def test_request_handler_never_waits_for_navigation_completion():
+def test_navigation_http_branch_has_no_blocking_action_control_flow():
     source = Path(http_server.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    do_post = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "do_POST"
+    )
+    calls = [
+        node
+        for node in ast.walk(do_post)
+        if isinstance(node, ast.Call)
+    ]
+    called_attributes = {
+        node.func.attr
+        for node in calls
+        if isinstance(node.func, ast.Attribute)
+    }
 
-    assert ".result(" not in source
-    assert ".wait(" not in source
+    assert not any(
+        isinstance(node, (ast.For, ast.AsyncFor, ast.While))
+        for node in ast.walk(do_post)
+    )
+    assert called_attributes.isdisjoint({
+        "sleep",
+        "spin_until_future_complete",
+        "result",
+        "wait",
+        "send_goal_async",
+        "get_result_async",
+        "cancel_goal_async",
+        "add_done_callback",
+    })
+    assert not any(
+        isinstance(node, ast.Name) and node.id == "ActionClient"
+        for node in ast.walk(do_post)
+    )
+
+
+def test_navigation_http_responds_while_action_future_is_unresolved(tmp_path):
+    class PendingFutureActions(FakeActions):
+        def __init__(self):
+            super().__init__()
+            self.action_future = Future()
+
+        def send_navigation_goal(self, payload):
+            self.calls.append(("send_navigation_goal", payload))
+            return "sending"
+
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = PendingFutureActions()
+
+    with running_server(actions, html_path) as base_url:
+        started = time.monotonic()
+        response = post_json(
+            base_url,
+            "/api/navigation-goal",
+            navigation_pose_payload(),
+        )
+        body = response.read()
+        elapsed = time.monotonic() - started
+
+    assert response.status == 202
+    assert body == b'{"ok":true,"goal_status":"sending"}'
+    assert elapsed < 0.5
+    assert not actions.action_future.done()
+    assert actions.calls == [
+        ("send_navigation_goal", navigation_pose_payload())
+    ]
 
 
 def test_non_json_content_type_is_rejected_without_actions(tmp_path):
