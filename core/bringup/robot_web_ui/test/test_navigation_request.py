@@ -73,6 +73,18 @@ def test_rotated_map_bounds_accept_inside_and_reject_each_edge():
             )
 
 
+def test_rotated_map_bounds_reject_exact_upper_boundaries():
+    navigation_request = _navigation_request()
+    info = GridInfo(2, 3, 0.5, 10.0, -5.0, math.pi / 2, "map")
+    width, height = info.width * info.resolution, info.height * info.resolution
+
+    for local_x, local_y in ((width, height / 2), (width / 2, height)):
+        with pytest.raises(ValueError, match="outside"):
+            navigation_request.parse_navigation_pose(
+                _payload(info, local_x, local_y), info, 1
+            )
+
+
 def test_revision_must_be_current_positive_non_boolean_integer():
     navigation_request = _navigation_request()
     info = GridInfo(2, 2, 1.0, 0.0, 0.0, 0.0, "map")
