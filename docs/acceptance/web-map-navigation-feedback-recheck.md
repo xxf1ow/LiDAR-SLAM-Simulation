@@ -2,7 +2,7 @@
 
 本流程只复测首次报告失败或未完成的 Web 链路，不重复完整 GICP readiness 验收。
 
-获准代码基线：`5361c6f5f20782a97574aa19a93874befca12878`。
+获准代码基线：`0628b17fdea960374a068b0ced0e58a9dd1bb48d`。
 手册可以是其 docs-only 后继，但 `core/` 不得再变化。
 
 ## 1. 前置
@@ -13,8 +13,8 @@ navigation 修改、启动、PGID 和清理步骤。额外确认：
 ```bash
 cd /home/lxx/workspace/xxsim
 git merge-base --is-ancestor \
-  5361c6f5f20782a97574aa19a93874befca12878 HEAD
-git diff --quiet 5361c6f5f20782a97574aa19a93874befca12878..HEAD -- core
+  0628b17fdea960374a068b0ced0e58a9dd1bb48d HEAD
+git diff --quiet 0628b17fdea960374a068b0ced0e58a9dd1bb48d..HEAD -- core
 test -z "$(git status --porcelain --untracked-files=no)"
 ```
 
@@ -66,7 +66,8 @@ Web 页面选择当前机器人所在位置和朝向并确认“设置初始位�
 4. 核对 `kill -0 "$WEB_RECHECK_PID"` 成功、8080 仍返回 200。
 5. 日志中不得出现 `_navigation_feedback_callback`、`TypeError` 或 Web 进程退出。
 6. 点击一次“取消导航”，确认状态收敛为“导航已取消”且机器人停车。
-7. 再次核对 Web PID 和 8080 存活；Nav2 goal 不再 active。
+7. 确认地图上的全局规划路径消失，不再显示已取消目标的旧路线。
+8. 再次核对 Web PID 和 8080 存活；Nav2 goal 不再 active。
 
 可保存状态快照：
 
