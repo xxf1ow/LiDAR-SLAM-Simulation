@@ -6,9 +6,12 @@ from pathlib import Path
 
 import rclpy
 import yaml
+from action_msgs.msg import GoalStatus
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
+from nav2_msgs.action import NavigateToPose
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import (
@@ -74,6 +77,9 @@ class WebUiNode(Node):
         self._local_layer = (None, None, None, None)
         self._goal_lock = threading.Lock()
         self._goal_status = "idle"
+        self._goal_handle = None
+        self._goal_distance = None
+        self._goal_message = None
         try:
             self._static_map = load_nav2_pgm(Path(map_yaml_path))
         except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
@@ -158,6 +164,11 @@ class WebUiNode(Node):
         self._resume_client = self.create_client(
             Trigger,
             "/cmd_vel_gate/resume_automatic",
+        )
+        self._navigation_client = ActionClient(
+            self,
+            NavigateToPose,
+            "/navigate_to_pose",
         )
 
         try:
@@ -248,6 +259,208 @@ class WebUiNode(Node):
         )
         message.pose.covariance = [0.0] * 36
         self._initial_pose_publisher.publish(message)
+
+    def send_navigation_goal(self, payload: dict[str, object]) -> str:
+        static = self._static_map
+        if static is None:
+            raise ActionUnavailable("static map unavailable")
+        pose = parse_navigation_pose(
+            payload,
+            static.info,
+            static.binary.revision,
+        )
+        if not self._navigation_client.server_is_ready():
+            raise ActionUnavailable("navigation action server unavailable")
+        if self._gate_mode != "automatic":
+            raise ActionConflict(
+                "automatic control is not active",
+                self._gate_mode,
+            )
+        if self._localization_pose is None:
+            raise ActionConflict("robot is not localized", self._gate_mode)
+
+        goal = NavigateToPose.Goal()
+        goal.pose.header.stamp = self.get_clock().now().to_msg()
+        goal.pose.header.frame_id = "map"
+        goal.pose.pose.position.x = pose.x
+        goal.pose.pose.position.y = pose.y
+        goal.pose.pose.position.z = 0.0
+        goal.pose.pose.orientation.x = 0.0
+        goal.pose.pose.orientation.y = 0.0
+        (
+            goal.pose.pose.orientation.z,
+            goal.pose.pose.orientation.w,
+        ) = yaw_quaternion(pose.yaw)
+        goal.behavior_tree = ""
+
+        with self._goal_lock:
+            active = self._goal_status in {
+                "sending",
+                "navigating",
+                "canceling",
+            }
+            if not active:
+                self._goal_status = "sending"
+                self._goal_handle = None
+                self._goal_distance = None
+                self._goal_message = None
+        if active:
+            raise ActionConflict("navigation goal is active", self._gate_mode)
+
+        try:
+            future = self._navigation_client.send_goal_async(
+                goal,
+                feedback_callback=self._navigation_feedback_callback,
+            )
+            future.add_done_callback(
+                self._navigation_goal_response_callback
+            )
+        except BaseException as exc:
+            message = f"navigation send failed: {exc}"
+            with self._goal_lock:
+                if self._goal_status == "sending":
+                    self._goal_status = "failed"
+                    self._goal_handle = None
+                    self._goal_distance = None
+                    self._goal_message = message
+            raise ActionUnavailable(message) from exc
+        return "sending"
+
+    def _navigation_goal_response_callback(self, future) -> None:
+        try:
+            goal_handle = future.result()
+        except BaseException as exc:
+            message = f"navigation goal response failed: {exc}"
+            with self._goal_lock:
+                if self._goal_status == "sending":
+                    self._goal_status = "failed"
+                    self._goal_handle = None
+                    self._goal_distance = None
+                    self._goal_message = message
+            return
+
+        accepted = goal_handle is not None and goal_handle.accepted
+        with self._goal_lock:
+            if self._goal_status != "sending":
+                return
+            if not accepted:
+                self._goal_status = "failed"
+                self._goal_handle = None
+                self._goal_distance = None
+                self._goal_message = "navigation goal rejected"
+                return
+            self._goal_status = "navigating"
+            self._goal_handle = goal_handle
+            self._goal_distance = None
+            self._goal_message = None
+
+        try:
+            result_future = goal_handle.get_result_async()
+            result_future.add_done_callback(
+                self._navigation_result_callback
+            )
+        except BaseException as exc:
+            message = f"navigation result request failed: {exc}"
+            with self._goal_lock:
+                if (
+                    self._goal_status == "navigating"
+                    and self._goal_handle is goal_handle
+                ):
+                    self._goal_status = "failed"
+                    self._goal_handle = None
+                    self._goal_distance = None
+                    self._goal_message = message
+
+    def _navigation_feedback_callback(
+        self,
+        goal_handle,
+        feedback_message,
+    ) -> None:
+        try:
+            distance = float(feedback_message.feedback.distance_remaining)
+        except (AttributeError, TypeError, ValueError):
+            return
+        if not math.isfinite(distance):
+            return
+        with self._goal_lock:
+            if (
+                self._goal_status not in {"navigating", "canceling"}
+                or self._goal_handle is not goal_handle
+            ):
+                return
+            self._goal_distance = distance
+
+    def _navigation_result_callback(self, future) -> None:
+        try:
+            status = future.result().status
+            if status == GoalStatus.STATUS_SUCCEEDED:
+                goal_status = "succeeded"
+                message = None
+            elif status == GoalStatus.STATUS_CANCELED:
+                goal_status = "canceled"
+                message = None
+            elif status == GoalStatus.STATUS_ABORTED:
+                goal_status = "failed"
+                message = "navigation goal aborted"
+            else:
+                goal_status = "failed"
+                message = f"navigation failed with status {status}"
+        except BaseException as exc:
+            goal_status = "failed"
+            message = f"navigation result failed: {exc}"
+
+        with self._goal_lock:
+            if self._goal_status not in {"navigating", "canceling"}:
+                return
+            self._goal_status = goal_status
+            self._goal_handle = None
+            self._goal_distance = None
+            self._goal_message = message
+
+    def cancel_navigation(self) -> str:
+        with self._goal_lock:
+            goal_handle = self._goal_handle
+            can_cancel = (
+                self._goal_status == "navigating"
+                and goal_handle is not None
+            )
+            if can_cancel:
+                self._goal_status = "canceling"
+                self._goal_message = None
+        if not can_cancel:
+            raise ActionConflict("navigation goal is not active", self._gate_mode)
+
+        try:
+            future = goal_handle.cancel_goal_async()
+            future.add_done_callback(
+                self._navigation_cancel_response_callback
+            )
+        except BaseException as exc:
+            message = f"navigation cancel failed: {exc}"
+            with self._goal_lock:
+                if (
+                    self._goal_status == "canceling"
+                    and self._goal_handle is goal_handle
+                ):
+                    self._goal_status = "navigating"
+                    self._goal_message = message
+            raise ActionUnavailable(message) from exc
+        return "canceling"
+
+    def _navigation_cancel_response_callback(self, future) -> None:
+        try:
+            accepted = bool(future.result().goals_canceling)
+            message = None if accepted else "navigation cancel rejected"
+        except BaseException as exc:
+            accepted = False
+            message = f"navigation cancel failed: {exc}"
+
+        with self._goal_lock:
+            if self._goal_status != "canceling":
+                return
+            if not accepted:
+                self._goal_status = "navigating"
+                self._goal_message = message
 
     def _now_seconds(self) -> float:
         return self.get_clock().now().nanoseconds / 1_000_000_000.0
@@ -394,8 +607,12 @@ class WebUiNode(Node):
 
     def navigation_state(self) -> dict[str, object]:
         static = self._static_map
+        action_server_ready = self._navigation_client.server_is_ready()
         with self._goal_lock:
             goal_status = self._goal_status
+            goal_handle = self._goal_handle
+            goal_distance = self._goal_distance
+            goal_message = self._goal_message
         initial_pose_ready = (
             static is not None
             and self._initial_pose_publisher.get_subscription_count() > 0
@@ -436,11 +653,13 @@ class WebUiNode(Node):
             "motion": self.motion_status(),
             "navigation": {
                 "initial_pose_ready": initial_pose_ready,
-                "action_server_ready": False,
+                "action_server_ready": action_server_ready,
                 "goal_status": goal_status,
-                "cancel_available": False,
-                "distance_remaining": None,
-                "message": None,
+                "cancel_available": (
+                    goal_status == "navigating" and goal_handle is not None
+                ),
+                "distance_remaining": goal_distance,
+                "message": goal_message,
             },
             "layers": {
                 "static": None if static is None else {

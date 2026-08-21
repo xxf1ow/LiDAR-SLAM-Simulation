@@ -36,14 +36,16 @@ def _template_parameter_types():
     }
 
 
-def test_package_declares_only_required_map_tf_dependencies():
+def test_package_declares_exact_navigation_action_dependencies():
     tree = ElementTree.parse(ROOT / "package.xml")
     dependencies = {node.text for node in tree.findall(".//exec_depend")}
 
     assert dependencies == {
+        "action_msgs",
         "ament_index_python",
         "geometry_msgs",
         "nav_msgs",
+        "nav2_msgs",
         "python3-yaml",
         "rclpy",
         "std_msgs",
@@ -140,6 +142,19 @@ def test_map_yaml_path_is_the_only_required_runtime_only_parameter():
         ("Trigger", "/cmd_vel_gate/takeover_manual"),
         ("Trigger", "/cmd_vel_gate/resume_automatic"),
     }
+
+    action_clients = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Name)
+        and call.func.id == "ActionClient"
+    ]
+    assert len(action_clients) == 1
+    assert [ast.unparse(argument) for argument in action_clients[0].args] == [
+        "self",
+        "NavigateToPose",
+        "'/navigate_to_pose'",
+    ]
 
     parameters = [
         (
