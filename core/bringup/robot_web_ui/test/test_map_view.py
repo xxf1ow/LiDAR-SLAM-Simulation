@@ -395,6 +395,89 @@ def _run_map_scenario(scenario):
             );
             return;
           }
+          if (scenario === "cancel-request-pending") {
+            const navigation = (overrides = {}) => ({
+              initial_pose_ready: true,
+              action_server_ready: true,
+              goal_status: "navigating",
+              cancel_available: true,
+              distance_remaining: null,
+              message: null,
+              ...overrides
+            });
+            const activeState = (overrides = {}) => state({
+              layers: {
+                static: grid(1), global_costmap: null,
+                local_costmap: null, path: null
+              },
+              navigation: navigation(overrides)
+            });
+            responses.push(bytes([0, 0, 0, 0]));
+            await view.applyState(activeState());
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+
+            let resolveCancel;
+            navigationResults.push(new Promise((resolve) => {
+              resolveCancel = resolve;
+            }));
+            const firstCancel = navigationButtons.navigationCancel.emit("click");
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            await view.applyState(activeState());
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            const duplicateCancel = navigationButtons.navigationCancel.emit("click");
+            resolveCancel({ok: true, goal_status: "canceling"});
+            await Promise.all([firstCancel, duplicateCancel]);
+            assert.strictEqual(
+              navigationRequests.filter((item) =>
+                item.path === "/api/navigation-cancel"
+              ).length,
+              1
+            );
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+
+            await view.applyState(activeState({
+              goal_status: "canceling", cancel_available: false
+            }));
+            await view.applyState(activeState({
+              goal_status: "canceled", cancel_available: false
+            }));
+            await view.applyState(activeState());
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+
+            let rejectCancel;
+            navigationResults.push(new Promise((_resolve, reject) => {
+              rejectCancel = reject;
+            }));
+            const failingCancel = navigationButtons.navigationCancel.emit("click");
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            await view.applyState(activeState());
+            const duplicateFailure = navigationButtons.navigationCancel.emit("click");
+            rejectCancel(new Error("cancel offline"));
+            await Promise.all([failingCancel, duplicateFailure]);
+            assert.strictEqual(
+              navigationRequests.filter((item) =>
+                item.path === "/api/navigation-cancel"
+              ).length,
+              2
+            );
+            assert(navigationStatus.textContent.includes("cancel offline"));
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+
+            navigationResults.push({ok: true, goal_status: "canceling"});
+            await navigationButtons.navigationCancel.emit("click");
+            assert.strictEqual(
+              navigationRequests.filter((item) =>
+                item.path === "/api/navigation-cancel"
+              ).length,
+              3
+            );
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            assert(!navigationStatus.textContent.includes("cancel offline"));
+            await view.applyState(activeState({
+              goal_status: "canceling", cancel_available: false
+            }));
+            return;
+          }
           if (scenario === "navigation-availability-and-status") {
             assert.strictEqual(typeof view.startPlacement, "function");
             const navigation = (overrides = {}) => ({
@@ -441,7 +524,7 @@ def _run_map_scenario(scenario):
 
             await view.applyState(availableState({
               navigation: navigation({
-                initial_pose_ready: false,
+                initial_pose_ready: true,
                 goal_status: "navigating",
                 cancel_available: true,
                 distance_remaining: 3.5,
@@ -462,11 +545,16 @@ def _run_map_scenario(scenario):
             ]) {
               await view.applyState(availableState({
                 navigation: navigation({
-                  initial_pose_ready: !["sending", "canceling"].includes(goalStatus),
+                  initial_pose_ready: true,
                   goal_status: goalStatus,
                   message: goalStatus === "failed" ? "planner stopped" : null
                 })
               }));
+              assert.strictEqual(
+                navigationButtons.initialPose.disabled,
+                ["sending", "navigating", "canceling"].includes(goalStatus),
+                goalStatus
+              );
               assert(navigationStatus.textContent.includes(expected), goalStatus);
               assert(!navigationStatus.textContent.includes(goalStatus), goalStatus);
               assert(!/%%|ETA|预计/.test(navigationStatus.textContent), goalStatus);
@@ -836,6 +924,11 @@ def test_mobile_placement_preview_rendering_and_pointer_ownership():
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_mobile_placement_confirmation_retry_and_cancel_requests():
     _run_map_scenario("placement-requests")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_navigation_cancel_request_pending_owns_double_tap_and_poll_races():
+    _run_map_scenario("cancel-request-pending")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")

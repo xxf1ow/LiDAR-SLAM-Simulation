@@ -75,6 +75,7 @@
     let dragging = null;
     let placement = null;
     let navigationRequestMessage = "";
+    let cancelRequestPending = false;
     const transform = {scale: 16, x: 100, y: 50};
 
     function bounds() {
@@ -306,7 +307,10 @@
     function placementAvailable(mode) {
       const navigation = latestState.navigation || {};
       if (mapUnavailable()) return false;
-      if (mode === "initial_pose") return navigation.initial_pose_ready === true;
+      if (mode === "initial_pose") {
+        return navigation.initial_pose_ready === true
+          && !ACTIVE_GOAL_STATUSES.has(navigation.goal_status);
+      }
       return mode === "navigation_goal"
         && navigation.action_server_ready === true
         && latestState.localized === true
@@ -355,7 +359,8 @@
       }
       if (navigationButtons.navigationCancel) {
         navigationButtons.navigationCancel.hidden = placing;
-        navigationButtons.navigationCancel.disabled = navigation.cancel_available !== true;
+        navigationButtons.navigationCancel.disabled = cancelRequestPending
+          || navigation.cancel_available !== true;
       }
       if (navigationButtons.placementConfirm) {
         navigationButtons.placementConfirm.hidden = !placing;
@@ -406,6 +411,10 @@
 
     async function applyState(state) {
       latestState = state || {layers: {}};
+      const goalStatus = (latestState.navigation || {}).goal_status;
+      if (cancelRequestPending && goalStatus !== "navigating") {
+        cancelRequestPending = false;
+      }
       const layers = latestState.layers || {};
       for (const name of Object.keys(LAYERS)) await updateLayer(name, layers[name]);
       updateNavigationStatus();
@@ -551,6 +560,7 @@
     }
 
     async function cancelNavigation() {
+      if (cancelRequestPending) return;
       clearNavigationRequestMessage();
       updateNavigationStatus();
       if (typeof options.request !== "function") {
@@ -558,11 +568,14 @@
         updateNavigationStatus();
         return;
       }
+      cancelRequestPending = true;
+      updateNavigationButtons();
       try {
         await options.request("/api/navigation-cancel", {});
         clearNavigationRequestMessage();
         updateNavigationStatus();
       } catch (error) {
+        cancelRequestPending = false;
         showNavigationRequestFailure(error);
       }
     }
