@@ -203,14 +203,17 @@ def _handler_for(actions, html_path: Path):
                     goal_status = actions.send_navigation_goal(payload)
                     self._send_json(
                         202,
-                        {"goal_status": goal_status},
+                        {"ok": True, "goal_status": goal_status},
                     )
                     return
                 else:
                     if payload != {}:
                         raise ValueError("navigation cancel request must be {}")
-                    actions.cancel_navigation()
-                    self._send_json(202, {})
+                    goal_status = actions.cancel_navigation()
+                    self._send_json(
+                        202,
+                        {"ok": True, "goal_status": goal_status},
+                    )
                     return
             except MapRevisionConflict as exc:
                 self._send_json(409, {"error": str(exc)})
