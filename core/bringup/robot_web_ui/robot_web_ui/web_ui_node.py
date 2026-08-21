@@ -419,6 +419,8 @@ class WebUiNode(Node):
             self._goal_handle = None
             self._goal_distance = None
             self._goal_message = message
+        self._path_snapshot = None
+        self._path_error = None
 
     def cancel_navigation(self) -> str:
         with self._goal_lock:

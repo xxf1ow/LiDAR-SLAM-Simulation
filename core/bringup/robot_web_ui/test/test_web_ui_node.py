@@ -1700,6 +1700,28 @@ def test_navigation_result_maps_goal_status_and_clears_active_facts(
         assert node._goal_message is None
 
 
+@pytest.mark.parametrize(
+    "result_status",
+    ["STATUS_SUCCEEDED", "STATUS_CANCELED", "STATUS_ABORTED"],
+)
+def test_navigation_terminal_result_clears_the_displayed_path(
+    node_module, result_status
+):
+    node, handle = start_navigation(node_module)
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(1.0, 2.0), (3.0, 4.0)]
+    )
+    node._path_error = "old path error"
+
+    handle.result_future.set_result(
+        navigation_result(getattr(node_module.FakeGoalStatus, result_status))
+    )
+
+    assert node._path_snapshot is None
+    assert node._path_error is None
+    assert node.navigation_state()["layers"]["path"] is None
+
+
 def test_navigation_result_future_error_fails_and_clears(node_module):
     node, handle = start_navigation(node_module)
     node._goal_distance = 2.5
@@ -1795,6 +1817,10 @@ def test_late_navigation_callbacks_cannot_reopen_terminal_phase(node_module):
     late_handle = FakeClientGoalHandle()
     node.send_navigation_goal(initial_pose_payload())
     node._goal_status = "succeeded"
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(5.0, 6.0)]
+    )
+    terminal_path = node._path_snapshot
 
     node._navigation_client.send_future.set_result(late_handle)
     node._navigation_feedback_callback(
@@ -1816,6 +1842,7 @@ def test_late_navigation_callbacks_cannot_reopen_terminal_phase(node_module):
     assert node._goal_handle is None
     assert node._goal_distance is None
     assert node._goal_message is None
+    assert node._path_snapshot is terminal_path
     assert late_handle.get_result_calls == 0
 
 
