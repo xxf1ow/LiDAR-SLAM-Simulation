@@ -64,8 +64,11 @@ source install/setup.bash
 ros2 launch system_bringup bringup.launch.py
 ```
 
-在 RViz 使用“2D Pose Estimate”给出合理初值，确认注册点云贴合先验图后再下发
-“Nav2 Goal”。手机 Web 可人工接管；恢复自动不会自动取消或重建原 Nav2 goal。
+Navigation 模式先启动 RViz、FAST-LIO 和 GICP，但暂不启动 Nav2。RViz 同时显示
+`/gicp_localization/prior_map` 与 `/cloud_registered`：初始位姿正确时 GICP 会自动接受第一次
+配准；不正确时使用“2D Pose Estimate”发布 `/initialpose`。首次 accepted 后 `/localization`
+出现，现有 gate 才启动 Nav2。确认点云贴合后再下发“Nav2 Goal”。手机 Web 可人工接管；恢复
+自动不会自动取消或重建原 Nav2 goal。
 
 ## 验收
 

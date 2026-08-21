@@ -36,17 +36,21 @@ def _template_parameter_types():
     }
 
 
-def test_package_declares_runtime_dependencies():
+def test_package_declares_exact_navigation_action_dependencies():
     tree = ElementTree.parse(ROOT / "package.xml")
     dependencies = {node.text for node in tree.findall(".//exec_depend")}
 
     assert dependencies == {
+        "action_msgs",
         "ament_index_python",
         "geometry_msgs",
         "nav_msgs",
+        "nav2_msgs",
+        "python3-yaml",
         "rclpy",
         "std_msgs",
         "std_srvs",
+        "tf2_ros",
     }
 
 
@@ -54,13 +58,14 @@ def test_setup_installs_web_asset_and_entry_point():
     source = (ROOT / "setup.py").read_text(encoding="utf-8")
 
     assert '"robot_web_ui/web/index.html"' in source
+    assert '"robot_web_ui/web/map_view.js"' in source
     assert (
         '"robot_web_ui = robot_web_ui.web_ui_node:main"'
         in source
     )
 
 
-def test_node_has_exact_ros_contract_and_parameters():
+def test_map_yaml_path_is_the_only_required_runtime_only_parameter():
     source = NODE_PATH.read_text(encoding="utf-8")
     tree = ast.parse(source)
     calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
@@ -71,9 +76,12 @@ def test_node_has_exact_ros_contract_and_parameters():
         if isinstance(call.func, ast.Attribute)
         and call.func.attr == "create_publisher"
     ]
-    assert len(publishers) == 1
+    assert len(publishers) == 2
     assert ast.unparse(publishers[0].args[0]) == "TwistStamped"
     assert ast.literal_eval(publishers[0].args[1]) == "/cmd_vel_manual"
+    assert ast.unparse(publishers[1].args[0]) == "PoseWithCovarianceStamped"
+    assert ast.literal_eval(publishers[1].args[1]) == "/initialpose"
+    assert ast.unparse(publishers[1].args[2]) == "initial_pose_qos"
 
     subscriptions = [
         call
@@ -87,7 +95,7 @@ def test_node_has_exact_ros_contract_and_parameters():
             ast.literal_eval(call.args[1]),
             ast.unparse(call.args[2]),
         )
-        for call in subscriptions
+        for call in subscriptions[:2]
     ] == [
         ("String", "/cmd_vel_gate/mode", "self._gate_mode_callback"),
         ("Odometry", "/base_controller/odom", "self._odom_callback"),
@@ -101,7 +109,7 @@ def test_node_has_exact_ros_contract_and_parameters():
         if isinstance(call.func, ast.Name)
         and call.func.id == "QoSProfile"
     ]
-    assert len(qos_profiles) == 1
+    assert len(qos_profiles) == 4
     assert {
         keyword.arg: ast.unparse(keyword.value)
         for keyword in qos_profiles[0].keywords
@@ -110,6 +118,15 @@ def test_node_has_exact_ros_contract_and_parameters():
         "depth": "1",
         "reliability": "ReliabilityPolicy.RELIABLE",
         "durability": "DurabilityPolicy.TRANSIENT_LOCAL",
+    }
+    assert {
+        keyword.arg: ast.unparse(keyword.value)
+        for keyword in qos_profiles[1].keywords
+    } == {
+        "history": "HistoryPolicy.KEEP_LAST",
+        "depth": "1",
+        "reliability": "ReliabilityPolicy.RELIABLE",
+        "durability": "DurabilityPolicy.VOLATILE",
     }
 
     clients = [
@@ -126,6 +143,19 @@ def test_node_has_exact_ros_contract_and_parameters():
         ("Trigger", "/cmd_vel_gate/resume_automatic"),
     }
 
+    action_clients = [
+        call
+        for call in calls
+        if isinstance(call.func, ast.Name)
+        and call.func.id == "ActionClient"
+    ]
+    assert len(action_clients) == 1
+    assert [ast.unparse(argument) for argument in action_clients[0].args] == [
+        "self",
+        "NavigateToPose",
+        "'/navigate_to_pose'",
+    ]
+
     parameters = [
         (
             ast.literal_eval(call.args[0]),
@@ -138,17 +168,26 @@ def test_node_has_exact_ros_contract_and_parameters():
         and call.func.attr == "declare_parameter"
     ]
     expected_parameters = _template_parameter_types()
-    parameter_names = [name for name, _type, _args, _keywords in parameters]
-    assert len(parameters) == len(expected_parameters)
+    template_parameters = [
+        parameter for parameter in parameters if parameter[0] != "map_yaml_path"
+    ]
+    runtime_parameters = [
+        parameter for parameter in parameters if parameter[0] == "map_yaml_path"
+    ]
+    parameter_names = [name for name, _type, _args, _keywords in template_parameters]
+    assert len(template_parameters) == len(expected_parameters)
     assert len(parameter_names) == len(set(parameter_names))
     assert {
         name: parameter_type
-        for name, parameter_type, _args, _keywords in parameters
+        for name, parameter_type, _args, _keywords in template_parameters
     } == expected_parameters
     assert all(
         argument_count == 2 and keyword_count == 0
-        for _name, _type, argument_count, keyword_count in parameters
+        for _name, _type, argument_count, keyword_count in template_parameters
     )
+    assert runtime_parameters == [
+        ("map_yaml_path", "Parameter.Type.STRING", 2, 0)
+    ]
     assert any(
         isinstance(node, ast.ImportFrom)
         and node.module == "rclpy.parameter"

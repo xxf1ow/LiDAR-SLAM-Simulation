@@ -91,8 +91,6 @@ GicpLocalizationNode::GicpLocalizationNode() : rclcpp::Node("gicp_localization")
       "/initialpose", rclcpp::QoS(1),
       std::bind(&GicpLocalizationNode::initialPoseCb, this, std::placeholders::_1), fast_opts);
 
-  loc_pub_ = create_publisher<nav_msgs::msg::Odometry>("/localization", rclcpp::QoS(50));
-
   gicp_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / localization_freq),
       std::bind(&GicpLocalizationNode::gicpTimerCb, this), slow_group_);
@@ -173,6 +171,10 @@ void GicpLocalizationNode::gicpTimerCb() {
     m.correction_delta_rot = d.rotation;
     if (ok) {
       T_map_odom_ = out.T_map_odom;
+      if (!loc_pub_) {
+        loc_pub_ = create_publisher<nav_msgs::msg::Odometry>(
+            "/localization", rclcpp::QoS(50));
+      }
     } else {
       rejected_snapshot = ++rejected_;
     }
@@ -187,10 +189,12 @@ void GicpLocalizationNode::gicpTimerCb() {
 void GicpLocalizationNode::tfTimerCb() {
   Eigen::Isometry3d T_mo;
   std::optional<Eigen::Isometry3d> odom;
+  decltype(loc_pub_) localization_publisher;
   {
     std::lock_guard<std::mutex> lk(mtx_);
     T_mo = T_map_odom_;
     odom = latest_odom_;
+    localization_publisher = loc_pub_;
   }
   const auto stamp = now();
 
@@ -200,14 +204,14 @@ void GicpLocalizationNode::tfTimerCb() {
   tf.child_frame_id = odom_frame_;
   tf_broadcaster_->sendTransform(tf);
 
-  if (odom) {
+  if (odom && localization_publisher) {
     Eigen::Isometry3d T_mb = composeMapToBase(T_mo, *odom);
     nav_msgs::msg::Odometry o;
     o.header.stamp = stamp;
     o.header.frame_id = map_frame_;
     o.child_frame_id = base_frame_;
     o.pose.pose = tf2::toMsg(T_mb);
-    loc_pub_->publish(o);
+    localization_publisher->publish(o);
   }
 }
 

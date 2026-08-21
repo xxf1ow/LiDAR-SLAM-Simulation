@@ -17,7 +17,7 @@ setup(
         ("share/" + package_name, ["package.xml"]),
         (
             os.path.join("share", package_name, "web"),
-            ["robot_web_ui/web/index.html"],
+            ["robot_web_ui/web/index.html", "robot_web_ui/web/map_view.js"],
         ),
     ],
     install_requires=["setuptools"],

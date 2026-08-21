@@ -1,12 +1,21 @@
 from __future__ import annotations
 
 import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import socket
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .navigation_request import MapRevisionConflict
+
 
 REQUEST_TIMEOUT = 0.5
+ASSET_PATHS = {
+    "/api/map/static": "static",
+    "/api/map/global-costmap": "global_costmap",
+    "/api/map/local-costmap": "local_costmap",
+    "/api/navigation-path": "path",
+}
 
 
 class ActionUnavailable(RuntimeError):
@@ -27,6 +36,10 @@ class ActionPending(_ActionWithMode):
     pass
 
 
+class RobotWebHttpServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+
 def _handler_for(actions, html_path: Path):
     class RobotWebRequestHandler(BaseHTTPRequestHandler):
         def setup(self) -> None:
@@ -37,21 +50,66 @@ def _handler_for(actions, html_path: Path):
             self,
             status: int,
             content_type: str,
-            body: bytes,
+            body: bytes | None,
+            *,
+            cache_control: str = "no-store",
+            headers: dict[str, str] | None = None,
         ) -> None:
-            self.send_response(status)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.send_response(status)
+                if content_type:
+                    self.send_header("Content-Type", content_type)
+                if body is not None:
+                    self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", cache_control)
+                for name, value in (headers or {}).items():
+                    self.send_header(name, value)
+                self.end_headers()
+                if body:
+                    self.wfile.write(body)
+            except (
+                BrokenPipeError,
+                ConnectionResetError,
+                socket.timeout,
+            ):
+                self.close_connection = True
 
         def _send_json(self, status: int, payload: dict[str, object]) -> None:
-            body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+            try:
+                body = json.dumps(
+                    payload,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ).encode("utf-8")
+            except (TypeError, ValueError):
+                status = 500
+                body = b'{"error":"response serialization failed"}'
             self._send_bytes(
                 status,
                 "application/json; charset=utf-8",
                 body,
+            )
+
+        def _send_asset(self, snapshot) -> None:
+            if snapshot is None:
+                self._send_json(404, {"error": "not found"})
+                return
+            headers = {"ETag": snapshot.etag}
+            if self.headers.get("If-None-Match") == snapshot.etag:
+                self._send_bytes(
+                    304,
+                    "",
+                    None,
+                    cache_control="no-cache",
+                    headers=headers,
+                )
+                return
+            self._send_bytes(
+                200,
+                snapshot.media_type,
+                snapshot.gzip_data,
+                cache_control="no-cache",
+                headers={**headers, "Content-Encoding": "gzip"},
             )
 
         def _send_action_json(
@@ -89,12 +147,27 @@ def _handler_for(actions, html_path: Path):
             return payload
 
         def do_GET(self) -> None:
-            if urlsplit(self.path).path == "/":
+            path = urlsplit(self.path).path
+            if path == "/":
                 self._send_bytes(
                     200,
                     "text/html; charset=utf-8",
                     html_path.read_bytes(),
                 )
+                return
+            if path == "/map_view.js":
+                self._send_bytes(
+                    200,
+                    "application/javascript; charset=utf-8",
+                    html_path.with_name("map_view.js").read_bytes(),
+                )
+                return
+            if path == "/api/navigation-state":
+                self._send_json(200, actions.navigation_state())
+                return
+            asset_name = ASSET_PATHS.get(path)
+            if asset_name is not None:
+                self._send_asset(actions.navigation_asset(asset_name))
                 return
             self._send_json(404, {"error": "not found"})
 
@@ -104,6 +177,9 @@ def _handler_for(actions, html_path: Path):
                 "/api/manual-command",
                 "/api/takeover-manual",
                 "/api/resume-automatic",
+                "/api/initial-pose",
+                "/api/navigation-goal",
+                "/api/navigation-cancel",
             }:
                 self._send_json(404, {"error": "not found"})
                 return
@@ -117,8 +193,31 @@ def _handler_for(actions, html_path: Path):
                     )
                 elif path == "/api/takeover-manual":
                     mode = actions.takeover_manual()
-                else:
+                elif path == "/api/resume-automatic":
                     mode = actions.resume_automatic()
+                elif path == "/api/initial-pose":
+                    actions.publish_initial_pose(payload)
+                    self._send_json(200, {"ok": True})
+                    return
+                elif path == "/api/navigation-goal":
+                    goal_status = actions.send_navigation_goal(payload)
+                    self._send_json(
+                        202,
+                        {"ok": True, "goal_status": goal_status},
+                    )
+                    return
+                else:
+                    if payload != {}:
+                        raise ValueError("navigation cancel request must be {}")
+                    goal_status = actions.cancel_navigation()
+                    self._send_json(
+                        202,
+                        {"ok": True, "goal_status": goal_status},
+                    )
+                    return
+            except MapRevisionConflict as exc:
+                self._send_json(409, {"error": str(exc)})
+                return
             except ValueError as exc:
                 self._send_json(400, {"error": str(exc)})
                 return
@@ -156,4 +255,4 @@ def create_server(
     host: str = "0.0.0.0",
     port: int = 8080,
 ) -> HTTPServer:
-    return HTTPServer((host, port), _handler_for(actions, html_path))
+    return RobotWebHttpServer((host, port), _handler_for(actions, html_path))
