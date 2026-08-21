@@ -146,6 +146,9 @@ def node_module(monkeypatch):
             self.feedback_callbacks.append(feedback_callback)
             return self.send_future
 
+        def emit_feedback(self, feedback_message):
+            self.feedback_callbacks[-1](feedback_message)
+
     class FakeTrigger:
         class Request:
             pass
@@ -386,8 +389,10 @@ class FakeClientGoalHandle:
         accepted=True,
         result_future=None,
         cancel_future=None,
+        goal_id=None,
     ):
         self.accepted = accepted
+        self.goal_id = goal_id or fake_goal_id(1)
         self.result_future = result_future or FakeFuture(complete=False)
         self.cancel_future = cancel_future or FakeFuture(complete=False)
         self.get_result_calls = 0
@@ -402,8 +407,13 @@ class FakeClientGoalHandle:
         return self.cancel_future
 
 
-def navigation_feedback(distance_remaining):
+def fake_goal_id(value):
+    return types.SimpleNamespace(uuid=[value] * 16)
+
+
+def navigation_feedback(distance_remaining, goal_id=None):
     return types.SimpleNamespace(
+        goal_id=goal_id or fake_goal_id(1),
         feedback=types.SimpleNamespace(distance_remaining=distance_remaining)
     )
 
@@ -1627,18 +1637,40 @@ def test_navigation_goal_immediate_send_error_fails_without_scheduling(
 
 def test_navigation_feedback_accepts_only_finite_active_distance(node_module):
     node, handle = start_navigation(node_module)
-    callback = node._navigation_client.feedback_callbacks[0]
 
-    callback(handle, navigation_feedback(7.25))
+    node._navigation_client.emit_feedback(
+        navigation_feedback(7.25, handle.goal_id)
+    )
     assert node._goal_distance == 7.25
-    callback(handle, navigation_feedback(float("nan")))
-    callback(handle, navigation_feedback(float("inf")))
+    node._navigation_client.emit_feedback(
+        navigation_feedback(float("nan"), handle.goal_id)
+    )
+    node._navigation_client.emit_feedback(
+        navigation_feedback(float("inf"), handle.goal_id)
+    )
     assert node._goal_distance == 7.25
 
     node._goal_status = "succeeded"
-    callback(handle, navigation_feedback(1.0))
+    node._navigation_client.emit_feedback(
+        navigation_feedback(1.0, handle.goal_id)
+    )
     assert node._goal_distance == 7.25
     assert node._goal_status == "succeeded"
+
+
+def test_navigation_feedback_ignores_another_goal_id(node_module):
+    node, handle = start_navigation(node_module)
+    stale_goal_id = fake_goal_id(2)
+
+    node._navigation_client.emit_feedback(
+        navigation_feedback(1.0, stale_goal_id)
+    )
+    assert node._goal_distance is None
+
+    node._navigation_client.emit_feedback(
+        navigation_feedback(2.5, handle.goal_id)
+    )
+    assert node._goal_distance == 2.5
 
 
 @pytest.mark.parametrize(
@@ -1766,7 +1798,7 @@ def test_late_navigation_callbacks_cannot_reopen_terminal_phase(node_module):
 
     node._navigation_client.send_future.set_result(late_handle)
     node._navigation_feedback_callback(
-        late_handle, navigation_feedback(1.0)
+        navigation_feedback(1.0, late_handle.goal_id)
     )
     node._navigation_cancel_response_callback(
         FakeFuture(response=cancel_response(node_module, accepted=False)),

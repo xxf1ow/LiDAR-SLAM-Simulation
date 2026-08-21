@@ -371,19 +371,24 @@ class WebUiNode(Node):
 
     def _navigation_feedback_callback(
         self,
-        goal_handle,
         feedback_message,
     ) -> None:
         try:
+            feedback_goal_id = bytes(feedback_message.goal_id.uuid)
             distance = float(feedback_message.feedback.distance_remaining)
         except (AttributeError, TypeError, ValueError):
             return
         if not math.isfinite(distance):
             return
         with self._goal_lock:
+            goal_handle = self._goal_handle
+            try:
+                active_goal_id = bytes(goal_handle.goal_id.uuid)
+            except (AttributeError, TypeError, ValueError):
+                return
             if (
                 self._goal_status not in {"navigating", "canceling"}
-                or self._goal_handle is not goal_handle
+                or active_goal_id != feedback_goal_id
             ):
                 return
             self._goal_distance = distance
