@@ -31,27 +31,36 @@ def _run_map_scenario(scenario):
         const assert = require("assert");
         const source = %r;
         class FakeElement {
-          constructor(id) {
+          constructor(id, rect = {left: 0, top: 0, width: 200, height: 100}) {
             this.id = id; this.listeners = new Map(); this.hidden = false;
-            this.disabled = false; this.textContent = "";
+            this.disabled = false; this.textContent = ""; this.rect = rect;
+            this.dataset = {};
           }
           addEventListener(name, callback) {
             if (!this.listeners.has(name)) this.listeners.set(name, []);
             this.listeners.get(name).push(callback);
           }
           emit(name, event = {}) {
-            for (const callback of this.listeners.get(name) || []) callback({
-              pointerId: 1, clientX: 0, clientY: 0, preventDefault() {}, ...event
-            });
+            return Promise.all((this.listeners.get(name) || []).map((callback) => callback({
+              currentTarget: this, pointerId: 1, clientX: 0, clientY: 0,
+              preventDefault() {}, ...event
+            })));
           }
-          getBoundingClientRect() { return {left: 0, top: 0, width: 200, height: 100}; }
+          getBoundingClientRect() {
+            return {
+              ...this.rect,
+              right: this.rect.left + this.rect.width,
+              bottom: this.rect.top + this.rect.height
+            };
+          }
           setPointerCapture() {}
         }
         class FakeCanvas extends FakeElement {
           constructor() {
-            super("mapCanvas"); this.width = 200; this.height = 100; this.operations = [];
+            super("mapCanvas"); this.width = 200; this.height = 100;
+            this.operations = []; this.path = [];
             this.context = {
-              fillStyle: "", strokeStyle: "", lineWidth: 1,
+              fillStyle: "", strokeStyle: "", lineWidth: 1, globalAlpha: 1,
               setTransform: (...args) => this.operations.push(["transform", ...args]),
               clearRect: (...args) => this.operations.push(["clear", ...args]),
               save: () => this.operations.push(["save"]), restore: () => this.operations.push(["restore"]),
@@ -60,12 +69,13 @@ def _run_map_scenario(scenario):
               scale: (...args) => this.operations.push(["scale", ...args]),
               drawImage: (...args) => this.operations.push(["drawImage", ...args]),
               fillRect: (...args) => this.operations.push(["fill", this.context.fillStyle, ...args]),
-              beginPath: () => this.operations.push(["begin"]),
-              moveTo: (...args) => this.operations.push(["move", ...args]),
-              lineTo: (...args) => this.operations.push(["line", ...args]),
-              stroke: () => this.operations.push(["stroke", this.context.strokeStyle]),
-              fill: () => this.operations.push(["robot", this.context.fillStyle]),
-              arc: (...args) => this.operations.push(["arc", ...args])
+              beginPath: () => { this.path = []; this.operations.push(["begin"]); },
+              moveTo: (...args) => { this.path.push(["move", ...args]); this.operations.push(["move", ...args]); },
+              lineTo: (...args) => { this.path.push(["line", ...args]); this.operations.push(["line", ...args]); },
+              stroke: () => this.operations.push(["stroke", this.context.strokeStyle, this.context.globalAlpha, [...this.path]]),
+              fill: () => this.operations.push(["robot", this.context.fillStyle, this.context.globalAlpha]),
+              arc: (...args) => this.operations.push(["arc", ...args]),
+              closePath: () => this.operations.push(["close"])
             };
           }
           getContext() { return this.context; }
@@ -98,7 +108,17 @@ def _run_map_scenario(scenario):
         };
         const canvas = new FakeCanvas();
         const state = (overrides = {}) => ({
+          localized: true,
           localization: {x: 4, y: 5, yaw: 0},
+          gate_mode: "automatic",
+          navigation: {
+            initial_pose_ready: true,
+            action_server_ready: true,
+            goal_status: "idle",
+            cancel_available: false,
+            distance_remaining: null,
+            message: null
+          },
           layers: {static: null, global_costmap: null, local_costmap: null, path: null},
           ...overrides
         });
@@ -139,15 +159,310 @@ def _run_map_scenario(scenario):
             return;
           }
           const navigationStatus = new FakeElement("navigationStatus");
+          const statusStrip = new FakeElement(
+            "statusStrip", {left: 0, top: 0, width: 200, height: 20}
+          );
+          const manualPanel = new FakeElement(
+            "manualPanel", {left: 0, top: 80, width: 200, height: 20}
+          );
           const buttons = {
             zoomIn: new FakeElement("mapZoomIn"),
             zoomOut: new FakeElement("mapZoomOut"),
             fit: new FakeElement("mapFit"),
             centerRobot: new FakeElement("mapCenterRobot")
           };
+          const navigationButtons = {
+            initialPose: new FakeElement("setInitialPose"),
+            navigationGoal: new FakeElement("setNavigationGoal"),
+            navigationCancel: new FakeElement("cancelNavigation"),
+            placementConfirm: new FakeElement("confirmPlacement"),
+            placementCancel: new FakeElement("cancelPlacement")
+          };
+          const navigationRequests = [];
+          const navigationResults = [];
+          const request = async (path, body) => {
+            navigationRequests.push({path, body});
+            const result = navigationResults.shift();
+            if (result instanceof Error) throw result;
+            return result || {ok: true};
+          };
           const view = RobotMapView.create({
-            canvas, buttons, navigationStatus, poll: false
+            canvas, buttons, navigationStatus, statusStrip, manualPanel,
+            navigationButtons, request, poll: false
           });
+          if (scenario === "placement-preview-and-pointer") {
+            assert.strictEqual(typeof view.startPlacement, "function");
+            assert.strictEqual(typeof view.cancelPlacement, "function");
+            assert.strictEqual(typeof view.getPlacementPreview, "function");
+            assert.strictEqual(view.getPlacementPreview(), null);
+            assert.strictEqual(
+              canvas.operations.some((operation) =>
+                operation[0] === "stroke" && operation[2] > 0 && operation[2] < 1
+              ),
+              false
+            );
+
+            responses.push(bytes([0, 0, 0, 0], '"7"'));
+            await view.applyState(state({
+              localization: {x: 4, y: 5, yaw: 0.25},
+              layers: {
+                static: grid(7), global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            canvas.operations.length = 0;
+            const initialWidth = canvas.width;
+            const initialHeight = canvas.height;
+            view.startPlacement("initial_pose");
+            const preview = view.getPlacementPreview();
+            assert.deepStrictEqual(preview, {
+              x: 0, y: 0, yaw: 0.25, map_revision: 7
+            });
+            assert.notStrictEqual(view.getPlacementPreview(), preview);
+            assert.strictEqual(navigationButtons.initialPose.hidden, true);
+            assert.strictEqual(navigationButtons.navigationGoal.hidden, true);
+            assert.strictEqual(navigationButtons.navigationCancel.hidden, true);
+            assert.strictEqual(navigationButtons.placementConfirm.hidden, false);
+            assert.strictEqual(navigationButtons.placementCancel.hidden, false);
+
+            const placementStrokes = canvas.operations.filter((operation) =>
+              operation[0] === "stroke" && operation[2] > 0 && operation[2] < 1
+            );
+            assert(placementStrokes.length >= 2, "crosshair and arrow must both draw");
+            const arrowStroke = placementStrokes.at(-1);
+            const tipSegment = arrowStroke[3].find((segment) => segment[0] === "line");
+            assert(tipSegment, "direction arrow needs a screen-space tip");
+            const transformBeforeRotate = view.getTransform();
+            await canvas.emit("pointerdown", {
+              clientX: tipSegment[1], clientY: tipSegment[2]
+            });
+            await canvas.emit("pointermove", {clientX: 100, clientY: 10});
+            await canvas.emit("pointerup", {clientX: 100, clientY: 10});
+            assert(Math.abs(view.getPlacementPreview().yaw - Math.PI / 2) < 1e-12);
+            assert.deepStrictEqual(view.getTransform(), transformBeforeRotate);
+
+            const yawBeforePan = view.getPlacementPreview().yaw;
+            await canvas.emit("pointerdown", {clientX: 10, clientY: 20});
+            await canvas.emit("pointermove", {clientX: 30, clientY: 45});
+            await canvas.emit("pointerup", {clientX: 30, clientY: 45});
+            assert.strictEqual(view.getPlacementPreview().yaw, yawBeforePan);
+            const transformAfterPan = view.getTransform();
+            assert.strictEqual(transformAfterPan.x - transformBeforeRotate.x, 20);
+            assert.strictEqual(transformAfterPan.y - transformBeforeRotate.y, 25);
+
+            const beforeZoom = view.getPlacementPreview();
+            const beforeZoomStroke = canvas.operations.filter((operation) =>
+              operation[0] === "stroke" && operation[2] > 0 && operation[2] < 1
+            ).at(-1);
+            const beforeZoomTip = beforeZoomStroke[3].find((segment) => segment[0] === "line");
+            view.zoomIn();
+            const afterZoom = view.getPlacementPreview();
+            const afterZoomStroke = canvas.operations.filter((operation) =>
+              operation[0] === "stroke" && operation[2] > 0 && operation[2] < 1
+            ).at(-1);
+            const afterZoomTip = afterZoomStroke[3].find((segment) => segment[0] === "line");
+            assert.notDeepStrictEqual(afterZoom, beforeZoom);
+            assert.strictEqual(
+              Math.hypot(beforeZoomTip[1] - 100, beforeZoomTip[2] - 50),
+              Math.hypot(afterZoomTip[1] - 100, afterZoomTip[2] - 50)
+            );
+            assert.strictEqual(canvas.width, initialWidth);
+            assert.strictEqual(canvas.height, initialHeight);
+
+            manualPanel.hidden = true;
+            view.render();
+            const hiddenPanelPreview = view.getPlacementPreview();
+            assert.notStrictEqual(hiddenPanelPreview.y, afterZoom.y);
+            const beforeFit = view.getPlacementPreview();
+            view.fit();
+            assert.notDeepStrictEqual(view.getPlacementPreview(), beforeFit);
+            assert.strictEqual(canvas.width, initialWidth);
+            assert.strictEqual(canvas.height, initialHeight);
+
+            canvas.operations.length = 0;
+            view.cancelPlacement();
+            assert.strictEqual(view.getPlacementPreview(), null);
+            assert.strictEqual(navigationButtons.placementConfirm.hidden, true);
+            assert.strictEqual(navigationButtons.placementCancel.hidden, true);
+            assert.strictEqual(navigationButtons.initialPose.hidden, false);
+            assert.strictEqual(
+              canvas.operations.some((operation) =>
+                operation[0] === "stroke" && operation[2] > 0 && operation[2] < 1
+              ),
+              false
+            );
+            assert.deepStrictEqual(navigationRequests, []);
+            return;
+          }
+          if (scenario === "placement-requests") {
+            assert.strictEqual(typeof view.startPlacement, "function");
+            responses.push(bytes([0, 0, 0, 0], '"3"'));
+            await view.applyState(state({
+              localization: {x: 4, y: 5, yaw: 0.5},
+              layers: {
+                static: grid(3), global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+
+            view.startPlacement("initial_pose");
+            const initialPreview = view.getPlacementPreview();
+            let resolveInitialRequest;
+            navigationResults.push(new Promise((resolve) => {
+              resolveInitialRequest = resolve;
+            }));
+            const firstConfirm = navigationButtons.placementConfirm.emit("click");
+            await view.applyState(state({
+              localization: {x: 4, y: 5, yaw: 0.5},
+              layers: {
+                static: grid(3), global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            const duplicateConfirm = navigationButtons.placementConfirm.emit("click");
+            assert.strictEqual(navigationRequests.length, 1);
+            resolveInitialRequest({ok: true});
+            await Promise.all([firstConfirm, duplicateConfirm]);
+            assert.deepStrictEqual(navigationRequests[0], {
+              path: "/api/initial-pose", body: initialPreview
+            });
+            assert.strictEqual(view.getPlacementPreview(), null);
+
+            view.startPlacement("navigation_goal");
+            const rejectedPreview = view.getPlacementPreview();
+            navigationResults.push(new Error("action unavailable"));
+            await navigationButtons.placementConfirm.emit("click");
+            assert.deepStrictEqual(view.getPlacementPreview(), rejectedPreview);
+            assert.strictEqual(
+              (navigationStatus.textContent.match(/请求失败/g) || []).length,
+              1
+            );
+            assert(navigationStatus.textContent.includes("action unavailable"));
+            assert.deepStrictEqual(navigationRequests[1], {
+              path: "/api/navigation-goal", body: rejectedPreview
+            });
+
+            view.startPlacement("initial_pose");
+            assert(!navigationStatus.textContent.includes("action unavailable"));
+            view.cancelPlacement();
+            assert.strictEqual(navigationRequests.length, 2);
+
+            view.startPlacement("navigation_goal");
+            const retryPreview = view.getPlacementPreview();
+            navigationResults.push(new Error("retry me"));
+            await navigationButtons.placementConfirm.emit("click");
+            assert.deepStrictEqual(view.getPlacementPreview(), retryPreview);
+            navigationResults.push({goal_status: "sending"});
+            await navigationButtons.placementConfirm.emit("click");
+            assert.strictEqual(view.getPlacementPreview(), null);
+            assert(!navigationStatus.textContent.includes("retry me"));
+            assert.deepStrictEqual(navigationRequests.slice(2, 4), [
+              {path: "/api/navigation-goal", body: retryPreview},
+              {path: "/api/navigation-goal", body: retryPreview}
+            ]);
+
+            navigationResults.push({});
+            await navigationButtons.navigationCancel.emit("click");
+            assert.deepStrictEqual(navigationRequests[4], {
+              path: "/api/navigation-cancel", body: {}
+            });
+            assert.strictEqual(
+              navigationRequests.some((item) => item.path === "/api/resume-automatic"),
+              false
+            );
+            return;
+          }
+          if (scenario === "navigation-availability-and-status") {
+            assert.strictEqual(typeof view.startPlacement, "function");
+            const navigation = (overrides = {}) => ({
+              initial_pose_ready: true,
+              action_server_ready: true,
+              goal_status: "idle",
+              cancel_available: false,
+              distance_remaining: null,
+              message: null,
+              ...overrides
+            });
+            const availableState = (overrides = {}) => state({
+              layers: {
+                static: grid(1), global_costmap: null,
+                local_costmap: null, path: null
+              },
+              ...overrides
+            });
+            responses.push(bytes([0, 0, 0, 0]));
+            await view.applyState(availableState());
+            assert.strictEqual(navigationButtons.initialPose.disabled, false);
+            assert.strictEqual(navigationButtons.navigationGoal.disabled, false);
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+
+            await view.applyState(availableState({gate_mode: "manual"}));
+            assert.strictEqual(navigationButtons.initialPose.disabled, false);
+            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
+
+            await view.applyState(availableState({
+              localized: false, localization: null
+            }));
+            assert.strictEqual(navigationButtons.initialPose.disabled, false);
+            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
+
+            await view.applyState(availableState({
+              navigation: navigation({action_server_ready: false})
+            }));
+            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
+
+            await view.applyState(availableState({
+              navigation: navigation({initial_pose_ready: false})
+            }));
+            assert.strictEqual(navigationButtons.initialPose.disabled, true);
+
+            await view.applyState(availableState({
+              navigation: navigation({
+                initial_pose_ready: false,
+                goal_status: "navigating",
+                cancel_available: true,
+                distance_remaining: 3.5,
+                message: "controller active"
+              })
+            }));
+            assert.strictEqual(navigationButtons.initialPose.disabled, true);
+            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+            assert(navigationStatus.textContent.includes("3.5"));
+            assert(!navigationStatus.textContent.includes("navigating"));
+            assert(!/%%|ETA|预计/.test(navigationStatus.textContent));
+
+            for (const [goalStatus, expected] of [
+              ["sending", "发送"], ["canceling", "取消"],
+              ["succeeded", "到达"], ["canceled", "已取消"],
+              ["failed", "失败"]
+            ]) {
+              await view.applyState(availableState({
+                navigation: navigation({
+                  initial_pose_ready: !["sending", "canceling"].includes(goalStatus),
+                  goal_status: goalStatus,
+                  message: goalStatus === "failed" ? "planner stopped" : null
+                })
+              }));
+              assert(navigationStatus.textContent.includes(expected), goalStatus);
+              assert(!navigationStatus.textContent.includes(goalStatus), goalStatus);
+              assert(!/%%|ETA|预计/.test(navigationStatus.textContent), goalStatus);
+            }
+            assert(navigationStatus.textContent.includes("planner stopped"));
+
+            await view.applyState(availableState({
+              map_error: "map offline",
+              navigation: navigation({
+                initial_pose_ready: true,
+                goal_status: "navigating",
+                cancel_available: true
+              })
+            }));
+            assert.strictEqual(navigationButtons.initialPose.disabled, true);
+            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
+            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+            return;
+          }
           if (scenario === "revision") {
             responses.push(json(state({layers: {static: grid(1), global_costmap: null, local_costmap: null, path: null}})), bytes([0, 255, 0, 0]));
             await view.poll();
@@ -488,6 +803,21 @@ def test_state_etag_must_match_304_before_revision_advances():
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_navigation_degradation_status_is_separate_and_scoped():
     _run_map_scenario("navigation-status")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_mobile_placement_preview_rendering_and_pointer_ownership():
+    _run_map_scenario("placement-preview-and-pointer")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_mobile_placement_confirmation_retry_and_cancel_requests():
+    _run_map_scenario("placement-requests")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_navigation_action_availability_and_human_status_labels():
+    _run_map_scenario("navigation-availability-and-status")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")

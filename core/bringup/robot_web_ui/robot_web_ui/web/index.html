@@ -67,6 +67,17 @@
       font-size: .85rem;
       line-height: 1.4;
     }
+    #navigationActions {
+      grid-column: 1 / -1;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+    #navigationActions button {
+      flex: 1 1 auto;
+      min-height: 44px;
+    }
+    #navigationActions button[hidden] { display: none; }
     header {
       display: flex;
       align-items: baseline;
@@ -210,6 +221,13 @@
     <button id="modeToggle" disabled>状态同步中…</button>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
     <p id="navigationStatus" role="status" aria-live="polite"></p>
+    <section id="navigationActions" aria-label="导航操作">
+      <button id="setInitialPose" disabled>设置初始位姿</button>
+      <button id="setNavigationGoal" disabled>设置导航目标</button>
+      <button id="cancelNavigation" disabled>取消导航</button>
+      <button id="confirmPlacement" hidden disabled>确认位置</button>
+      <button id="cancelPlacement" hidden disabled>取消放置</button>
+    </section>
   </section>
   <section id="manualPanel" class="overlay" aria-label="手动控制" hidden>
     <section class="panel speed-row" aria-label="速度设置">
@@ -499,7 +517,17 @@
         fit: document.getElementById("mapFit"),
         centerRobot: document.getElementById("mapCenterRobot")
       },
-      navigationStatus: document.getElementById("navigationStatus")
+      navigationButtons: {
+        initialPose: document.getElementById("setInitialPose"),
+        navigationGoal: document.getElementById("setNavigationGoal"),
+        navigationCancel: document.getElementById("cancelNavigation"),
+        placementConfirm: document.getElementById("confirmPlacement"),
+        placementCancel: document.getElementById("cancelPlacement")
+      },
+      statusStrip: document.getElementById("statusStrip"),
+      manualPanel: document.getElementById("manualPanel"),
+      navigationStatus: document.getElementById("navigationStatus"),
+      request: post
     });
   }
 </script>

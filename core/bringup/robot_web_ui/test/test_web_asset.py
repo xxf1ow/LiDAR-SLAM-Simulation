@@ -85,6 +85,43 @@ def test_navigation_status_is_separate_from_manual_notice_and_panel():
     assert 'const notice = document.getElementById("notice")' in source
 
 
+def test_mobile_navigation_controls_have_exact_ids_and_map_view_wiring():
+    source = HTML.read_text(encoding="utf-8")
+
+    for element_id in (
+        "navigationActions",
+        "setInitialPose",
+        "setNavigationGoal",
+        "cancelNavigation",
+        "confirmPlacement",
+        "cancelPlacement",
+    ):
+        assert source.count(f'id="{element_id}"') == 1
+    assert "navigationButtons: {" in source
+    assert 'initialPose: document.getElementById("setInitialPose")' in source
+    assert (
+        'navigationGoal: document.getElementById("setNavigationGoal")'
+        in source
+    )
+    assert (
+        'navigationCancel: document.getElementById("cancelNavigation")'
+        in source
+    )
+    assert (
+        'placementConfirm: document.getElementById("confirmPlacement")'
+        in source
+    )
+    assert (
+        'placementCancel: document.getElementById("cancelPlacement")'
+        in source
+    )
+    assert 'statusStrip: document.getElementById("statusStrip")' in source
+    assert 'manualPanel: document.getElementById("manualPanel")' in source
+    assert "request: post" in source
+    assert source.index("buttons: {") < source.index("navigationButtons: {")
+    assert "getTransform()" not in source
+
+
 def test_page_uses_neutral_api_without_vendor_surface():
     source = HTML.read_text(encoding="utf-8")
 
