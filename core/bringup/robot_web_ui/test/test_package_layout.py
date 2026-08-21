@@ -74,9 +74,12 @@ def test_map_yaml_path_is_the_only_required_runtime_only_parameter():
         if isinstance(call.func, ast.Attribute)
         and call.func.attr == "create_publisher"
     ]
-    assert len(publishers) == 1
+    assert len(publishers) == 2
     assert ast.unparse(publishers[0].args[0]) == "TwistStamped"
     assert ast.literal_eval(publishers[0].args[1]) == "/cmd_vel_manual"
+    assert ast.unparse(publishers[1].args[0]) == "PoseWithCovarianceStamped"
+    assert ast.literal_eval(publishers[1].args[1]) == "/initialpose"
+    assert ast.unparse(publishers[1].args[2]) == "initial_pose_qos"
 
     subscriptions = [
         call
@@ -104,7 +107,7 @@ def test_map_yaml_path_is_the_only_required_runtime_only_parameter():
         if isinstance(call.func, ast.Name)
         and call.func.id == "QoSProfile"
     ]
-    assert len(qos_profiles) == 3
+    assert len(qos_profiles) == 4
     assert {
         keyword.arg: ast.unparse(keyword.value)
         for keyword in qos_profiles[0].keywords
@@ -113,6 +116,15 @@ def test_map_yaml_path_is_the_only_required_runtime_only_parameter():
         "depth": "1",
         "reliability": "ReliabilityPolicy.RELIABLE",
         "durability": "DurabilityPolicy.TRANSIENT_LOCAL",
+    }
+    assert {
+        keyword.arg: ast.unparse(keyword.value)
+        for keyword in qos_profiles[1].keywords
+    } == {
+        "history": "HistoryPolicy.KEEP_LAST",
+        "depth": "1",
+        "reliability": "ReliabilityPolicy.RELIABLE",
+        "durability": "DurabilityPolicy.VOLATILE",
     }
 
     clients = [

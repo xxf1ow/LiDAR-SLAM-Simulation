@@ -7,7 +7,7 @@ from pathlib import Path
 import rclpy
 import yaml
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -36,6 +36,7 @@ from .map_snapshot import (
     update_grid_snapshot,
     update_path_snapshot,
 )
+from .navigation_request import parse_navigation_pose, yaw_quaternion
 
 
 ODOM_TIMEOUT = 0.5
@@ -71,6 +72,8 @@ class WebUiNode(Node):
         self._localization_error = None
         self._path_error = None
         self._local_layer = (None, None, None, None)
+        self._goal_lock = threading.Lock()
+        self._goal_status = "idle"
         try:
             self._static_map = load_nav2_pgm(Path(map_yaml_path))
         except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
@@ -86,6 +89,17 @@ class WebUiNode(Node):
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
             durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        initial_pose_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._initial_pose_publisher = self.create_publisher(
+            PoseWithCovarianceStamped,
+            "/initialpose",
+            initial_pose_qos,
         )
         self._mode_subscription = self.create_subscription(
             String,
@@ -204,6 +218,36 @@ class WebUiNode(Node):
     def _gate_mode_callback(self, message: String) -> None:
         if message.data in {"manual", "automatic"}:
             self._gate_mode = message.data
+
+    def publish_initial_pose(self, payload: dict[str, object]) -> None:
+        static = self._static_map
+        if static is None:
+            raise ActionUnavailable("static map unavailable")
+        pose = parse_navigation_pose(
+            payload,
+            static.info,
+            static.binary.revision,
+        )
+        if self._initial_pose_publisher.get_subscription_count() <= 0:
+            raise ActionUnavailable("initial pose subscriber unavailable")
+        with self._goal_lock:
+            goal_status = self._goal_status
+        if goal_status in {"sending", "navigating", "canceling"}:
+            raise ActionConflict("navigation goal is active", self._gate_mode)
+
+        message = PoseWithCovarianceStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = "map"
+        message.pose.pose.position.x = pose.x
+        message.pose.pose.position.y = pose.y
+        message.pose.pose.position.z = 0.0
+        message.pose.pose.orientation.x = 0.0
+        message.pose.pose.orientation.y = 0.0
+        message.pose.pose.orientation.z, message.pose.pose.orientation.w = (
+            yaw_quaternion(pose.yaw)
+        )
+        message.pose.covariance = [0.0] * 36
+        self._initial_pose_publisher.publish(message)
 
     def _now_seconds(self) -> float:
         return self.get_clock().now().nanoseconds / 1_000_000_000.0
@@ -350,6 +394,13 @@ class WebUiNode(Node):
 
     def navigation_state(self) -> dict[str, object]:
         static = self._static_map
+        with self._goal_lock:
+            goal_status = self._goal_status
+        initial_pose_ready = (
+            static is not None
+            and self._initial_pose_publisher.get_subscription_count() > 0
+            and goal_status not in {"sending", "navigating", "canceling"}
+        )
         localization = self._localization_pose
         global_costmap = self._grid_state(self._global_costmap)
         (
@@ -383,6 +434,14 @@ class WebUiNode(Node):
             "path_error": self._path_error,
             "gate_mode": self._gate_mode,
             "motion": self.motion_status(),
+            "navigation": {
+                "initial_pose_ready": initial_pose_ready,
+                "action_server_ready": False,
+                "goal_status": goal_status,
+                "cancel_available": False,
+                "distance_remaining": None,
+                "message": None,
+            },
             "layers": {
                 "static": None if static is None else {
                     **static.info.as_dict(),

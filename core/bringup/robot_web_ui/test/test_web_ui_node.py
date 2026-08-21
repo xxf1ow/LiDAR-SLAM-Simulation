@@ -14,6 +14,7 @@ from robot_web_ui.map_snapshot import (
     update_grid_snapshot,
     update_path_snapshot,
 )
+from robot_web_ui.navigation_request import MapRevisionConflict
 
 
 SYNTHETIC_MAX_LINEAR_SPEED = 1.7
@@ -41,8 +42,8 @@ def node_module(monkeypatch):
             self.declared_parameters[name] = value
             return types.SimpleNamespace(value=value)
 
-        def create_publisher(self, *_args):
-            publisher = FakePublisher()
+        def create_publisher(self, *args):
+            publisher = FakePublisher(args)
             self.publishers.append(publisher)
             return publisher
 
@@ -80,6 +81,19 @@ def node_module(monkeypatch):
             self.twist = types.SimpleNamespace(
                 linear=types.SimpleNamespace(x=0.0),
                 angular=types.SimpleNamespace(z=0.0),
+            )
+
+    class FakePoseWithCovarianceStamped:
+        def __init__(self):
+            self.header = types.SimpleNamespace(stamp=None, frame_id="")
+            self.pose = types.SimpleNamespace(
+                pose=types.SimpleNamespace(
+                    position=types.SimpleNamespace(x=0.0, y=0.0, z=0.0),
+                    orientation=types.SimpleNamespace(
+                        x=0.0, y=0.0, z=0.0, w=1.0
+                    ),
+                ),
+                covariance=[0.0] * 36,
             )
 
     class FakeTrigger:
@@ -132,6 +146,7 @@ def node_module(monkeypatch):
     geometry_msgs = types.ModuleType("geometry_msgs")
     geometry_msgs_msg = types.ModuleType("geometry_msgs.msg")
     geometry_msgs_msg.TwistStamped = FakeTwistStamped
+    geometry_msgs_msg.PoseWithCovarianceStamped = FakePoseWithCovarianceStamped
     nav_msgs = types.ModuleType("nav_msgs")
     nav_msgs_msg = types.ModuleType("nav_msgs.msg")
     nav_msgs_msg.Odometry = FakeOdometry
@@ -236,11 +251,16 @@ def node_module(monkeypatch):
 
 
 class FakePublisher:
-    def __init__(self):
+    def __init__(self, args=()):
+        self.args = args
         self.messages = []
+        self.subscription_count = 0
 
     def publish(self, message):
         self.messages.append(message)
+
+    def get_subscription_count(self):
+        return self.subscription_count
 
 
 class FakeFuture:
@@ -341,6 +361,9 @@ def navigation_bare_node(module):
     node._local_layer = (None, None, None, None)
     node._gate_mode = "automatic"
     node._odom_feedback = None
+    node._initial_pose_publisher = FakePublisher()
+    node._goal_lock = threading.Lock()
+    node._goal_status = "idle"
     node.get_clock = lambda: types.SimpleNamespace(
         now=lambda: types.SimpleNamespace(nanoseconds=0)
     )
@@ -364,6 +387,14 @@ def test_static_map_load_success_exposes_state_and_asset(node_module, monkeypatc
             "linear_x": None,
             "angular_z": None,
             "feedback_fresh": False,
+        },
+        "navigation": {
+            "initial_pose_ready": False,
+            "action_server_ready": False,
+            "goal_status": "idle",
+            "cancel_available": False,
+            "distance_remaining": None,
+            "message": None,
         },
         "layers": {
             "static": {
@@ -539,16 +570,26 @@ def test_navigation_state_is_a_complete_immutable_projection(node_module):
     state["layers"]["static"]["origin"][0] = 99.0
     state["layers"]["local_costmap"]["map_from_source"][0] = 99.0
     state["localization"]["x"] = 99.0
+    state["navigation"]["message"] = "modified"
     fresh = node.navigation_state()
 
     assert set(fresh) == {
         "map_error", "localized", "localization", "localization_error",
-        "path_error", "gate_mode", "motion", "layers",
+        "path_error", "gate_mode", "motion", "navigation", "layers",
     }
     assert fresh["motion"] == node.motion_status()
     assert fresh["layers"]["static"]["origin"][0] == -1.0
     assert fresh["layers"]["local_costmap"]["map_from_source"][0] == 1.0
     assert fresh["localization"]["x"] == 5.0
+    assert fresh["navigation"] == {
+        "initial_pose_ready": False,
+        "action_server_ready": False,
+        "goal_status": "idle",
+        "cancel_available": False,
+        "distance_remaining": None,
+        "message": None,
+    }
+    assert fresh["navigation"] is not state["navigation"]
 
 
 def test_local_costmap_state_reads_one_atomic_layer_projection(node_module):
@@ -981,3 +1022,156 @@ def test_destroy_cleans_up_once_and_is_idempotent(node_module):
     assert thread.alive_checks == 1
     assert thread.join_timeouts == [1.0]
     assert node.base_destroy_calls == 1
+
+
+def initial_pose_payload(**changes):
+    payload = {
+        "x": -0.95,
+        "y": 2.05,
+        "yaw": 0.4,
+        "map_revision": 3,
+    }
+    payload.update(changes)
+    return payload
+
+
+def ready_initial_pose_node(module):
+    node = navigation_bare_node(module)
+    node._static_map = _static_snapshot()
+    node._initial_pose_publisher.subscription_count = 1
+    node.get_clock = lambda: types.SimpleNamespace(
+        now=lambda: types.SimpleNamespace(to_msg=lambda: "stamp")
+    )
+    return node
+
+
+def test_node_declares_initial_pose_publisher_contract(node_module):
+    node = node_module.WebUiNode()
+
+    assert len(node.publishers) == 2
+    message_type, topic, qos = node.publishers[1].args
+    assert message_type is node_module.PoseWithCovarianceStamped
+    assert topic == "/initialpose"
+    assert qos.settings["history"] is node_module.HistoryPolicy.KEEP_LAST
+    assert qos.settings["depth"] == 1
+    assert qos.settings["reliability"] is node_module.ReliabilityPolicy.RELIABLE
+    assert qos.settings["durability"] is node_module.DurabilityPolicy.VOLATILE
+    node.destroy_node()
+
+
+@pytest.mark.parametrize("static_map, subscribers", [(None, 1), (_static_snapshot(), 0)])
+def test_initial_pose_rejects_unavailable_map_or_subscribers(
+    node_module, static_map, subscribers
+):
+    node = navigation_bare_node(node_module)
+    node._static_map = static_map
+    node._initial_pose_publisher.subscription_count = subscribers
+
+    with pytest.raises(node_module.ActionUnavailable):
+        node.publish_initial_pose(initial_pose_payload())
+
+    assert node._initial_pose_publisher.messages == []
+
+
+@pytest.mark.parametrize(
+    "gate_mode, localization",
+    [
+        ("manual", None),
+        ("manual", (4.0, 5.0, 0.2)),
+        ("automatic", None),
+        ("automatic", (4.0, 5.0, 0.2)),
+    ],
+)
+def test_initial_pose_publishes_without_mode_or_localization_requirement(
+    node_module, gate_mode, localization
+):
+    node = ready_initial_pose_node(node_module)
+    node._gate_mode = gate_mode
+    node._localization_pose = localization
+
+    node.publish_initial_pose(initial_pose_payload())
+
+    assert len(node._initial_pose_publisher.messages) == 1
+    assert node._localization_pose is localization
+
+
+@pytest.mark.parametrize("status", ["sending", "navigating", "canceling"])
+def test_initial_pose_rejects_active_navigation_without_publishing(
+    node_module, status
+):
+    node = ready_initial_pose_node(node_module)
+    node._goal_status = status
+
+    with pytest.raises(node_module.ActionConflict):
+        node.publish_initial_pose(initial_pose_payload())
+
+    assert node._initial_pose_publisher.messages == []
+
+
+def test_initial_pose_message_is_stamped_map_pose_with_zero_covariance(
+    node_module,
+):
+    node = ready_initial_pose_node(node_module)
+
+    node.publish_initial_pose(initial_pose_payload(yaw=math.pi / 2.0))
+
+    message = node._initial_pose_publisher.messages[0]
+    assert message.header.stamp == "stamp"
+    assert message.header.frame_id == "map"
+    assert message.pose.pose.position.x == -0.95
+    assert message.pose.pose.position.y == 2.05
+    assert message.pose.pose.position.z == 0.0
+    assert message.pose.pose.orientation.x == 0.0
+    assert message.pose.pose.orientation.y == 0.0
+    assert message.pose.pose.orientation.z == pytest.approx(math.sqrt(0.5))
+    assert message.pose.pose.orientation.w == pytest.approx(math.sqrt(0.5))
+    assert message.pose.covariance == [0.0] * 36
+
+
+@pytest.mark.parametrize(
+    "payload, error",
+    [
+        (initial_pose_payload(map_revision=2), MapRevisionConflict),
+        (initial_pose_payload(x=-1.1), ValueError),
+        (initial_pose_payload(yaw=float("nan")), ValueError),
+        ({"x": -0.95}, ValueError),
+    ],
+)
+def test_invalid_initial_pose_payloads_do_not_publish(
+    node_module, payload, error
+):
+    node = ready_initial_pose_node(node_module)
+
+    with pytest.raises(error):
+        node.publish_initial_pose(payload)
+
+    assert node._initial_pose_publisher.messages == []
+
+
+def test_repeated_initial_pose_requests_publish_once_per_call(node_module):
+    node = ready_initial_pose_node(node_module)
+    payload = initial_pose_payload()
+
+    node.publish_initial_pose(payload)
+    node.publish_initial_pose(payload)
+
+    assert len(node._initial_pose_publisher.messages) == 2
+    assert node._initial_pose_publisher.messages[0] is not node._initial_pose_publisher.messages[1]
+
+
+def test_navigation_projection_is_json_native_and_fresh(node_module):
+    node = ready_initial_pose_node(node_module)
+
+    state = node.navigation_state()
+    state["navigation"]["goal_status"] = "changed"
+    fresh = node.navigation_state()
+
+    assert fresh["navigation"] == {
+        "initial_pose_ready": True,
+        "action_server_ready": False,
+        "goal_status": "idle",
+        "cancel_available": False,
+        "distance_remaining": None,
+        "message": None,
+    }
+    assert fresh["navigation"] is not state["navigation"]
