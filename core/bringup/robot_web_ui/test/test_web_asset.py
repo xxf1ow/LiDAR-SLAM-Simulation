@@ -54,6 +54,7 @@ def test_page_structure_matches_contextual_mobile_contract():
     assert 'id="speedValue"' in manual_markup
     assert "background: rgba(11, 18, 32, 0.68)" in status_css
     assert "color: #f2f6fb" in status_css
+    assert '#feedbackState::before { content: "· "; }' in source
     assert "padding: 8px 10px" in status_css
     assert "border-radius: 10px" in status_css
     assert "text-shadow: -1px -1px 0 #fff" not in status_css
