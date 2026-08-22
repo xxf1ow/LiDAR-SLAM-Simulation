@@ -16,6 +16,7 @@ def _run_node(script):
         [NODE, "-"],
         input=textwrap.dedent(script),
         text=True,
+        encoding="utf-8",
         capture_output=True,
         timeout=10,
         check=False,
@@ -116,6 +117,7 @@ def _run_map_scenario(scenario):
             action_server_ready: true,
             goal_status: "idle",
             cancel_available: false,
+            phase: null,
             distance_remaining: null,
             message: null
           },
@@ -173,8 +175,7 @@ def _run_map_scenario(scenario):
           };
           const navigationButtons = {
             initialPose: new FakeElement("setInitialPose"),
-            navigationGoal: new FakeElement("setNavigationGoal"),
-            navigationCancel: new FakeElement("cancelNavigation"),
+            navigationAction: new FakeElement("navigationAction"),
             placementConfirm: new FakeElement("confirmPlacement"),
             placementCancel: new FakeElement("cancelPlacement")
           };
@@ -220,8 +221,7 @@ def _run_map_scenario(scenario):
             });
             assert.notStrictEqual(view.getPlacementPreview(), preview);
             assert.strictEqual(navigationButtons.initialPose.hidden, true);
-            assert.strictEqual(navigationButtons.navigationGoal.hidden, true);
-            assert.strictEqual(navigationButtons.navigationCancel.hidden, true);
+            assert.strictEqual(navigationButtons.navigationAction.hidden, true);
             assert.strictEqual(navigationButtons.placementConfirm.hidden, false);
             assert.strictEqual(navigationButtons.placementCancel.hidden, false);
 
@@ -308,6 +308,7 @@ def _run_map_scenario(scenario):
             assert.strictEqual(navigationButtons.placementConfirm.hidden, true);
             assert.strictEqual(navigationButtons.placementCancel.hidden, true);
             assert.strictEqual(navigationButtons.initialPose.hidden, false);
+            assert.strictEqual(navigationButtons.navigationAction.hidden, false);
             assert.strictEqual(
               canvas.operations.some((operation) =>
                 operation[0] === "stroke" && operation[2] > 0 && operation[2] < 1
@@ -385,7 +386,22 @@ def _run_map_scenario(scenario):
             ]);
 
             navigationResults.push({});
-            await navigationButtons.navigationCancel.emit("click");
+            await view.applyState(state({
+              navigation: {
+                initial_pose_ready: true,
+                action_server_ready: true,
+                goal_status: "navigating",
+                cancel_available: true,
+                phase: null,
+                distance_remaining: null,
+                message: null
+              },
+              layers: {
+                static: grid(3), global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            await navigationButtons.navigationAction.emit("click");
             assert.deepStrictEqual(navigationRequests[4], {
               path: "/api/navigation-cancel", body: {}
             });
@@ -414,17 +430,17 @@ def _run_map_scenario(scenario):
             });
             responses.push(bytes([0, 0, 0, 0]));
             await view.applyState(activeState());
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
 
             let resolveCancel;
             navigationResults.push(new Promise((resolve) => {
               resolveCancel = resolve;
             }));
-            const firstCancel = navigationButtons.navigationCancel.emit("click");
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            const firstCancel = navigationButtons.navigationAction.emit("click");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
             await view.applyState(activeState());
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
-            const duplicateCancel = navigationButtons.navigationCancel.emit("click");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
+            const duplicateCancel = navigationButtons.navigationAction.emit("click");
             resolveCancel({ok: true, goal_status: "canceling"});
             await Promise.all([firstCancel, duplicateCancel]);
             assert.strictEqual(
@@ -433,7 +449,7 @@ def _run_map_scenario(scenario):
               ).length,
               1
             );
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
 
             await view.applyState(activeState({
               goal_status: "canceling", cancel_available: false
@@ -442,16 +458,16 @@ def _run_map_scenario(scenario):
               goal_status: "canceled", cancel_available: false
             }));
             await view.applyState(activeState());
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
 
             let rejectCancel;
             navigationResults.push(new Promise((_resolve, reject) => {
               rejectCancel = reject;
             }));
-            const failingCancel = navigationButtons.navigationCancel.emit("click");
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            const failingCancel = navigationButtons.navigationAction.emit("click");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
             await view.applyState(activeState());
-            const duplicateFailure = navigationButtons.navigationCancel.emit("click");
+            const duplicateFailure = navigationButtons.navigationAction.emit("click");
             rejectCancel(new Error("cancel offline"));
             await Promise.all([failingCancel, duplicateFailure]);
             assert.strictEqual(
@@ -461,21 +477,165 @@ def _run_map_scenario(scenario):
               2
             );
             assert(navigationStatus.textContent.includes("cancel offline"));
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
 
             navigationResults.push({ok: true, goal_status: "canceling"});
-            await navigationButtons.navigationCancel.emit("click");
+            await navigationButtons.navigationAction.emit("click");
             assert.strictEqual(
               navigationRequests.filter((item) =>
                 item.path === "/api/navigation-cancel"
               ).length,
               3
             );
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
             assert(!navigationStatus.textContent.includes("cancel offline"));
             await view.applyState(activeState({
               goal_status: "canceling", cancel_available: false
             }));
+            return;
+          }
+          if (scenario === "navigation-phase-labels") {
+            const phaseLabels = {
+              planning: "正在规划路径",
+              following: "正在跟踪路径",
+              clearing_global_plan: "路径规划受阻，正在清理全局代价地图",
+              clearing_local_control: "路径跟踪受阻，正在清理局部代价地图",
+              clearing_global_recovery: "导航恢复：正在清理全局代价地图",
+              clearing_local_recovery: "导航恢复：正在清理局部代价地图",
+              spinning: "导航恢复：正在原地旋转",
+              waiting: "导航恢复：正在等待障碍消退",
+              backing_up: "导航恢复：正在后退"
+            };
+            const navigation = (overrides = {}) => ({
+              initial_pose_ready: true,
+              action_server_ready: true,
+              goal_status: "navigating",
+              cancel_available: true,
+              phase: null,
+              distance_remaining: 3.5,
+              message: null,
+              ...overrides
+            });
+            const availableState = (overrides = {}) => state({
+              layers: {
+                static: grid(1), global_costmap: null,
+                local_costmap: null, path: null
+              },
+              navigation: navigation(overrides)
+            });
+            responses.push(bytes([0, 0, 0, 0]));
+            for (const [phase, label] of Object.entries(phaseLabels)) {
+              await view.applyState(availableState({phase}));
+              assert.strictEqual(
+                navigationStatus.textContent,
+                `${label}，剩余 3.5 米`,
+                phase
+              );
+            }
+            await view.applyState(availableState({phase: null}));
+            assert.strictEqual(
+              navigationStatus.textContent,
+              "导航中，剩余 3.5 米"
+            );
+            await view.applyState(availableState({phase: "unknown_phase"}));
+            assert.strictEqual(
+              navigationStatus.textContent,
+              "导航中，剩余 3.5 米"
+            );
+            await view.applyState(availableState({phase: "planning", distance_remaining: null}));
+            assert.strictEqual(navigationStatus.textContent, "正在规划路径");
+
+            for (const [goalStatus, expected] of [
+              ["sending", "导航目标发送中"],
+              ["canceling", "导航取消中"],
+              ["succeeded", "导航已到达目标"],
+              ["canceled", "导航已取消"],
+              ["failed", "导航失败"]
+            ]) {
+              await view.applyState(availableState({
+                goal_status: goalStatus,
+                phase: "planning",
+                distance_remaining: 3.5
+              }));
+              assert(navigationStatus.textContent.startsWith(expected));
+              assert(!navigationStatus.textContent.includes("正在规划路径"));
+              assert(!navigationStatus.textContent.includes("剩余"));
+            }
+            return;
+          }
+          if (scenario === "navigation-action-button") {
+            const navigation = (overrides = {}) => ({
+              initial_pose_ready: true,
+              action_server_ready: true,
+              goal_status: "idle",
+              cancel_available: false,
+              phase: null,
+              distance_remaining: null,
+              message: null,
+              ...overrides
+            });
+            const availableState = (overrides = {}) => state({
+              layers: {
+                static: grid(1), global_costmap: null,
+                local_costmap: null, path: null
+              },
+              navigation: navigation(overrides)
+            });
+            responses.push(bytes([0, 0, 0, 0]));
+            await view.applyState(availableState());
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "设置导航目标");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
+            await navigationButtons.navigationAction.emit("click");
+            assert.strictEqual(view.getPlacementPreview() !== null, true);
+            assert.strictEqual(navigationButtons.navigationAction.hidden, true);
+            assert.strictEqual(navigationButtons.placementConfirm.hidden, false);
+            assert.strictEqual(navigationButtons.placementCancel.hidden, false);
+            view.cancelPlacement();
+
+            for (const goalStatus of ["succeeded", "canceled", "failed"]) {
+              await view.applyState(availableState({goal_status: goalStatus}));
+              assert.strictEqual(navigationButtons.navigationAction.textContent, "设置导航目标");
+              assert.strictEqual(navigationButtons.navigationAction.disabled, false);
+            }
+            await view.applyState(availableState({action_server_ready: false}));
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "设置导航目标");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
+            await view.applyState(availableState({goal_status: "sending"}));
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "目标发送中");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
+            await view.applyState(availableState({
+              goal_status: "navigating",
+              cancel_available: false
+            }));
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "导航中");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
+
+            await view.applyState(availableState({
+              goal_status: "navigating",
+              cancel_available: true
+            }));
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "取消导航");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
+            let resolveCancel;
+            navigationResults.push(new Promise((resolve) => {
+              resolveCancel = resolve;
+            }));
+            const firstCancel = navigationButtons.navigationAction.emit("click");
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "取消中");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
+            const duplicateCancel = navigationButtons.navigationAction.emit("click");
+            resolveCancel({ok: true});
+            await Promise.all([firstCancel, duplicateCancel]);
+            assert.strictEqual(
+              navigationRequests.filter((item) => item.path === "/api/navigation-cancel").length,
+              1
+            );
+            await view.applyState(availableState({
+              goal_status: "canceling",
+              cancel_available: false
+            }));
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "取消中");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
             return;
           }
           if (scenario === "navigation-availability-and-status") {
@@ -499,23 +659,23 @@ def _run_map_scenario(scenario):
             responses.push(bytes([0, 0, 0, 0]));
             await view.applyState(availableState());
             assert.strictEqual(navigationButtons.initialPose.disabled, false);
-            assert.strictEqual(navigationButtons.navigationGoal.disabled, false);
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, true);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "设置导航目标");
 
             await view.applyState(availableState({gate_mode: "manual"}));
             assert.strictEqual(navigationButtons.initialPose.disabled, false);
-            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
 
             await view.applyState(availableState({
               localized: false, localization: null
             }));
             assert.strictEqual(navigationButtons.initialPose.disabled, false);
-            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
 
             await view.applyState(availableState({
               navigation: navigation({action_server_ready: false})
             }));
-            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
 
             await view.applyState(availableState({
               navigation: navigation({initial_pose_ready: false})
@@ -532,8 +692,8 @@ def _run_map_scenario(scenario):
               })
             }));
             assert.strictEqual(navigationButtons.initialPose.disabled, true);
-            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "取消导航");
             assert(navigationStatus.textContent.includes("3.5"));
             assert(!navigationStatus.textContent.includes("navigating"));
             assert(!/%%|ETA|预计/.test(navigationStatus.textContent));
@@ -570,8 +730,8 @@ def _run_map_scenario(scenario):
               })
             }));
             assert.strictEqual(navigationButtons.initialPose.disabled, true);
-            assert.strictEqual(navigationButtons.navigationGoal.disabled, true);
-            assert.strictEqual(navigationButtons.navigationCancel.disabled, false);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
+            assert.strictEqual(navigationButtons.navigationAction.textContent, "取消导航");
             return;
           }
           if (scenario === "revision") {
@@ -934,6 +1094,16 @@ def test_navigation_cancel_request_pending_owns_double_tap_and_poll_races():
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_navigation_action_availability_and_human_status_labels():
     _run_map_scenario("navigation-availability-and-status")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_navigation_phase_labels_copy_and_distance_composition():
+    _run_map_scenario("navigation-phase-labels")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_navigation_action_button_unifies_goal_and_cancel_feedback():
+    _run_map_scenario("navigation-action-button")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")

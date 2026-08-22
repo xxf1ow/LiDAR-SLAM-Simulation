@@ -29,6 +29,17 @@
   const PLACEMENT_ARROW_LENGTH = 36;
   const PLACEMENT_TIP_HIT_RADIUS = 22;
   const ACTIVE_GOAL_STATUSES = new Set(["sending", "navigating", "canceling"]);
+  const NAVIGATION_PHASE_LABELS = Object.freeze({
+    planning: "正在规划路径",
+    following: "正在跟踪路径",
+    clearing_global_plan: "路径规划受阻，正在清理全局代价地图",
+    clearing_local_control: "路径跟踪受阻，正在清理局部代价地图",
+    clearing_global_recovery: "导航恢复：正在清理全局代价地图",
+    clearing_local_recovery: "导航恢复：正在清理局部代价地图",
+    spinning: "导航恢复：正在原地旋转",
+    waiting: "导航恢复：正在等待障碍消退",
+    backing_up: "导航恢复：正在后退"
+  });
 
   function gridToWorld(info, column, row) {
     const localX = (column + 0.5) * info.resolution;
@@ -326,7 +337,11 @@
       let status = "";
       if (navigation.goal_status === "sending") status = "导航目标发送中";
       if (navigation.goal_status === "navigating") {
-        status = "导航中";
+        status = Object.prototype.hasOwnProperty.call(
+          NAVIGATION_PHASE_LABELS, navigation.phase
+        )
+          ? NAVIGATION_PHASE_LABELS[navigation.phase]
+          : "导航中";
         if (Number.isFinite(navigation.distance_remaining)) {
           status += `，剩余 ${navigation.distance_remaining.toFixed(1)} 米`;
         }
@@ -353,14 +368,31 @@
         navigationButtons.initialPose.hidden = placing;
         navigationButtons.initialPose.disabled = !placementAvailable("initial_pose");
       }
-      if (navigationButtons.navigationGoal) {
-        navigationButtons.navigationGoal.hidden = placing;
-        navigationButtons.navigationGoal.disabled = !placementAvailable("navigation_goal");
-      }
-      if (navigationButtons.navigationCancel) {
-        navigationButtons.navigationCancel.hidden = placing;
-        navigationButtons.navigationCancel.disabled = cancelRequestPending
-          || navigation.cancel_available !== true;
+      if (navigationButtons.navigationAction) {
+        const action = navigationButtons.navigationAction;
+        action.hidden = placing;
+        if (navigation.goal_status === "sending") {
+          action.textContent = "目标发送中";
+          action.disabled = true;
+        } else if (navigation.goal_status === "navigating") {
+          if (cancelRequestPending) {
+            action.textContent = "取消中";
+            action.disabled = true;
+          } else if (navigation.cancel_available === true) {
+            action.textContent = "取消导航";
+            action.disabled = false;
+          } else {
+            action.textContent = "导航中";
+            action.disabled = true;
+          }
+        } else if (navigation.goal_status === "canceling") {
+          action.textContent = "取消中";
+          action.disabled = true;
+        } else {
+          action.textContent = "设置导航目标";
+          action.disabled = !placementAvailable("navigation_goal");
+        }
+        if (placing) action.disabled = true;
       }
       if (navigationButtons.placementConfirm) {
         navigationButtons.placementConfirm.hidden = !placing;
@@ -636,11 +668,18 @@
     if (navigationButtons.initialPose) {
       navigationButtons.initialPose.addEventListener("click", () => startPlacement("initial_pose"));
     }
-    if (navigationButtons.navigationGoal) {
-      navigationButtons.navigationGoal.addEventListener("click", () => startPlacement("navigation_goal"));
-    }
-    if (navigationButtons.navigationCancel) {
-      navigationButtons.navigationCancel.addEventListener("click", cancelNavigation);
+    if (navigationButtons.navigationAction) {
+      navigationButtons.navigationAction.addEventListener("click", () => {
+        const navigation = latestState.navigation || {};
+        if (
+          navigation.goal_status === "navigating"
+          && navigation.cancel_available === true
+        ) {
+          cancelNavigation();
+        } else if (!ACTIVE_GOAL_STATUSES.has(navigation.goal_status)) {
+          startPlacement("navigation_goal");
+        }
+      });
     }
     if (navigationButtons.placementConfirm) {
       navigationButtons.placementConfirm.addEventListener("click", confirmPlacement);

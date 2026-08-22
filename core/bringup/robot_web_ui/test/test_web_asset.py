@@ -91,20 +91,17 @@ def test_mobile_navigation_controls_have_exact_ids_and_map_view_wiring():
     for element_id in (
         "navigationActions",
         "setInitialPose",
-        "setNavigationGoal",
-        "cancelNavigation",
+        "navigationAction",
         "confirmPlacement",
         "cancelPlacement",
     ):
         assert source.count(f'id="{element_id}"') == 1
+    assert 'id="setNavigationGoal"' not in source
+    assert 'id="cancelNavigation"' not in source
     assert "navigationButtons: {" in source
     assert 'initialPose: document.getElementById("setInitialPose")' in source
     assert (
-        'navigationGoal: document.getElementById("setNavigationGoal")'
-        in source
-    )
-    assert (
-        'navigationCancel: document.getElementById("cancelNavigation")'
+        'navigationAction: document.getElementById("navigationAction")'
         in source
     )
     assert (

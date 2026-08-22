@@ -223,8 +223,7 @@
     <p id="navigationStatus" role="status" aria-live="polite"></p>
     <section id="navigationActions" aria-label="导航操作">
       <button id="setInitialPose" disabled>设置初始位姿</button>
-      <button id="setNavigationGoal" disabled>设置导航目标</button>
-      <button id="cancelNavigation" disabled>取消导航</button>
+      <button id="navigationAction" disabled>设置导航目标</button>
       <button id="confirmPlacement" hidden disabled>确认位置</button>
       <button id="cancelPlacement" hidden disabled>取消放置</button>
     </section>
@@ -519,8 +518,7 @@
       },
       navigationButtons: {
         initialPose: document.getElementById("setInitialPose"),
-        navigationGoal: document.getElementById("setNavigationGoal"),
-        navigationCancel: document.getElementById("cancelNavigation"),
+        navigationAction: document.getElementById("navigationAction"),
         placementConfirm: document.getElementById("confirmPlacement"),
         placementCancel: document.getElementById("cancelPlacement")
       },
