@@ -54,6 +54,24 @@ def test_page_structure_matches_contextual_mobile_contract():
     assert "min-height: 44px" in source
 
 
+def test_page_uses_neutral_api_without_vendor_surface():
+    source = HTML.read_text(encoding="utf-8")
+
+    assert 'post("/api/manual-command"' in source
+    assert '"/api/takeover-manual"' in source
+    assert '"/api/resume-automatic"' in source
+    for forbidden in (
+        "/api/status",
+        "/api/driver",
+        "RPM",
+        "hardware feedback",
+        "/driver",
+        "/motor_speed",
+        "/current_speed",
+    ):
+        assert forbidden.lower() not in source.lower()
+
+
 NODE = shutil.which("node")
 
 
