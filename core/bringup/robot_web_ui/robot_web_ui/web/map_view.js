@@ -7,25 +7,21 @@
     local_costmap: "/api/map/local-costmap",
     path: "/api/navigation-path"
   };
-  const STATIC_PALETTE = {
-    free: [229, 231, 235, 255],
-    unknown: [102, 112, 133, 255],
-    occupied: [217, 79, 79, 255]
-  };
-  const COSTMAP_PALETTE = {
-    free: [0, 0, 0, 0],
-    unknown: [102, 112, 133, 128],
-    inflated: [240, 191, 104, 160],
-    lethal: [217, 79, 79, 200]
+  const UNKNOWN_COLOR = [112, 137, 134, 255];
+  const GRID_ALPHA = {
+    static: 1,
+    global_costmap: 0.45,
+    local_costmap: 0.70
   };
   const PALETTE = {
-    path: "#4db7d6",
-    robot: "#ffffff",
-    placement: "#f0bf68"
+    halo: "#111827",
+    path: "#55ffff",
+    robot: "#ffd400",
+    placement: "#ff8a00"
   };
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 128;
-  const PLACEMENT_ALPHA = 0.72;
+  const PLACEMENT_ALPHA = 0.90;
   const PLACEMENT_ARROW_LENGTH = 36;
   const PLACEMENT_TIP_HIT_RADIUS = 22;
   const ACTIVE_GOAL_STATUSES = new Set(["sending", "navigating", "canceling"]);
@@ -126,15 +122,18 @@
     }
 
     function cellRgba(name, cell) {
+      if (cell === 255) return UNKNOWN_COLOR;
       if (name === "static") {
-        if (cell === 255) return STATIC_PALETTE.unknown;
-        if (cell >= 100) return STATIC_PALETTE.occupied;
-        return STATIC_PALETTE.free;
+        const occupancy = Math.max(0, Math.min(100, cell));
+        const value = 255 - Math.floor(255 * occupancy / 100);
+        return [value, value, value, 255];
       }
-      if (cell === 255) return COSTMAP_PALETTE.unknown;
-      if (cell >= 99) return COSTMAP_PALETTE.lethal;
-      if (cell >= 1) return COSTMAP_PALETTE.inflated;
-      return COSTMAP_PALETTE.free;
+      if (cell === 0) return [0, 0, 0, 0];
+      if (cell === 99) return [0, 255, 255, 255];
+      if (cell === 100) return [255, 0, 255, 255];
+      const cost = Math.max(1, Math.min(98, cell));
+      const red = Math.floor(255 * cost / 100);
+      return [red, 0, 255 - red, 255];
     }
 
     function buildGridRaster(name, info, cells) {
@@ -176,6 +175,7 @@
       context.translate(drawInfo.origin[0], drawInfo.origin[1]);
       context.rotate(drawInfo.origin[2]);
       context.scale(drawInfo.resolution, drawInfo.resolution);
+      context.globalAlpha = GRID_ALPHA[name];
       context.drawImage(
         layer.raster, 0, 0, drawInfo.width, drawInfo.height
       );
@@ -197,8 +197,11 @@
         if (offset === 0) context.moveTo(x, y);
         else context.lineTo(x, y);
       }
+      context.strokeStyle = PALETTE.halo;
+      context.lineWidth = 5 / transform.scale;
+      context.stroke();
       context.strokeStyle = PALETTE.path;
-      context.lineWidth = 2 / transform.scale;
+      context.lineWidth = 2.5 / transform.scale;
       context.stroke();
     }
 
@@ -214,6 +217,9 @@
       context.lineTo(-0.2, 0.2);
       context.lineTo(-0.2, -0.2);
       context.fill();
+      context.strokeStyle = PALETTE.halo;
+      context.lineWidth = 2 / transform.scale;
+      context.stroke();
       context.restore();
     }
 
@@ -242,15 +248,11 @@
       const wingAngle = Math.PI / 7;
       context.save();
       context.globalAlpha = PLACEMENT_ALPHA;
-      context.strokeStyle = PALETTE.placement;
-      context.lineWidth = 2.5;
       context.beginPath();
       context.moveTo(anchor.x - 12, anchor.y);
       context.lineTo(anchor.x + 12, anchor.y);
       context.moveTo(anchor.x, anchor.y - 12);
       context.lineTo(anchor.x, anchor.y + 12);
-      context.stroke();
-      context.beginPath();
       context.moveTo(anchor.x, anchor.y);
       context.lineTo(tip.x, tip.y);
       context.moveTo(tip.x, tip.y);
@@ -263,9 +265,13 @@
         tip.x - Math.cos(placement.yaw + wingAngle) * wingLength,
         tip.y + Math.sin(placement.yaw + wingAngle) * wingLength
       );
+      context.strokeStyle = PALETTE.halo;
+      context.lineWidth = 5;
+      context.stroke();
+      context.strokeStyle = PALETTE.placement;
+      context.lineWidth = 2.5;
       context.stroke();
       context.restore();
-      context.globalAlpha = 1;
     }
 
     function render() {
