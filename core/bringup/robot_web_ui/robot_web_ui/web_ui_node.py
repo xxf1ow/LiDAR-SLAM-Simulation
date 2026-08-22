@@ -703,9 +703,10 @@ class WebUiNode(Node):
     def navigation_state(self) -> dict[str, object]:
         static = self._static_map
         action_server_ready = self._navigation_client.server_is_ready()
-        path = self._path_snapshot
-        path_available = self._path_available(path)
         with self._goal_lock:
+            path = self._path_snapshot
+            path_error = self._path_error
+            path_available = self._path_available(path)
             goal_status = self._goal_status
             goal_handle = self._goal_handle
             goal_distance = self._goal_distance
@@ -743,7 +744,7 @@ class WebUiNode(Node):
                 "yaw": localization[2],
             },
             "localization_error": self._localization_error,
-            "path_error": self._path_error,
+            "path_error": path_error,
             "gate_mode": self._gate_mode,
             "motion": self.motion_status(),
             "navigation": {

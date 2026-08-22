@@ -1634,6 +1634,72 @@ def test_navigation_distance_is_gated_by_current_path_bytes(node_module):
     assert node.navigation_state()["navigation"]["distance_remaining"] == 3.25
 
 
+def test_navigation_state_keeps_path_facts_with_new_goal_lifecycle(
+    node_module,
+):
+    node = ready_navigation_node(node_module)
+    node._goal_status = "succeeded"
+    node._goal_distance = 3.25
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(1.0, 2.0)]
+    )
+    node._path_error = "old path error"
+
+    class LifecycleBoundaryLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self.collection_started = threading.Event()
+            self.allow_collection = threading.Event()
+            self._block_first_entry = True
+            self._state_collection = False
+
+        def __enter__(self):
+            if self._block_first_entry:
+                self._block_first_entry = False
+                self.collection_started.set()
+                if not self.allow_collection.wait(timeout=1.0):
+                    raise AssertionError("state collection was not released")
+                self._state_collection = True
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *exc_info):
+            self._lock.release()
+            if self._state_collection:
+                self._state_collection = False
+                node._path_error = "path changed after state snapshot"
+            return False
+
+    lifecycle_lock = LifecycleBoundaryLock()
+    node._goal_lock = lifecycle_lock
+    state_result = {}
+
+    def collect_state():
+        try:
+            state_result["state"] = node.navigation_state()
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            state_result["error"] = exc
+
+    state_thread = threading.Thread(target=collect_state)
+    state_thread.start()
+    assert lifecycle_lock.collection_started.wait(timeout=1.0)
+
+    assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+    assert node._path_snapshot is None
+    assert node._path_error is None
+
+    lifecycle_lock.allow_collection.set()
+    state_thread.join(timeout=1.0)
+
+    assert not state_thread.is_alive()
+    assert state_result.get("error") is None
+    state = state_result["state"]
+    assert state["navigation"]["goal_status"] == "sending"
+    assert state["layers"]["path"] is None
+    assert state["navigation"]["distance_remaining"] is None
+    assert state["path_error"] is None
+
+
 def test_new_navigation_goal_clears_stale_path_and_behavior_before_send(
     node_module,
 ):
