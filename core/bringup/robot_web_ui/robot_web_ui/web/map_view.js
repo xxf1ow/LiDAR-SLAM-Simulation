@@ -88,10 +88,30 @@
     let navigationRequestMessage = "";
     let cancelRequestPending = false;
     const transform = {scale: 16, x: 100, y: 50};
+    let autoFit = true;
+    let hasFitted = false;
+    const controlDock = options.controlDock || options.manualPanel || null;
 
     function bounds() {
       const rect = canvas.getBoundingClientRect();
       return {width: rect.width || 1, height: rect.height || 1};
+    }
+
+    function viewportBounds() {
+      const canvasRect = canvas.getBoundingClientRect();
+      const full = {
+        left: 0,
+        top: 0,
+        width: canvasRect.width || 1,
+        height: canvasRect.height || 1
+      };
+      if (!controlDock) return full;
+      const dockRect = controlDock.getBoundingClientRect();
+      const height = dockRect.top - canvasRect.top;
+      if (!Number.isFinite(height) || height <= 0 || height > full.height) {
+        return full;
+      }
+      return {...full, height};
     }
 
     function resize() {
@@ -202,8 +222,8 @@
       const statusRect = options.statusStrip
         ? options.statusStrip.getBoundingClientRect()
         : canvasRect;
-      const lowerBoundary = options.manualPanel && !options.manualPanel.hidden
-        ? options.manualPanel.getBoundingClientRect().top
+      const lowerBoundary = controlDock
+        ? controlDock.getBoundingClientRect().top
         : canvasRect.bottom;
       return {
         x: canvasRect.width / 2,
@@ -450,6 +470,7 @@
       const layers = latestState.layers || {};
       for (const name of Object.keys(LAYERS)) await updateLayer(name, layers[name]);
       updateNavigationStatus();
+      if (!hasFitted) fitToMap();
       render();
     }
 
@@ -468,6 +489,7 @@
     }
 
     function zoom(multiplier) {
+      autoFit = false;
       transform.scale = Math.max(
         MIN_SCALE,
         Math.min(MAX_SCALE, transform.scale * multiplier)
@@ -475,10 +497,10 @@
       render();
     }
 
-    function fit() {
+    function fitToMap() {
       const stateInfo = latestState.layers && latestState.layers.static;
       const info = effectiveGridInfo("static", stateInfo);
-      if (!info) return;
+      if (!info) return false;
       const corners = [
         gridToWorld(info, 0, 0),
         gridToWorld(info, info.width - 1, 0),
@@ -489,22 +511,43 @@
       const maxX = Math.max(...corners.map((point) => point.x));
       const minY = Math.min(...corners.map((point) => point.y));
       const maxY = Math.max(...corners.map((point) => point.y));
-      const rect = bounds();
+      const viewport = viewportBounds();
       transform.scale = Math.max(
         MIN_SCALE,
-        Math.min(MAX_SCALE, 0.9 * Math.min(rect.width / (maxX - minX + info.resolution), rect.height / (maxY - minY + info.resolution)))
+        Math.min(
+          MAX_SCALE,
+          0.9 * Math.min(
+            viewport.width / (maxX - minX + info.resolution),
+            viewport.height / (maxY - minY + info.resolution)
+          )
+        )
       );
-      transform.x = rect.width / 2 - transform.scale * (minX + maxX) / 2;
-      transform.y = rect.height / 2 + transform.scale * (minY + maxY) / 2;
+      transform.x = viewport.left + viewport.width / 2
+        - transform.scale * (minX + maxX) / 2;
+      transform.y = viewport.top + viewport.height / 2
+        + transform.scale * (minY + maxY) / 2;
+      hasFitted = true;
+      return true;
+    }
+
+    function fit() {
+      if (!fitToMap()) return;
+      autoFit = true;
+      render();
+    }
+
+    function refreshViewport() {
+      if (autoFit && hasFitted) fitToMap();
       render();
     }
 
     function centerRobot() {
       const pose = latestState.localization;
       if (!pose) return;
-      const rect = bounds();
-      transform.x = rect.width / 2 - pose.x * transform.scale;
-      transform.y = rect.height / 2 + pose.y * transform.scale;
+      const viewport = viewportBounds();
+      transform.x = viewport.left + viewport.width / 2 - pose.x * transform.scale;
+      transform.y = viewport.top + viewport.height / 2 + pose.y * transform.scale;
+      autoFit = false;
       render();
     }
 
@@ -647,6 +690,7 @@
         return;
       }
       if (!dragging || event.pointerId !== dragging.pointerId) return;
+      autoFit = false;
       transform.x += event.clientX - dragging.x;
       transform.y += event.clientY - dragging.y;
       dragging.x = event.clientX;
@@ -690,7 +734,7 @@
     if (navigationButtons.placementCancel) {
       navigationButtons.placementCancel.addEventListener("click", cancelPlacement);
     }
-    if (globalThis.addEventListener) globalThis.addEventListener("resize", render);
+    if (globalThis.addEventListener) globalThis.addEventListener("resize", refreshViewport);
     updateNavigationStatus();
     render();
     if (options.poll !== false) poll();
@@ -702,6 +746,7 @@
       zoomIn: () => zoom(1.25),
       zoomOut: () => zoom(0.8),
       fit,
+      refreshViewport,
       centerRobot,
       startPlacement,
       cancelPlacement,

@@ -164,8 +164,8 @@ def _run_map_scenario(scenario):
           const statusStrip = new FakeElement(
             "statusStrip", {left: 0, top: 0, width: 200, height: 20}
           );
-          const manualPanel = new FakeElement(
-            "manualPanel", {left: 0, top: 80, width: 200, height: 20}
+          const controlDock = new FakeElement(
+            "controlDock", {left: 0, top: 80, width: 200, height: 20}
           );
           const buttons = {
             zoomIn: new FakeElement("mapZoomIn"),
@@ -188,9 +188,43 @@ def _run_map_scenario(scenario):
             return result || {ok: true};
           };
           const view = RobotMapView.create({
-            canvas, buttons, navigationStatus, statusStrip, manualPanel,
+            canvas, buttons, navigationStatus, statusStrip, controlDock,
             navigationButtons, request, poll: false
           });
+          if (scenario === "auto-fit-lifecycle") {
+            const staticMap = grid(1, {width: 20, height: 10});
+            responses.push(bytes(new Array(200).fill(0)));
+            await view.applyState(state({
+              layers: {
+                static: staticMap, global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            assert.deepStrictEqual(view.getTransform(), {scale: 7.2, x: 28, y: 76});
+
+            const firstFit = view.getTransform();
+            await view.applyState(state({
+              layers: {
+                static: staticMap, global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            assert.deepStrictEqual(view.getTransform(), firstFit);
+
+            controlDock.rect.top = 100;
+            view.refreshViewport();
+            assert.deepStrictEqual(view.getTransform(), {scale: 9, x: 10, y: 95});
+
+            view.zoomIn();
+            const userView = view.getTransform();
+            controlDock.rect.top = 80;
+            view.refreshViewport();
+            assert.deepStrictEqual(view.getTransform(), userView);
+
+            view.fit();
+            assert.deepStrictEqual(view.getTransform(), {scale: 7.2, x: 28, y: 76});
+            return;
+          }
           if (scenario === "placement-preview-and-pointer") {
             assert.strictEqual(typeof view.startPlacement, "function");
             assert.strictEqual(typeof view.cancelPlacement, "function");
@@ -217,7 +251,7 @@ def _run_map_scenario(scenario):
             view.startPlacement("initial_pose");
             const preview = view.getPlacementPreview();
             assert.deepStrictEqual(preview, {
-              x: 0, y: 0, yaw: 0.25, map_revision: 7
+              x: 1, y: 13 / 18, yaw: 0.25, map_revision: 7
             });
             assert.notStrictEqual(view.getPlacementPreview(), preview);
             assert.strictEqual(navigationButtons.initialPose.hidden, true);
@@ -292,10 +326,10 @@ def _run_map_scenario(scenario):
             assert.strictEqual(canvas.width, initialWidth);
             assert.strictEqual(canvas.height, initialHeight);
 
-            manualPanel.hidden = true;
-            view.render();
-            const hiddenPanelPreview = view.getPlacementPreview();
-            assert.notStrictEqual(hiddenPanelPreview.y, afterZoom.y);
+            controlDock.rect.top = 100;
+            view.refreshViewport();
+            const resizedDockPreview = view.getPlacementPreview();
+            assert.notStrictEqual(resizedDockPreview.y, afterZoom.y);
             const beforeFit = view.getPlacementPreview();
             view.fit();
             assert.notDeepStrictEqual(view.getPlacementPreview(), beforeFit);
@@ -1187,8 +1221,9 @@ def test_single_pointer_drag_pans_without_pinch_or_rotation_modes():
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
-def test_zoom_in_out_fit_and_center_robot_are_bounded():
-    _run_map_scenario("zoom")
+@pytest.mark.parametrize("scenario", ["zoom", "auto-fit-lifecycle"])
+def test_view_transform_controls_and_auto_fit_lifecycle(scenario):
+    _run_map_scenario(scenario)
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
