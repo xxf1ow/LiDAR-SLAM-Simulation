@@ -86,7 +86,7 @@
     const transform = {scale: 16, x: 100, y: 50};
     let autoFit = true;
     let hasFitted = false;
-    const controlDock = options.controlDock || options.manualPanel || null;
+    const controlDock = options.controlDock || null;
 
     function bounds() {
       const rect = canvas.getBoundingClientRect();

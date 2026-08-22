@@ -46,78 +46,39 @@
     }
     #statusStrip {
       top: max(12px, env(safe-area-inset-top));
-      display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 8px;
-      align-items: center;
-      padding: 10px 12px;
-      border: 1px solid var(--line);
-      border-radius: 14px;
-      background: var(--surface);
+      pointer-events: none;
+      color: #111827;
+      text-shadow: -1px -1px 0 #fff, 1px -1px 0 #fff,
+                   -1px 1px 0 #fff, 1px 1px 0 #fff;
     }
-    #statusStrip .notice {
-      grid-column: 1 / -1;
-      margin: 0;
-    }
-    #navigationStatus {
-      grid-column: 1 / -1;
-      min-height: 1.4em;
-      margin: 0;
-      color: #f0bf68;
-      font-size: .85rem;
-      line-height: 1.4;
-    }
-    #navigationActions {
-      grid-column: 1 / -1;
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-    #navigationActions button {
-      flex: 1 1 auto;
-      min-height: 44px;
-    }
-    #navigationActions button[hidden] { display: none; }
-    header {
-      display: flex;
-      align-items: baseline;
-      gap: 8px;
-    }
-    h1 {
-      margin: 0;
-      font-size: 1.25rem;
-      font-weight: 750;
-      letter-spacing: .02em;
-    }
-    .hint {
-      margin: 0;
-      color: var(--muted);
-      font-size: .78rem;
-    }
-    .panel {
-      padding: 14px;
-      border: 1px solid var(--line);
-      border-radius: 16px;
-      background: var(--surface);
-    }
-    #manualPanel {
+    #statusStrip p { margin: 0 0 4px; }
+    #navigationStatus { color: #c2410c; }
+    .notice { color: #b91c1c; }
+    #controlDock {
       bottom: max(12px, env(safe-area-inset-bottom));
-      background: var(--surface);
+      display: grid;
+      gap: 8px;
+      padding: 10px;
       border: 1px solid var(--line);
       border-radius: 16px;
-      padding: 12px;
+      background: var(--surface);
     }
+    .map-actions {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 8px;
+    }
+    .context-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    #manualControls { display: grid; gap: 8px; }
     .speed-row {
       display: grid;
-      grid-template-columns: auto minmax(0, 1fr) 3.5rem;
+      grid-template-columns: auto minmax(0, 1fr);
       align-items: center;
       gap: 12px;
-    }
-    .speed-value {
-      color: var(--motion);
-      font-family: ui-monospace, "Cascadia Mono", monospace;
-      font-variant-numeric: tabular-nums;
-      text-align: right;
     }
     input[type="range"] {
       min-width: 0;
@@ -126,11 +87,8 @@
     }
     .controls {
       display: grid;
-      grid-template-columns: repeat(3, minmax(72px, 88px));
-      grid-template-rows: repeat(3, minmax(68px, 76px));
-      justify-content: center;
-      gap: 9px;
-      margin: 12px 0;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
     }
     button {
       border: 1px solid var(--line);
@@ -153,55 +111,17 @@
       outline: 3px solid var(--manual);
       outline-offset: 3px;
     }
-    [data-direction="forward"] { grid-column: 2; grid-row: 1; }
-    [data-direction="left"] { grid-column: 1; grid-row: 2; }
-    [data-direction="right"] { grid-column: 3; grid-row: 2; }
-    [data-direction="backward"] { grid-column: 2; grid-row: 3; }
+    .controls button, .map-actions button, .context-grid button { min-height: 44px; }
     #modeToggle {
+      width: 100%;
+      min-height: 52px;
       border-color: #8e6726;
       background: #59431f;
     }
-    .feedback {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 8px 16px;
-      margin-top: 12px;
-      color: var(--muted);
-      font-size: .85rem;
-    }
-    .feedback strong {
-      display: block;
-      margin-top: 4px;
-      color: var(--text);
-      font-family: ui-monospace, "Cascadia Mono", monospace;
-    }
-    #feedbackState {
-      grid-column: 1 / -1;
-      margin: 0;
-    }
-    .notice {
-      min-height: 1.4em;
-      margin: 10px 2px 0;
-      color: #f0bf68;
-      font-size: .85rem;
-      line-height: 1.4;
-    }
-    .map-actions {
-      position: absolute;
-      right: 12px;
-      top: calc(max(12px, env(safe-area-inset-top)) + 70px);
-      display: grid;
-      gap: 7px;
-      pointer-events: auto;
-    }
-    .map-actions button {
-      width: 44px;
-      min-height: 44px;
-    }
+    [hidden] { display: none !important; }
     @media (max-height: 620px) {
       .controls {
-        grid-template-rows: repeat(3, 62px);
-        margin: 8px 0;
+        gap: 8px;
       }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -213,44 +133,43 @@
 <body>
 <canvas id="mapCanvas" aria-label="导航地图"></canvas>
 <main>
-  <section id="statusStrip" class="overlay" aria-label="导航状态">
-    <header>
-      <h1>机器人控制</h1>
-      <p class="hint">按住移动，松开停止</p>
-    </header>
-    <button id="modeToggle" disabled>状态同步中…</button>
+  <section id="statusStrip" class="overlay" aria-label="机器人状态">
+    <p id="modeStatus">控制模式：状态同步中</p>
+    <p id="motionStatus">
+      速度 <strong><span id="speedValue">20</span>%</strong>
+      · 线速度 <strong id="linearVelocity">--</strong>
+      · 角速度 <strong id="angularVelocity">--</strong>
+      · <span id="feedbackState">底盘反馈中断</span>
+    </p>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
     <p id="navigationStatus" role="status" aria-live="polite"></p>
-    <section id="navigationActions" aria-label="导航操作">
+  </section>
+  <section id="controlDock" class="overlay" aria-label="操作区">
+    <section id="mapActions" class="map-actions" aria-label="地图视图">
+      <button id="mapZoomOut" aria-label="缩小地图">−</button>
+      <button id="mapZoomIn" aria-label="放大地图">+</button>
+      <button id="mapFit" aria-label="适配地图">适配</button>
+      <button id="mapCenterRobot" aria-label="居中机器人">居中</button>
+    </section>
+    <section id="navigationActions" class="context-grid" aria-label="导航操作" hidden>
       <button id="setInitialPose" disabled>设置初始位姿</button>
       <button id="navigationAction" disabled>设置导航目标</button>
       <button id="confirmPlacement" hidden disabled>确认位置</button>
       <button id="cancelPlacement" hidden disabled>取消放置</button>
     </section>
-  </section>
-  <section id="manualPanel" class="overlay" aria-label="手动控制" hidden>
-    <section class="panel speed-row" aria-label="速度设置">
-      <label for="speed">速度</label>
-      <input id="speed" type="range" min="0" max="100" value="20" step="1">
-      <strong class="speed-value"><span id="speedValue">20</span>%</strong>
-    </section>
-    <section class="panel controls" aria-label="移动方向">
+    <section id="manualControls" aria-label="手动控制" hidden>
+      <section class="speed-row" aria-label="速度设置">
+        <label for="speed">速度</label>
+        <input id="speed" type="range" min="0" max="100" value="20" step="1">
+      </section>
+      <section class="controls" aria-label="移动方向">
       <button disabled data-direction="forward" aria-label="前进">前进</button>
+      <button disabled data-direction="backward" aria-label="后退">后退</button>
       <button disabled data-direction="left" aria-label="左转">左转</button>
       <button disabled data-direction="right" aria-label="右转">右转</button>
-      <button disabled data-direction="backward" aria-label="后退">后退</button>
+      </section>
     </section>
-    <section class="panel feedback" aria-label="底盘反馈">
-      <span>线速度<strong id="linearVelocity">--</strong></span>
-      <span>角速度<strong id="angularVelocity">--</strong></span>
-      <p id="feedbackState">底盘反馈中断</p>
-    </section>
-  </section>
-  <section class="map-actions" aria-label="地图视图">
-    <button id="mapZoomIn" aria-label="放大地图">+</button>
-    <button id="mapZoomOut" aria-label="缩小地图">−</button>
-    <button id="mapFit" aria-label="适配地图">适配</button>
-    <button id="mapCenterRobot" aria-label="居中机器人">居中</button>
+    <button id="modeToggle" disabled>状态同步中…</button>
   </section>
 </main>
 
@@ -258,12 +177,15 @@
 <script>
   const speed = document.getElementById("speed");
   const speedValue = document.getElementById("speedValue");
+  const modeStatus = document.getElementById("modeStatus");
   const notice = document.getElementById("notice");
   const modeToggle = document.getElementById("modeToggle");
   const linearVelocity = document.getElementById("linearVelocity");
   const angularVelocity = document.getElementById("angularVelocity");
   const feedbackState = document.getElementById("feedbackState");
-  const manualPanel = document.getElementById("manualPanel");
+  const navigationActions = document.getElementById("navigationActions");
+  const manualControls = document.getElementById("manualControls");
+  let mapView = null;
   let desiredDirection = "stop";
   let commandLoopRunning = false;
   let noticeOwner = null;
@@ -328,6 +250,7 @@
 
   function renderControls() {
     const modePending = modeSwitchInProgress();
+    const previousContext = navigationActions.hidden + ":" + manualControls.hidden;
     if (modePending) {
       modeToggle.textContent = "切换中…";
       modeToggle.disabled = true;
@@ -344,7 +267,17 @@
     motionButtons.forEach((button) => {
       button.disabled = currentMode !== "manual" || modePending;
     });
-    manualPanel.hidden = currentMode !== "manual";
+    modeStatus.textContent = modePending
+      ? "控制模式：切换中"
+      : currentMode === "automatic"
+        ? "控制模式：自动导航"
+        : currentMode === "manual"
+          ? "控制模式：人工接管"
+          : "控制模式：状态同步中";
+    navigationActions.hidden = currentMode !== "automatic" || modePending;
+    manualControls.hidden = currentMode !== "manual" || modePending;
+    const nextContext = navigationActions.hidden + ":" + manualControls.hidden;
+    if (mapView && previousContext !== nextContext) mapView.refreshViewport();
   }
 
   function applyMode(mode) {
@@ -508,7 +441,7 @@
   applyMode(null);
   commandLoop();
   if (globalThis.RobotMapView) {
-    RobotMapView.create({
+    mapView = RobotMapView.create({
       canvas: document.getElementById("mapCanvas"),
       buttons: {
         zoomIn: document.getElementById("mapZoomIn"),
@@ -523,7 +456,7 @@
         placementCancel: document.getElementById("cancelPlacement")
       },
       statusStrip: document.getElementById("statusStrip"),
-      manualPanel: document.getElementById("manualPanel"),
+      controlDock: document.getElementById("controlDock"),
       navigationStatus: document.getElementById("navigationStatus"),
       request: post
     });

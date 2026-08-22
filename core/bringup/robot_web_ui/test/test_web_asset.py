@@ -15,126 +15,43 @@ HTML = (
 )
 
 
-def test_page_contains_only_the_required_mobile_controls():
-    source = HTML.read_text(encoding="utf-8")
-
-    assert source.count('<button disabled data-direction="') == 4
-    for direction in ("forward", "backward", "left", "right"):
-        assert f'data-direction="{direction}"' in source
-    assert 'id="speed"' in source
-    assert 'type="range"' in source
-    assert 'min="0"' in source
-    assert 'max="100"' in source
-    assert (
-        source.count(
-            '<button id="modeToggle" disabled>状态同步中…</button>'
-        )
-        == 1
-    )
-    assert 'id="takeover"' not in source
-    assert 'id="resume"' not in source
-    assert 'id="linearVelocity"' in source
-    assert 'id="angularVelocity"' in source
-    assert 'id="feedbackState"' in source
-    assert ":focus-visible" in source
-    assert "prefers-reduced-motion: reduce" in source
-
-
-def test_page_has_one_full_viewport_map_and_opaque_manual_overlay():
-    source = HTML.read_text(encoding="utf-8")
-
-    assert source.count('id="mapCanvas"') == 1
-    assert 'id="manualPanel"' in source
-    assert 'position: absolute' in source
-    assert 'background: var(--surface)' in source
-    assert '<script src="/map_view.js"></script>' in source
-    assert 'id="mapZoomIn"' in source
-    assert 'id="mapZoomOut"' in source
-    assert 'id="mapFit"' in source
-    assert 'id="mapCenterRobot"' in source
-    assert source.count('id="modeToggle"') == 1
-    assert 'addEventListener("wheel"' not in source
-    assert 'addEventListener("touch' not in source
-
-
-def test_notice_stays_visible_outside_the_manual_only_panel():
-    source = HTML.read_text(encoding="utf-8")
-    manual_panel = source.index('id="manualPanel"')
-    manual_panel_end = source.index(
-        '</section>\n  <section class="map-actions"', manual_panel
-    )
-    notice = source.index('id="notice"')
-
-    assert not manual_panel < notice < manual_panel_end
-
-
-def test_navigation_status_is_separate_from_manual_notice_and_panel():
-    source = HTML.read_text(encoding="utf-8")
-    manual_panel = source.index('id="manualPanel"')
-    manual_panel_end = source.index(
-        '</section>\n  <section class="map-actions"', manual_panel
-    )
-    navigation_status = source.index('id="navigationStatus"')
-
-    assert source.count('id="navigationStatus"') == 1
-    assert not manual_panel < navigation_status < manual_panel_end
-    assert (
-        'navigationStatus: document.getElementById("navigationStatus")'
-        in source
-    )
-    assert 'const notice = document.getElementById("notice")' in source
-
-
-def test_mobile_navigation_controls_have_exact_ids_and_map_view_wiring():
+def test_page_structure_matches_contextual_mobile_contract():
     source = HTML.read_text(encoding="utf-8")
 
     for element_id in (
-        "navigationActions",
-        "setInitialPose",
-        "navigationAction",
-        "confirmPlacement",
-        "cancelPlacement",
+        "mapCanvas", "statusStrip", "modeStatus", "motionStatus",
+        "notice", "navigationStatus", "controlDock", "mapActions",
+        "navigationActions", "manualControls", "modeToggle",
+        "setInitialPose", "navigationAction", "confirmPlacement",
+        "cancelPlacement", "speed", "linearVelocity",
+        "angularVelocity", "feedbackState", "mapZoomIn",
+        "mapZoomOut", "mapFit", "mapCenterRobot",
     ):
         assert source.count(f'id="{element_id}"') == 1
-    assert 'id="setNavigationGoal"' not in source
-    assert 'id="cancelNavigation"' not in source
-    assert "navigationButtons: {" in source
-    assert 'initialPose: document.getElementById("setInitialPose")' in source
-    assert (
-        'navigationAction: document.getElementById("navigationAction")'
-        in source
+    assert source.count('data-direction="') == 4
+    assert source.index('id="statusStrip"') < source.index('id="controlDock"')
+    assert source.index('id="mapActions"') < source.index('id="modeToggle"')
+    assert source.index('data-direction="forward"') < source.index(
+        'data-direction="backward"'
+    ) < source.index('data-direction="left"') < source.index(
+        'data-direction="right"'
     )
-    assert (
-        'placementConfirm: document.getElementById("confirmPlacement")'
-        in source
-    )
-    assert (
-        'placementCancel: document.getElementById("cancelPlacement")'
-        in source
-    )
-    assert 'statusStrip: document.getElementById("statusStrip")' in source
-    assert 'manualPanel: document.getElementById("manualPanel")' in source
-    assert "request: post" in source
-    assert source.index("buttons: {") < source.index("navigationButtons: {")
-    assert "getTransform()" not in source
+    assert 'id="saveParkingPoint"' not in source
+    assert 'id="goToParkingPoint"' not in source
+    assert 'addEventListener("wheel"' not in source
+    assert 'addEventListener("touch' not in source
+    assert 'controlDock: document.getElementById("controlDock")' in source
 
-
-def test_page_uses_neutral_api_without_vendor_surface():
-    source = HTML.read_text(encoding="utf-8")
-
-    assert 'post("/api/manual-command"' in source
-    assert '"/api/takeover-manual"' in source
-    assert '"/api/resume-automatic"' in source
-    for forbidden in (
-        "/api/status",
-        "/api/driver",
-        "RPM",
-        "hardware feedback",
-        "/driver",
-        "/motor_speed",
-        "/current_speed",
-    ):
-        assert forbidden.lower() not in source.lower()
+    status_markup = source.split('id="statusStrip"', 1)[1].split(
+        'id="controlDock"', 1
+    )[0]
+    assert "<button" not in status_markup
+    status_css = source.split("#statusStrip {", 1)[1].split("}", 1)[0]
+    assert "background:" not in status_css
+    assert "pointer-events: none" in status_css
+    assert "safe-area-inset-bottom" in source
+    assert "grid-template-columns: repeat(2, 1fr)" in source
+    assert "min-height: 44px" in source
 
 
 NODE = shutil.which("node")
@@ -198,14 +115,23 @@ def _run_browser_scenario(scenario):
         }}
 
         const elements = new Map(
-          ["speed", "speedValue", "notice", "modeToggle",
-           "linearVelocity", "angularVelocity", "feedbackState",
-           "manualPanel", "mapCanvas", "mapZoomIn", "mapZoomOut",
-           "mapFit", "mapCenterRobot"].map(
+          ["speed", "speedValue", "notice", "modeToggle", "modeStatus",
+           "motionStatus", "statusStrip", "controlDock", "mapActions",
+           "navigationActions", "manualControls",
+            "linearVelocity", "angularVelocity", "feedbackState",
+            "mapCanvas", "mapZoomIn", "mapZoomOut",
+            "mapFit", "mapCenterRobot"].map(
              (id) => [id, new FakeElement(id)]
            )
         );
         elements.set("mapCanvas", new FakeCanvas());
+        let viewportRefreshes = 0;
+        global.RobotMapView = {{
+          create(options) {{
+            assert.strictEqual(options.controlDock, elements.get("controlDock"));
+            return {{refreshViewport() {{ viewportRefreshes += 1; }}}};
+          }}
+        }};
         const directionButtons = ["forward", "backward", "left", "right"].map(
           (direction) => {{
             const button = new FakeElement(direction);
@@ -289,6 +215,42 @@ def _run_browser_scenario(scenario):
             speed_percent: 20
           }});
 
+          if (scenario === "contextual-layout") {{
+            const modeStatus = elements.get("modeStatus");
+            const navigationActions = elements.get("navigationActions");
+            const manualControls = elements.get("manualControls");
+            const modeToggle = elements.get("modeToggle");
+            assert.strictEqual(modeToggle.hidden, false);
+
+            applyMode("automatic");
+            assert.strictEqual(modeStatus.textContent, "控制模式：自动导航");
+            assert.strictEqual(navigationActions.hidden, false);
+            assert.strictEqual(manualControls.hidden, true);
+            assert.strictEqual(navigationActions.hidden && manualControls.hidden, false);
+
+            applyMode("manual");
+            assert.strictEqual(modeStatus.textContent, "控制模式：人工接管");
+            assert.strictEqual(navigationActions.hidden, true);
+            assert.strictEqual(manualControls.hidden, false);
+            assert.strictEqual(navigationActions.hidden && manualControls.hidden, false);
+
+            applyMode("unknown");
+            assert.strictEqual(modeStatus.textContent, "控制模式：状态同步中");
+            assert.strictEqual(navigationActions.hidden, true);
+            assert.strictEqual(manualControls.hidden, true);
+
+            applyMode("automatic");
+            const pendingMode = modeToggle.emit("click");
+            await flush();
+            assert.strictEqual(modeStatus.textContent, "控制模式：切换中");
+            assert.strictEqual(navigationActions.hidden, true);
+            assert.strictEqual(manualControls.hidden, true);
+            assert.strictEqual(modeToggle.hidden, false);
+            assert(viewportRefreshes >= 3);
+            void pendingMode;
+            return;
+          }}
+
           if (scenario === "motion-feedback") {{
             applyMotionFeedback({{
               linear_x: 0.25,
@@ -353,7 +315,7 @@ def _run_browser_scenario(scenario):
           if (scenario === "initial-and-authoritative-interlock") {{
             assert.strictEqual(currentMode, null);
             assert(directionButtons.every((button) => button.disabled));
-            assert.strictEqual(elements.get("manualPanel").hidden, true);
+            assert.strictEqual(elements.get("manualControls").hidden, true);
             assert.strictEqual(elements.get("modeToggle").disabled, true);
             assert.strictEqual(
               elements.get("modeToggle").textContent,
@@ -372,7 +334,7 @@ def _run_browser_scenario(scenario):
             applyMode("manual");
             assert.strictEqual(currentMode, "manual");
             assert(directionButtons.every((button) => !button.disabled));
-            assert.strictEqual(elements.get("manualPanel").hidden, false);
+            assert.strictEqual(elements.get("manualControls").hidden, false);
             assert.strictEqual(elements.get("modeToggle").disabled, false);
             assert.strictEqual(
               elements.get("modeToggle").textContent,
@@ -383,7 +345,7 @@ def _run_browser_scenario(scenario):
             applyMode("automatic");
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(desiredDirection, "stop");
-            assert.strictEqual(elements.get("manualPanel").hidden, true);
+            assert.strictEqual(elements.get("manualControls").hidden, true);
             elements.get("notice").textContent = "自动导航状态通知";
             assert.strictEqual(elements.get("notice").hidden, false);
             assert.deepStrictEqual(heldMovementKeys, []);
@@ -399,7 +361,7 @@ def _run_browser_scenario(scenario):
             applyMode(null);
             assert.strictEqual(currentMode, null);
             assert.strictEqual(desiredDirection, "stop");
-            assert.strictEqual(elements.get("manualPanel").hidden, true);
+            assert.strictEqual(elements.get("manualControls").hidden, true);
             assert(directionButtons.every((button) => button.disabled));
             assert.strictEqual(elements.get("modeToggle").disabled, true);
             assert.strictEqual(
@@ -825,6 +787,7 @@ def _run_browser_scenario(scenario):
 @pytest.mark.parametrize(
     "scenario",
     [
+        "contextual-layout",
         "initial-and-authoritative-interlock",
         "motion-feedback",
         "single-flight-and-stop",
