@@ -75,10 +75,17 @@ def test_profiles_define_obstacle_geometry_facts(name):
     profile = _load_profile(name)
     vertical_fov = profile["sensors"]["lidar"]["vertical_fov_angle"]
     obstacle_height = profile["perception"]["obstacle_height"]
+    clearing_range = profile["perception"]["clearing_range"]
     assert math.isfinite(vertical_fov) and 0.0 < vertical_fov <= math.pi
     assert set(obstacle_height) == {"min", "max"}
     assert all(math.isfinite(value) for value in obstacle_height.values())
     assert obstacle_height["min"] < obstacle_height["max"]
+    assert obstacle_height["min"] == profile["robot"]["drive"]["wheel_radius"]
+    assert obstacle_height["max"] == profile["robot"]["mounts"]["lidar"]["z"]
+    assert clearing_range == {
+        "min": 0.9 if name == "sim.yaml" else 0.3,
+        "max": 20.0,
+    }
 
 
 @pytest.mark.parametrize("name", ["sim.yaml", "real.yaml"])

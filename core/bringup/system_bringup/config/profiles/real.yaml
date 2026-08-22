@@ -61,5 +61,8 @@ motion:
 
 perception:
   obstacle_height:
-    min: -0.52 # Nav2 STVL 障碍/清除最低高度，单位 m
-    max: 2.0 # Nav2 STVL 障碍/清除最高高度，单位 m
+    min: 0.1025 # 纳入代价地图的最低离地高度，取车轮半径，单位 m
+    max: 0.905 # 纳入代价地图的最高离地高度，取整车最高点雷达原点高度，单位 m
+  clearing_range:
+    min: 0.3 # /cloud_registered 经 FAST-LIO blind 过滤后的最小有效距离，单位 m
+    max: 20.0 # STVL marking 与 clearing 共用的最远障碍距离，单位 m

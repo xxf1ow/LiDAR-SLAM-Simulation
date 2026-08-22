@@ -99,6 +99,10 @@ _PROFILE_SCHEMA = {
             "min": _NUMBER,
             "max": _NUMBER,
         },
+        "clearing_range": {
+            "min": _NUMBER,
+            "max": _NUMBER,
+        },
     },
 }
 
@@ -306,6 +310,20 @@ def _validate_sensor_semantics(platform, profile, source):
     if lidar["max_range"] <= lidar["min_range"]:
         raise ValueError(
             f"{source}: sensors.lidar.max_range must be greater than min_range"
+        )
+    clearing_range = profile["perception"]["clearing_range"]
+    if clearing_range["min"] < 0:
+        raise ValueError(
+            f"{source}: perception.clearing_range.min must be >= 0"
+        )
+    if clearing_range["min"] >= clearing_range["max"]:
+        raise ValueError(
+            f"{source}: perception.clearing_range.min must be less than max"
+        )
+    if clearing_range["max"] > lidar["max_range"]:
+        raise ValueError(
+            f"{source}: perception.clearing_range.max must not exceed "
+            "sensors.lidar.max_range"
         )
     vertical_fov = lidar["vertical_fov_angle"]
     if not 0 < vertical_fov <= math.pi:

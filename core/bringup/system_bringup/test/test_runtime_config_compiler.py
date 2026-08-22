@@ -1456,6 +1456,7 @@ NAV2_STVL_RENDER_PATHS = tuple(
     root + suffix
     for root in NAV2_STVL_ROOTS
     for suffix in (
+        ("pointcloud_mark", "obstacle_range"),
         ("pointcloud_mark", "min_obstacle_height"),
         ("pointcloud_mark", "max_obstacle_height"),
         ("pointcloud_clear", "min_z"),
@@ -1481,14 +1482,18 @@ def test_nav2_renderer_changes_only_whitelisted_leaves_and_injects_stvl_profile(
         "real", ("sensors", "lidar", "vertical_fov_angle"), 0.6
     )
     runtime_tree.set_profile_value(
-        "real", ("perception", "obstacle_height", "min"), -0.4
+        "real", ("perception", "obstacle_height", "min"), 0.2
     )
     runtime_tree.set_profile_value(
-        "real", ("perception", "obstacle_height", "max"), 1.8
+        "real", ("perception", "obstacle_height", "max"), 1.2
     )
     runtime_tree.set_bringup_value("platform", "real")
     inputs = rcc._load_runtime_inputs(runtime_tree.config)
     source = inputs["templates"]["nav2"]
+    inputs["effective"]["profile"]["perception"]["clearing_range"] = {
+        "min": 0.4,
+        "max": 12.0,
+    }
     before = deepcopy(source)
 
     rendered = rcc._render_nav2(source, inputs["effective"])
@@ -1502,23 +1507,28 @@ def test_nav2_renderer_changes_only_whitelisted_leaves_and_injects_stvl_profile(
     effective = inputs["effective"]
     min_height = effective["profile"]["perception"]["obstacle_height"]["min"]
     max_height = effective["profile"]["perception"]["obstacle_height"]["max"]
+    clearing_range = effective["profile"]["perception"]["clearing_range"]
     lidar = effective["profile"]["sensors"]["lidar"]
+    lidar_mount_z = effective["profile"]["robot"]["mounts"]["lidar"]["z"]
     horizontal_fov = (
         lidar["horizontal_end_angle"] - lidar["horizontal_start_angle"]
     )
     for root in NAV2_STVL_ROOTS:
         assert _path_value(
+            rendered, root + ("pointcloud_mark", "obstacle_range")
+        ) == clearing_range["max"]
+        assert _path_value(
             rendered, root + ("pointcloud_mark", "min_obstacle_height")
-        ) == min_height
+        ) == pytest.approx(min_height - lidar_mount_z)
         assert _path_value(
             rendered, root + ("pointcloud_mark", "max_obstacle_height")
-        ) == max_height
+        ) == pytest.approx(max_height - lidar_mount_z)
         assert _path_value(
             rendered, root + ("pointcloud_clear", "min_z")
-        ) == min_height
+        ) == clearing_range["min"]
         assert _path_value(
             rendered, root + ("pointcloud_clear", "max_z")
-        ) == max_height
+        ) == clearing_range["max"]
         assert _path_value(
             rendered, root + ("pointcloud_clear", "vertical_fov_angle")
         ) == lidar["vertical_fov_angle"]

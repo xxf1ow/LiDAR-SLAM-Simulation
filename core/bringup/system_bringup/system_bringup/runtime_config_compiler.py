@@ -542,16 +542,21 @@ def _render_nav2(template, effective):
         _set_template_existing("nav2", nav2, path, footprint, str)
     min_height = perception["obstacle_height"]["min"]
     max_height = perception["obstacle_height"]["max"]
+    clearing_range = perception["clearing_range"]
+    lidar_mount_z = effective["profile"]["robot"]["mounts"]["lidar"]["z"]
+    min_obstacle_z = min_height - lidar_mount_z
+    max_obstacle_z = max_height - lidar_mount_z
     vertical_fov = lidar["vertical_fov_angle"]
     horizontal_fov = (
         lidar["horizontal_end_angle"] - lidar["horizontal_start_angle"]
     )
     for root in NAV2_STVL_ROOTS:
         for suffix, value in (
-            (("pointcloud_mark", "min_obstacle_height"), float(min_height)),
-            (("pointcloud_mark", "max_obstacle_height"), float(max_height)),
-            (("pointcloud_clear", "min_z"), float(min_height)),
-            (("pointcloud_clear", "max_z"), float(max_height)),
+            (("pointcloud_mark", "obstacle_range"), float(clearing_range["max"])),
+            (("pointcloud_mark", "min_obstacle_height"), float(min_obstacle_z)),
+            (("pointcloud_mark", "max_obstacle_height"), float(max_obstacle_z)),
+            (("pointcloud_clear", "min_z"), float(clearing_range["min"])),
+            (("pointcloud_clear", "max_z"), float(clearing_range["max"])),
             (("pointcloud_clear", "vertical_fov_angle"), float(vertical_fov)),
             (("pointcloud_clear", "horizontal_fov_angle"), float(horizontal_fov)),
         ):

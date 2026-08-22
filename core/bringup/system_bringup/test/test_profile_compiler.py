@@ -460,6 +460,25 @@ def test_obstacle_height_min_must_be_less_than_max(tmp_path, bounds):
 
 
 @pytest.mark.parametrize(
+    ("bounds", "expected"),
+    [
+        ((-0.1, 20.0), r"clearing_range\.min must be >= 0"),
+        ((0.3, 0.3), r"clearing_range\.min must be less than max"),
+        ((0.3, 70.1), r"clearing_range\.max must not exceed.*max_range"),
+    ],
+)
+def test_clearing_range_must_match_sensor_capability(tmp_path, bounds, expected):
+    pair = _pair(_selection(tmp_path))
+    pair["real"][1]["perception"]["clearing_range"] = {
+        "min": bounds[0],
+        "max": bounds[1],
+    }
+
+    with pytest.raises(ValueError, match=expected):
+        pc.validate_profile_pair(pair)
+
+
+@pytest.mark.parametrize(
     "start_angle,end_angle",
     [
         (-math.pi, math.pi),

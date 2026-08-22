@@ -181,8 +181,8 @@ global_costmap:
           marking: true
           clearing: false
           obstacle_range: 20.0
-          min_obstacle_height: -0.52  # 近地面阈值(地面-0.556+0.036 余量),只滤平地噪声;不用底盘间隙——后者会滤掉刚高于底盘的矮障碍(如托盘)下半部
-          max_obstacle_height: 2.0
+          min_obstacle_height: -0.436 # sim 默认:轮半径 0.12 - 雷达高度 0.556
+          max_obstacle_height: 0.0    # sim 默认:整车最高点为雷达原点
           expected_update_rate: 0.0
           observation_persistence: 0.0
           inf_is_valid: false
@@ -195,8 +195,8 @@ global_costmap:
           topic: /cloud_registered
           marking: false
           clearing: true
-          max_z: 2.0
-          min_z: -0.52  # 与 min_obstacle_height 同步(近地面)
+          max_z: 20.0   # 清除视锥远端距离,与 marking obstacle_range 一致
+          min_z: 0.9    # 清除视锥近端距离,sim 雷达最小量程
           vertical_fov_angle: 0.523   # VLP-16 垂直 FOV ~±15°
           vertical_fov_padding: 0.05
           horizontal_fov_angle: 6.29  # 360°
@@ -242,8 +242,8 @@ local_costmap:
           marking: true
           clearing: false
           obstacle_range: 20.0
-          min_obstacle_height: -0.52  # 近地面阈值(地面-0.556+0.036 余量),只滤平地噪声;不用底盘间隙——后者会滤掉刚高于底盘的矮障碍(如托盘)下半部
-          max_obstacle_height: 2.0
+          min_obstacle_height: -0.436 # sim 默认:轮半径 0.12 - 雷达高度 0.556
+          max_obstacle_height: 0.0    # sim 默认:整车最高点为雷达原点
           filter: "voxel"
           voxel_min_points: 0
           clear_after_reading: true
@@ -253,8 +253,8 @@ local_costmap:
           topic: /cloud_registered
           marking: false
           clearing: true
-          max_z: 2.0
-          min_z: -0.52  # 与 min_obstacle_height 同步(近地面)
+          max_z: 20.0   # 清除视锥远端距离,与 marking obstacle_range 一致
+          min_z: 0.9    # 清除视锥近端距离,sim 雷达最小量程
           vertical_fov_angle: 0.523
           vertical_fov_padding: 0.05
           horizontal_fov_angle: 6.29
