@@ -52,6 +52,10 @@ def test_page_structure_matches_contextual_mobile_contract():
     assert "safe-area-inset-bottom" in source
     assert "grid-template-columns: repeat(2, 1fr)" in source
     assert "min-height: 44px" in source
+    assert '<input id="speed" type="range" min="0" max="100"' in source
+    assert '<script src="/map_view.js"></script>' in source
+    assert ":focus-visible" in source
+    assert "prefers-reduced-motion: reduce" in source
 
 
 def test_page_uses_neutral_api_without_vendor_surface():
@@ -148,7 +152,10 @@ def _run_browser_scenario(scenario):
           create(options) {{
             assert.strictEqual(options.controlDock, elements.get("controlDock"));
             return {{
-              cancelPlacement() {{ mapViewCalls.push(["cancelPlacement"]); }},
+              cancelPlacement() {{
+                mapViewCalls.push(["cancelPlacement"]);
+                eventLog.push(["cancelPlacement"]);
+              }},
               refreshViewport() {{ mapViewCalls.push(["refreshViewport"]); }}
             }};
           }}
@@ -184,6 +191,7 @@ def _run_browser_scenario(scenario):
         }};
 
         const requests = [];
+        const eventLog = [];
         const pending = [];
         global.fetch = (path, options) => {{
           const request = {{
@@ -192,6 +200,7 @@ def _run_browser_scenario(scenario):
             resolve: null
           }};
           requests.push(request);
+          eventLog.push(["request", path]);
           return new Promise((resolve) => {{
             request.resolve = ({{
               ok = true,
@@ -470,12 +479,19 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(modeToggle.disabled, false);
             assert.strictEqual(modeToggle.textContent, "人工接管");
             mapViewCalls.length = 0;
+            eventLog.length = 0;
             const takeoverPromise = modeToggle.emit("click");
             assert.deepStrictEqual(mapViewCalls[0], ["cancelPlacement"]);
             assert.strictEqual(modeToggle.textContent, "切换中…");
             assert.strictEqual(modeToggle.disabled, true);
             assert.strictEqual(desiredDirection, "stop");
             assert(directionButtons.every((button) => button.disabled));
+            const cancelIndex = eventLog.findIndex((event) => event[0] === "cancelPlacement");
+            const takeoverIndex = eventLog.findIndex(
+              (event) => event[0] === "request" && event[1] === "/api/takeover-manual"
+            );
+            assert(cancelIndex >= 0);
+            assert(takeoverIndex > cancelIndex);
             assert.strictEqual(requests.at(-1).path, "/api/takeover-manual");
             assert.strictEqual(requests.filter(
               (request) => request.path === "/api/takeover-manual"

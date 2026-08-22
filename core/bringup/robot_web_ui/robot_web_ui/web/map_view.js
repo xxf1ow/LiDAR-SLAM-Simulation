@@ -508,12 +508,20 @@
       const stateInfo = latestState.layers && latestState.layers.static;
       const info = effectiveGridInfo("static", stateInfo);
       if (!info) return false;
+      const [originX, originY, yaw] = info.origin;
+      const cosine = Math.cos(yaw);
+      const sine = Math.sin(yaw);
+      const mapWidth = info.width * info.resolution;
+      const mapHeight = info.height * info.resolution;
       const corners = [
-        gridToWorld(info, 0, 0),
-        gridToWorld(info, info.width - 1, 0),
-        gridToWorld(info, 0, info.height - 1),
-        gridToWorld(info, info.width - 1, info.height - 1)
-      ];
+        [0, 0],
+        [mapWidth, 0],
+        [0, mapHeight],
+        [mapWidth, mapHeight]
+      ].map(([localX, localY]) => ({
+        x: originX + localX * cosine - localY * sine,
+        y: originY + localX * sine + localY * cosine
+      }));
       const minX = Math.min(...corners.map((point) => point.x));
       const maxX = Math.max(...corners.map((point) => point.x));
       const minY = Math.min(...corners.map((point) => point.y));
@@ -524,8 +532,8 @@
         Math.min(
           MAX_SCALE,
           0.9 * Math.min(
-            viewport.width / (maxX - minX + info.resolution),
-            viewport.height / (maxY - minY + info.resolution)
+            viewport.width / (maxX - minX),
+            viewport.height / (maxY - minY)
           )
         )
       );

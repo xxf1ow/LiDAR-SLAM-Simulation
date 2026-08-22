@@ -82,13 +82,21 @@ def _run_map_scenario(scenario):
               scale: (...args) => this.operations.push(["scale", ...args]),
               drawImage: (...args) => this.operations.push(["drawImage", ...args, this.context.globalAlpha]),
               fillRect: (...args) => this.operations.push(["fill", this.context.fillStyle, ...args]),
-              beginPath: () => { this.path = []; this.operations.push(["begin"]); },
-              moveTo: (...args) => { this.path.push(["move", ...args]); this.operations.push(["move", ...args]); },
+              beginPath: () => {
+                this.path = []; this.subpathStart = null; this.operations.push(["begin"]);
+              },
+              moveTo: (...args) => {
+                this.subpathStart = [...args];
+                this.path.push(["move", ...args]); this.operations.push(["move", ...args]);
+              },
               lineTo: (...args) => { this.path.push(["line", ...args]); this.operations.push(["line", ...args]); },
               stroke: () => this.operations.push(["stroke", this.context.strokeStyle, this.context.globalAlpha, [...this.path], this.context.lineWidth]),
               fill: () => this.operations.push(["robot", this.context.fillStyle, this.context.globalAlpha]),
               arc: (...args) => this.operations.push(["arc", ...args]),
-              closePath: () => this.operations.push(["close"])
+              closePath: () => {
+                if (this.subpathStart) this.path.push(["line", ...this.subpathStart]);
+                this.operations.push(["close"]);
+              }
             };
           }
           getContext() { return this.context; }
@@ -235,6 +243,46 @@ def _run_map_scenario(scenario):
 
             view.fit();
             assert.deepStrictEqual(view.getTransform(), {scale: 7.2, x: 28, y: 76});
+
+            const rotatedMap = grid(2, {
+              width: 4, height: 3, resolution: 2,
+              origin: [-2, 1, Math.PI / 6]
+            });
+            responses.push(bytes(new Array(12).fill(0), '"2"'));
+            await view.applyState(state({
+              layers: {
+                static: rotatedMap, global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            view.fit();
+            const fitted = view.getTransform();
+            const [originX, originY, yaw] = rotatedMap.origin;
+            const cosine = Math.cos(yaw);
+            const sine = Math.sin(yaw);
+            const outerCorners = [
+              [0, 0],
+              [rotatedMap.width * rotatedMap.resolution, 0],
+              [0, rotatedMap.height * rotatedMap.resolution],
+              [rotatedMap.width * rotatedMap.resolution, rotatedMap.height * rotatedMap.resolution]
+            ].map(([localX, localY]) => ({
+              x: originX + localX * cosine - localY * sine,
+              y: originY + localX * sine + localY * cosine
+            }));
+            const marginX = canvas.width * 0.05;
+            const marginY = controlDock.rect.top * 0.05;
+            outerCorners.forEach((corner) => {
+              const screenX = fitted.x + fitted.scale * corner.x;
+              const screenY = fitted.y - fitted.scale * corner.y;
+              assert(
+                screenX >= marginX && screenX <= canvas.width - marginX,
+                JSON.stringify({fitted, corner, screenX, marginX})
+              );
+              assert(
+                screenY >= marginY && screenY <= controlDock.rect.top - marginY,
+                JSON.stringify({fitted, corner, screenY, marginY})
+              );
+            });
             return;
           }
           if (scenario === "placement-preview-and-pointer") {
@@ -1014,7 +1062,14 @@ def _run_map_scenario(scenario):
             assert(canvas.operations.some((operation) => operation[0] === "robot" && operation[1] === "#ffd400"));
             const robotIndex = canvas.operations.findIndex((operation) => operation[0] === "robot");
             assert.strictEqual(canvas.operations[robotIndex - 1][0], "close");
-            assert(canvas.operations.some((operation) => operation[0] === "stroke" && operation[1] === "#111827" && operation[4] === 2 / mapScale));
+            const robotStroke = canvas.operations.find((operation) =>
+              operation[0] === "stroke" && operation[1] === "#111827" && operation[4] === 2 / mapScale
+            );
+            assert(robotStroke);
+            assert.deepStrictEqual(
+              robotStroke[3][0].slice(1), robotStroke[3].at(-1).slice(1),
+              "robot outline stroke must return to its starting point"
+            );
             const images = canvas.operations.filter((operation) => operation[0] === "drawImage").map((operation) => operation[1]);
             assert.deepStrictEqual(images, offscreenCanvases);
             assert.deepStrictEqual(
