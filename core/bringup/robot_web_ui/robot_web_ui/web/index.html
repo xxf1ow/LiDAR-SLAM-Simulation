@@ -411,6 +411,9 @@
     const successMessage = observedMode === "automatic"
       ? "人工接管请求已完成"
       : "恢复自动导航请求已完成";
+    if (observedMode === "automatic" && mapView) {
+      mapView.cancelPlacement();
+    }
     modeSwitchPending = true;
     stopMotion();
     renderControls();

@@ -143,11 +143,14 @@ def _run_browser_scenario(scenario):
            )
         );
         elements.set("mapCanvas", new FakeCanvas());
-        let viewportRefreshes = 0;
+        const mapViewCalls = [];
         global.RobotMapView = {{
           create(options) {{
             assert.strictEqual(options.controlDock, elements.get("controlDock"));
-            return {{refreshViewport() {{ viewportRefreshes += 1; }}}};
+            return {{
+              cancelPlacement() {{ mapViewCalls.push(["cancelPlacement"]); }},
+              refreshViewport() {{ mapViewCalls.push(["refreshViewport"]); }}
+            }};
           }}
         }};
         const directionButtons = ["forward", "backward", "left", "right"].map(
@@ -264,7 +267,9 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(navigationActions.hidden, true);
             assert.strictEqual(manualControls.hidden, true);
             assert.strictEqual(modeToggle.hidden, false);
-            assert(viewportRefreshes >= 3);
+            assert(mapViewCalls.filter(
+              (call) => call[0] === "refreshViewport"
+            ).length >= 3);
             void pendingMode;
             return;
           }}
@@ -464,12 +469,17 @@ def _run_browser_scenario(scenario):
             applyMode("automatic");
             assert.strictEqual(modeToggle.disabled, false);
             assert.strictEqual(modeToggle.textContent, "人工接管");
+            mapViewCalls.length = 0;
             const takeoverPromise = modeToggle.emit("click");
+            assert.deepStrictEqual(mapViewCalls[0], ["cancelPlacement"]);
             assert.strictEqual(modeToggle.textContent, "切换中…");
             assert.strictEqual(modeToggle.disabled, true);
             assert.strictEqual(desiredDirection, "stop");
             assert(directionButtons.every((button) => button.disabled));
             assert.strictEqual(requests.at(-1).path, "/api/takeover-manual");
+            assert.strictEqual(requests.filter(
+              (request) => request.path === "/api/takeover-manual"
+            ).length, 1);
             const pendingRequestCount = requests.length;
             await modeToggle.emit("click");
             assert.strictEqual(requests.length, pendingRequestCount);
