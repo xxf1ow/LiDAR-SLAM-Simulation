@@ -879,6 +879,43 @@ def test_behavior_tree_log_removes_node_leaving_running(node_module):
     assert node.navigation_state()["navigation"]["phase"] is None
 
 
+def test_behavior_tree_log_during_sending_is_visible_after_goal_response(
+    node_module,
+):
+    node = ready_navigation_node(node_module)
+    handle = FakeClientGoalHandle()
+
+    assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+    node._behavior_tree_log_callback(
+        behavior_tree_log(("FollowPath", "IDLE", "RUNNING"))
+    )
+
+    assert node._running_bt_nodes == {"FollowPath"}
+    node._navigation_client.send_future.set_result(handle)
+
+    assert node._goal_status == "navigating"
+    assert node.navigation_state()["navigation"]["phase"] == "following"
+
+
+def test_behavior_tree_log_during_canceling_updates_leafs_without_changing_priority(
+    node_module,
+):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "canceling"
+    node._running_bt_nodes = {"FollowPath"}
+
+    node._behavior_tree_log_callback(
+        behavior_tree_log(
+            ("FollowPath", "RUNNING", "SUCCESS"),
+            ("Spin", "IDLE", "RUNNING"),
+        )
+    )
+
+    assert node._running_bt_nodes == {"Spin"}
+    assert node.navigation_state()["navigation"]["goal_status"] == "canceling"
+    assert node.navigation_state()["navigation"]["phase"] is None
+
+
 def test_recovery_phase_overrides_planning_and_following(node_module):
     node = navigation_bare_node(node_module)
     node._goal_status = "navigating"
@@ -933,20 +970,25 @@ def test_behavior_tree_log_ignores_unknown_and_malformed_events(node_module):
                 ),
                 types.SimpleNamespace(node_name="FollowPath"),
                 None,
+                types.SimpleNamespace(
+                    node_name="Spin",
+                    previous_status="IDLE",
+                    current_status="RUNNING",
+                ),
             ]
         )
     )
     node._behavior_tree_log_callback(types.SimpleNamespace(event_log=None))
 
-    assert node._running_bt_nodes == {"FollowPath"}
-    assert node.navigation_state()["navigation"]["phase"] == "following"
+    assert node._running_bt_nodes == {"FollowPath", "Spin"}
+    assert node.navigation_state()["navigation"]["phase"] == "spinning"
 
 
 @pytest.mark.parametrize(
     "goal_status",
-    ["idle", "sending", "canceling", "succeeded", "canceled", "failed"],
+    ["idle", "succeeded", "canceled", "failed"],
 )
-def test_behavior_tree_log_is_ignored_outside_navigating_goal(
+def test_behavior_tree_log_is_ignored_in_idle_and_terminal_goals(
     node_module, goal_status
 ):
     node = navigation_bare_node(node_module)
@@ -1959,6 +2001,73 @@ def test_navigation_terminal_result_clears_the_displayed_path(
     assert node._path_snapshot is None
     assert node._path_error is None
     assert node.navigation_state()["layers"]["path"] is None
+
+
+def test_terminal_result_cannot_clear_path_claimed_by_new_goal(node_module):
+    node, _old_handle = start_navigation(node_module)
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(1.0, 2.0), (3.0, 4.0)]
+    )
+    node._path_error = "old path error"
+    node._navigation_client.send_future = FakeFuture(complete=False)
+
+    terminal_released = threading.Event()
+    new_path_ready = threading.Event()
+    thread_errors = []
+
+    class InterleavingLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._interleave = True
+
+        def __enter__(self):
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *exc_info):
+            self._lock.release()
+            if self._interleave:
+                self._interleave = False
+                terminal_released.set()
+                if not new_path_ready.wait(timeout=1.0):
+                    raise AssertionError("new goal did not claim a path")
+            return False
+
+    node._goal_lock = InterleavingLock()
+
+    new_path = None
+
+    def claim_new_goal():
+        nonlocal new_path
+        try:
+            assert terminal_released.wait(timeout=1.0)
+            assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+            new_path = update_path_snapshot(
+                None, "map", [(5.0, 6.0), (7.0, 8.0)]
+            )
+            node._path_snapshot = new_path
+            node._path_error = "new path error"
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            thread_errors.append(exc)
+        finally:
+            new_path_ready.set()
+
+    thread = threading.Thread(target=claim_new_goal)
+    thread.start()
+    node._navigation_result_callback(
+        FakeFuture(
+            response=navigation_result(
+                node_module.FakeGoalStatus.STATUS_SUCCEEDED
+            )
+        )
+    )
+    thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert thread_errors == []
+    assert new_path is not None
+    assert node._path_snapshot is new_path
+    assert node._path_error == "new path error"
 
 
 def test_navigation_result_future_error_fails_and_clears(node_module):

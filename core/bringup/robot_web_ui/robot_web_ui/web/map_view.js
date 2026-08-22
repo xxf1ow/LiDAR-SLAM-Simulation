@@ -676,7 +676,10 @@
           && navigation.cancel_available === true
         ) {
           cancelNavigation();
-        } else if (!ACTIVE_GOAL_STATUSES.has(navigation.goal_status)) {
+        } else if (
+          !ACTIVE_GOAL_STATUSES.has(navigation.goal_status)
+          && placementAvailable("navigation_goal")
+        ) {
           startPlacement("navigation_goal");
         }
       });

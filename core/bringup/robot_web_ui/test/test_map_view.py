@@ -638,6 +638,56 @@ def _run_map_scenario(scenario):
             assert.strictEqual(navigationButtons.navigationAction.disabled, true);
             return;
           }
+          if (scenario === "navigation-click-availability-race") {
+            const availableState = state({
+              layers: {
+                static: grid(1), global_costmap: null,
+                local_costmap: null, path: null
+              }
+            });
+            responses.push(bytes([0, 0, 0, 0], '"1"'));
+            await view.applyState(availableState);
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
+
+            let resolveStatic;
+            responses.push({
+              ok: true,
+              status: 200,
+              headers: {get: (name) => name === "ETag" ? '"2"' : null},
+              arrayBuffer: () => new Promise((resolve) => {
+                resolveStatic = resolve;
+              })
+            });
+            const unavailableState = state({
+              localized: false,
+              gate_mode: "manual",
+              navigation: {
+                initial_pose_ready: true,
+                action_server_ready: false,
+                goal_status: "idle",
+                cancel_available: false,
+                phase: null,
+                distance_remaining: null,
+                message: null
+              },
+              layers: {
+                static: grid(2), global_costmap: null,
+                local_costmap: null, path: null
+              }
+            });
+            const statePromise = view.applyState(unavailableState);
+            await Promise.resolve();
+            await Promise.resolve();
+            assert.strictEqual(typeof resolveStatic, "function");
+            assert.strictEqual(navigationButtons.navigationAction.disabled, false);
+            await navigationButtons.navigationAction.emit("click");
+            assert.strictEqual(view.getPlacementPreview(), null);
+            assert.deepStrictEqual(navigationRequests, []);
+            resolveStatic(Uint8Array.from([0, 0, 0, 0]).buffer);
+            await statePromise;
+            assert.strictEqual(navigationButtons.navigationAction.disabled, true);
+            return;
+          }
           if (scenario === "navigation-availability-and-status") {
             assert.strictEqual(typeof view.startPlacement, "function");
             const navigation = (overrides = {}) => ({
@@ -1104,6 +1154,11 @@ def test_navigation_phase_labels_copy_and_distance_composition():
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_navigation_action_button_unifies_goal_and_cancel_feedback():
     _run_map_scenario("navigation-action-button")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_navigation_click_rechecks_latest_availability_during_layer_fetch():
+    _run_map_scenario("navigation-click-availability-race")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
