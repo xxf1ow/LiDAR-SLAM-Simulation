@@ -11,6 +11,7 @@ from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import PoseWithCovarianceStamped, TwistStamped
 from nav_msgs.msg import OccupancyGrid, Odometry, Path as NavPath
 from nav2_msgs.action import NavigateToPose
+from nav2_msgs.msg import BehaviorTreeLog
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -43,6 +44,27 @@ from .navigation_request import parse_navigation_pose, yaw_quaternion
 
 
 ODOM_TIMEOUT = 0.5
+
+_BT_PHASES = {
+    "ComputePathToPose": "planning",
+    "FollowPath": "following",
+    "ClearGlobalCostmap-Context": "clearing_global_plan",
+    "ClearLocalCostmap-Context": "clearing_local_control",
+    "ClearGlobalCostmap-Subtree": "clearing_global_recovery",
+    "ClearLocalCostmap-Subtree": "clearing_local_recovery",
+    "Spin": "spinning",
+    "Wait": "waiting",
+    "BackUp": "backing_up",
+}
+_RECOVERY_PHASE_NODES = (
+    "ClearGlobalCostmap-Context",
+    "ClearLocalCostmap-Context",
+    "ClearGlobalCostmap-Subtree",
+    "ClearLocalCostmap-Subtree",
+    "Spin",
+    "Wait",
+    "BackUp",
+)
 
 
 class WebUiNode(Node):
@@ -80,6 +102,7 @@ class WebUiNode(Node):
         self._goal_handle = None
         self._goal_distance = None
         self._goal_message = None
+        self._running_bt_nodes: set[str] = set()
         try:
             self._static_map = load_nav2_pgm(Path(map_yaml_path))
         except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
@@ -154,6 +177,12 @@ class WebUiNode(Node):
             "/local_costmap/costmap",
             self._local_costmap_callback,
             costmap_qos,
+        )
+        self._behavior_tree_subscription = self.create_subscription(
+            BehaviorTreeLog,
+            "/behavior_tree_log",
+            self._behavior_tree_log_callback,
+            10,
         )
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self)
@@ -302,6 +331,9 @@ class WebUiNode(Node):
                 self._goal_handle = None
                 self._goal_distance = None
                 self._goal_message = None
+                self._running_bt_nodes.clear()
+                self._path_snapshot = None
+                self._path_error = None
         if active:
             raise ActionConflict("navigation goal is active", self._gate_mode)
 
@@ -321,6 +353,7 @@ class WebUiNode(Node):
                     self._goal_handle = None
                     self._goal_distance = None
                     self._goal_message = message
+                    self._running_bt_nodes.clear()
             raise ActionUnavailable(message) from exc
         return "sending"
 
@@ -335,6 +368,7 @@ class WebUiNode(Node):
                     self._goal_handle = None
                     self._goal_distance = None
                     self._goal_message = message
+                    self._running_bt_nodes.clear()
             return
 
         accepted = goal_handle is not None and goal_handle.accepted
@@ -346,6 +380,7 @@ class WebUiNode(Node):
                 self._goal_handle = None
                 self._goal_distance = None
                 self._goal_message = "navigation goal rejected"
+                self._running_bt_nodes.clear()
                 return
             self._goal_status = "navigating"
             self._goal_handle = goal_handle
@@ -368,6 +403,7 @@ class WebUiNode(Node):
                     self._goal_handle = None
                     self._goal_distance = None
                     self._goal_message = message
+                    self._running_bt_nodes.clear()
 
     def _navigation_feedback_callback(
         self,
@@ -419,8 +455,9 @@ class WebUiNode(Node):
             self._goal_handle = None
             self._goal_distance = None
             self._goal_message = message
-        self._path_snapshot = None
-        self._path_error = None
+            self._running_bt_nodes.clear()
+            self._path_snapshot = None
+            self._path_error = None
 
     def cancel_navigation(self) -> str:
         with self._goal_lock:
@@ -600,6 +637,52 @@ class WebUiNode(Node):
         )
         self._path_error = None
 
+    def _behavior_tree_log_callback(self, message: BehaviorTreeLog) -> None:
+        try:
+            events = iter(message.event_log)
+        except (AttributeError, TypeError):
+            return
+        with self._goal_lock:
+            if self._goal_status not in {"sending", "navigating", "canceling"}:
+                return
+            for event in events:
+                try:
+                    name = event.node_name
+                    previous_status = event.previous_status
+                    current_status = event.current_status
+                except AttributeError:
+                    continue
+                if not isinstance(name, str) or name not in _BT_PHASES:
+                    continue
+                if current_status == "RUNNING":
+                    self._running_bt_nodes.add(name)
+                elif previous_status == "RUNNING":
+                    self._running_bt_nodes.discard(name)
+
+    @staticmethod
+    def _path_available(path) -> bool:
+        return path is not None and len(path.binary.data) >= 8
+
+    def _navigation_phase(
+        self,
+        goal_status: str,
+        path_available: bool,
+    ) -> str | None:
+        if goal_status != "navigating":
+            return None
+        for name in _RECOVERY_PHASE_NODES:
+            if name in self._running_bt_nodes:
+                return _BT_PHASES[name]
+        if path_available and "FollowPath" in self._running_bt_nodes:
+            return "following"
+        if not path_available and "ComputePathToPose" in self._running_bt_nodes:
+            return "planning"
+        if "FollowPath" in self._running_bt_nodes:
+            return "following"
+        if "ComputePathToPose" in self._running_bt_nodes:
+            return "planning"
+        return None
+
     def motion_status(self) -> dict[str, object]:
         feedback = self._odom_feedback
         if (
@@ -621,10 +704,14 @@ class WebUiNode(Node):
         static = self._static_map
         action_server_ready = self._navigation_client.server_is_ready()
         with self._goal_lock:
+            path = self._path_snapshot
+            path_error = self._path_error
+            path_available = self._path_available(path)
             goal_status = self._goal_status
             goal_handle = self._goal_handle
             goal_distance = self._goal_distance
             goal_message = self._goal_message
+            phase = self._navigation_phase(goal_status, path_available)
         initial_pose_ready = (
             self._initial_pose_publisher.get_subscription_count() > 0
         )
@@ -647,7 +734,6 @@ class WebUiNode(Node):
             )
             local_costmap["transform_available"] = local_transform_available
             local_costmap["transform_error"] = local_transform_error
-        path = self._path_snapshot
         return {
             "map_error": self._map_error,
             "localized": localization is not None,
@@ -658,7 +744,7 @@ class WebUiNode(Node):
                 "yaw": localization[2],
             },
             "localization_error": self._localization_error,
-            "path_error": self._path_error,
+            "path_error": path_error,
             "gate_mode": self._gate_mode,
             "motion": self.motion_status(),
             "navigation": {
@@ -668,7 +754,10 @@ class WebUiNode(Node):
                 "cancel_available": (
                     goal_status == "navigating" and goal_handle is not None
                 ),
-                "distance_remaining": goal_distance,
+                "phase": phase,
+                "distance_remaining": (
+                    goal_distance if path_available else None
+                ),
                 "message": goal_message,
             },
             "layers": {

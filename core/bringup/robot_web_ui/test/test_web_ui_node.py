@@ -237,6 +237,13 @@ def node_module(monkeypatch):
     nav2_msgs = types.ModuleType("nav2_msgs")
     nav2_msgs_action = types.ModuleType("nav2_msgs.action")
     nav2_msgs_action.NavigateToPose = FakeNavigateToPose
+    nav2_msgs_msg = types.ModuleType("nav2_msgs.msg")
+
+    class FakeBehaviorTreeLog:
+        def __init__(self, event_log=()):
+            self.event_log = list(event_log)
+
+    nav2_msgs_msg.BehaviorTreeLog = FakeBehaviorTreeLog
     std_srvs = types.ModuleType("std_srvs")
     std_srvs_srv = types.ModuleType("std_srvs.srv")
     std_srvs_srv.Trigger = FakeTrigger
@@ -286,6 +293,7 @@ def node_module(monkeypatch):
         "nav_msgs.msg": nav_msgs_msg,
         "nav2_msgs": nav2_msgs,
         "nav2_msgs.action": nav2_msgs_action,
+        "nav2_msgs.msg": nav2_msgs_msg,
         "std_msgs": std_msgs,
         "std_msgs.msg": std_msgs_msg,
         "std_srvs": std_srvs,
@@ -319,6 +327,7 @@ def node_module(monkeypatch):
     module.FakeCancelGoal = FakeCancelGoal
     module.FakeGoalStatus = FakeGoalStatus
     module.FakeNavigateToPose = FakeNavigateToPose
+    module.FakeBehaviorTreeLog = FakeBehaviorTreeLog
     yield module
     sys.modules.pop(module_name, None)
 
@@ -422,6 +431,19 @@ def navigation_result(status):
     return types.SimpleNamespace(status=status, result=types.SimpleNamespace())
 
 
+def behavior_tree_log(*events):
+    return types.SimpleNamespace(
+        event_log=[
+            types.SimpleNamespace(
+                node_name=name,
+                previous_status=previous,
+                current_status=current,
+            )
+            for name, previous, current in events
+        ]
+    )
+
+
 def cancel_response(module, *, accepted):
     goals = [types.SimpleNamespace()] if accepted else []
     return module.FakeCancelGoal.Response(goals_canceling=goals)
@@ -502,6 +524,7 @@ def navigation_bare_node(module):
     node._goal_handle = None
     node._goal_distance = None
     node._goal_message = None
+    node._running_bt_nodes = set()
     node._navigation_client = module.FakeActionClient(
         node,
         module.FakeNavigateToPose,
@@ -536,6 +559,7 @@ def test_static_map_load_success_exposes_state_and_asset(node_module, monkeypatc
             "action_server_ready": True,
             "goal_status": "idle",
             "cancel_available": False,
+            "phase": None,
             "distance_remaining": None,
             "message": None,
         },
@@ -729,6 +753,7 @@ def test_navigation_state_is_a_complete_immutable_projection(node_module):
         "action_server_ready": True,
         "goal_status": "idle",
         "cancel_available": False,
+        "phase": None,
         "distance_remaining": None,
         "message": None,
     }
@@ -787,7 +812,7 @@ def test_local_costmap_callback_builds_revisions_from_atomic_layer(node_module):
 
 def test_node_declares_exact_visualization_subscriptions_and_qos(node_module):
     node = node_module.WebUiNode()
-    visualization = node.subscriptions[2:]
+    visualization = node.subscriptions[2:6]
 
     assert [(kind.__name__, topic, callback.__name__) for kind, topic, callback, _qos in visualization] == [
         ("FakeOdometry", "/localization", "_localization_callback"),
@@ -798,8 +823,184 @@ def test_node_declares_exact_visualization_subscriptions_and_qos(node_module):
     assert visualization[0][3].settings["reliability"] is node_module.ReliabilityPolicy.RELIABLE
     assert visualization[0][3].settings["depth"] == 1
     assert visualization[2][3].settings["durability"] is node_module.DurabilityPolicy.TRANSIENT_LOCAL
-    assert len(node.subscriptions) == 6
+    behavior_tree = [
+        subscription
+        for subscription in node.subscriptions
+        if subscription[1] == "/behavior_tree_log"
+    ]
+    assert len(behavior_tree) == 1
+    assert behavior_tree[0][0] is node_module.FakeBehaviorTreeLog
+    assert behavior_tree[0][2].__name__ == "_behavior_tree_log_callback"
+    assert behavior_tree[0][3] == 10
+    assert len(node.subscriptions) == 7
     node.destroy_node()
+
+
+@pytest.mark.parametrize(
+    ("node_name", "expected_phase"),
+    [
+        ("ComputePathToPose", "planning"),
+        ("FollowPath", "following"),
+        ("ClearGlobalCostmap-Context", "clearing_global_plan"),
+        ("ClearLocalCostmap-Context", "clearing_local_control"),
+        ("ClearGlobalCostmap-Subtree", "clearing_global_recovery"),
+        ("ClearLocalCostmap-Subtree", "clearing_local_recovery"),
+        ("Spin", "spinning"),
+        ("Wait", "waiting"),
+        ("BackUp", "backing_up"),
+    ],
+)
+def test_running_behavior_tree_node_maps_to_navigation_phase(
+    node_module, node_name, expected_phase
+):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "navigating"
+
+    node._behavior_tree_log_callback(
+        behavior_tree_log((node_name, "IDLE", "RUNNING"))
+    )
+
+    assert node._running_bt_nodes == {node_name}
+    assert node.navigation_state()["navigation"]["phase"] == expected_phase
+
+
+def test_behavior_tree_log_removes_node_leaving_running(node_module):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "navigating"
+
+    node._behavior_tree_log_callback(
+        behavior_tree_log(("FollowPath", "IDLE", "RUNNING"))
+    )
+    node._behavior_tree_log_callback(
+        behavior_tree_log(("FollowPath", "RUNNING", "SUCCESS"))
+    )
+
+    assert node._running_bt_nodes == set()
+    assert node.navigation_state()["navigation"]["phase"] is None
+
+
+def test_behavior_tree_log_during_sending_is_visible_after_goal_response(
+    node_module,
+):
+    node = ready_navigation_node(node_module)
+    handle = FakeClientGoalHandle()
+
+    assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+    node._behavior_tree_log_callback(
+        behavior_tree_log(("FollowPath", "IDLE", "RUNNING"))
+    )
+
+    assert node._running_bt_nodes == {"FollowPath"}
+    node._navigation_client.send_future.set_result(handle)
+
+    assert node._goal_status == "navigating"
+    assert node.navigation_state()["navigation"]["phase"] == "following"
+
+
+def test_behavior_tree_log_during_canceling_updates_leafs_without_changing_priority(
+    node_module,
+):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "canceling"
+    node._running_bt_nodes = {"FollowPath"}
+
+    node._behavior_tree_log_callback(
+        behavior_tree_log(
+            ("FollowPath", "RUNNING", "SUCCESS"),
+            ("Spin", "IDLE", "RUNNING"),
+        )
+    )
+
+    assert node._running_bt_nodes == {"Spin"}
+    assert node.navigation_state()["navigation"]["goal_status"] == "canceling"
+    assert node.navigation_state()["navigation"]["phase"] is None
+
+
+def test_recovery_phase_overrides_planning_and_following(node_module):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "navigating"
+
+    node._behavior_tree_log_callback(
+        behavior_tree_log(
+            ("ComputePathToPose", "IDLE", "RUNNING"),
+            ("FollowPath", "IDLE", "RUNNING"),
+            ("Spin", "IDLE", "RUNNING"),
+        )
+    )
+
+    assert node.navigation_state()["navigation"]["phase"] == "spinning"
+
+
+def test_follow_path_with_available_path_overrides_periodic_planning(
+    node_module,
+):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "navigating"
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(1.0, 2.0)]
+    )
+
+    node._behavior_tree_log_callback(
+        behavior_tree_log(("ComputePathToPose", "IDLE", "RUNNING"))
+    )
+    assert node.navigation_state()["navigation"]["phase"] == "planning"
+
+    node._behavior_tree_log_callback(
+        behavior_tree_log(("FollowPath", "IDLE", "RUNNING"))
+    )
+    node._behavior_tree_log_callback(
+        behavior_tree_log(("ComputePathToPose", "RUNNING", "RUNNING"))
+    )
+
+    assert node.navigation_state()["navigation"]["phase"] == "following"
+
+
+def test_behavior_tree_log_ignores_unknown_and_malformed_events(node_module):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "navigating"
+    node._running_bt_nodes = {"FollowPath"}
+
+    node._behavior_tree_log_callback(
+        types.SimpleNamespace(
+            event_log=[
+                types.SimpleNamespace(
+                    node_name="UnknownNode",
+                    previous_status="IDLE",
+                    current_status="RUNNING",
+                ),
+                types.SimpleNamespace(node_name="FollowPath"),
+                None,
+                types.SimpleNamespace(
+                    node_name="Spin",
+                    previous_status="IDLE",
+                    current_status="RUNNING",
+                ),
+            ]
+        )
+    )
+    node._behavior_tree_log_callback(types.SimpleNamespace(event_log=None))
+
+    assert node._running_bt_nodes == {"FollowPath", "Spin"}
+    assert node.navigation_state()["navigation"]["phase"] == "spinning"
+
+
+@pytest.mark.parametrize(
+    "goal_status",
+    ["idle", "succeeded", "canceled", "failed"],
+)
+def test_behavior_tree_log_is_ignored_in_idle_and_terminal_goals(
+    node_module, goal_status
+):
+    node = navigation_bare_node(node_module)
+    node._goal_status = goal_status
+    node._running_bt_nodes = {"FollowPath"}
+
+    node._behavior_tree_log_callback(
+        behavior_tree_log(("Spin", "IDLE", "RUNNING"))
+    )
+
+    assert node._running_bt_nodes == {"FollowPath"}
+    assert node.navigation_state()["navigation"]["phase"] is None
 
 
 @pytest.mark.parametrize(
@@ -1391,6 +1592,7 @@ def test_navigation_projection_is_json_native_and_fresh(node_module):
         "action_server_ready": True,
         "goal_status": "idle",
         "cancel_available": False,
+        "phase": None,
         "distance_remaining": None,
         "message": None,
     }
@@ -1415,6 +1617,151 @@ def start_navigation(module, node=None):
     node._navigation_client.send_future.set_result(handle)
     assert node._goal_status == "navigating"
     return node, handle
+
+
+def test_navigation_distance_is_gated_by_current_path_bytes(node_module):
+    node = navigation_bare_node(node_module)
+    node._goal_status = "navigating"
+    node._goal_distance = 3.25
+
+    node._path_snapshot = None
+    assert node.navigation_state()["navigation"]["distance_remaining"] is None
+
+    node._path_snapshot = update_path_snapshot(None, "map", [])
+    assert node.navigation_state()["navigation"]["distance_remaining"] is None
+
+    node._path_snapshot = update_path_snapshot(None, "map", [(1.0, 2.0)])
+    assert node.navigation_state()["navigation"]["distance_remaining"] == 3.25
+
+
+def test_navigation_state_keeps_path_facts_with_new_goal_lifecycle(
+    node_module,
+):
+    node = ready_navigation_node(node_module)
+    node._goal_status = "succeeded"
+    node._goal_distance = 3.25
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(1.0, 2.0)]
+    )
+    node._path_error = "old path error"
+
+    class LifecycleBoundaryLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self.collection_started = threading.Event()
+            self.allow_collection = threading.Event()
+            self._block_first_entry = True
+            self._state_collection = False
+
+        def __enter__(self):
+            if self._block_first_entry:
+                self._block_first_entry = False
+                self.collection_started.set()
+                if not self.allow_collection.wait(timeout=1.0):
+                    raise AssertionError("state collection was not released")
+                self._state_collection = True
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *exc_info):
+            self._lock.release()
+            if self._state_collection:
+                self._state_collection = False
+                node._path_error = "path changed after state snapshot"
+            return False
+
+    lifecycle_lock = LifecycleBoundaryLock()
+    node._goal_lock = lifecycle_lock
+    state_result = {}
+
+    def collect_state():
+        try:
+            state_result["state"] = node.navigation_state()
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            state_result["error"] = exc
+
+    state_thread = threading.Thread(target=collect_state)
+    state_thread.start()
+    assert lifecycle_lock.collection_started.wait(timeout=1.0)
+
+    assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+    assert node._path_snapshot is None
+    assert node._path_error is None
+
+    lifecycle_lock.allow_collection.set()
+    state_thread.join(timeout=1.0)
+
+    assert not state_thread.is_alive()
+    assert state_result.get("error") is None
+    state = state_result["state"]
+    assert state["navigation"]["goal_status"] == "sending"
+    assert state["layers"]["path"] is None
+    assert state["navigation"]["distance_remaining"] is None
+    assert state["path_error"] is None
+
+
+def test_new_navigation_goal_clears_stale_path_and_behavior_before_send(
+    node_module,
+):
+    node = ready_navigation_node(node_module)
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(1.0, 2.0)]
+    )
+    node._path_error = "old path error"
+    node._goal_distance = 3.25
+    node._goal_message = "old message"
+    node._running_bt_nodes = {"FollowPath", "Spin"}
+    observed = []
+    real_send = node._navigation_client.send_goal_async
+
+    def inspect_before_send(goal, feedback_callback=None):
+        observed.append(
+            (
+                node._path_snapshot,
+                node._path_error,
+                node._goal_distance,
+                node._goal_message,
+                set(node._running_bt_nodes),
+            )
+        )
+        return real_send(goal, feedback_callback=feedback_callback)
+
+    node._navigation_client.send_goal_async = inspect_before_send
+
+    assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+
+    assert observed == [(None, None, None, None, set())]
+    assert node._path_snapshot is None
+    assert node._path_error is None
+    assert node._goal_distance is None
+    assert node._goal_message is None
+    assert node._running_bt_nodes == set()
+
+
+@pytest.mark.parametrize("transition", ["rejected", "failed", "terminal"])
+def test_navigation_goal_transitions_clear_running_behavior_leaves(
+    node_module, transition
+):
+    node = ready_navigation_node(node_module)
+    assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+    node._running_bt_nodes = {"FollowPath", "Spin"}
+
+    if transition == "rejected":
+        node._navigation_client.send_future.set_result(
+            FakeClientGoalHandle(accepted=False)
+        )
+    elif transition == "failed":
+        node._navigation_client.send_future.set_exception(
+            RuntimeError("response failed")
+        )
+    else:
+        handle = FakeClientGoalHandle()
+        node._navigation_client.send_future.set_result(handle)
+        handle.result_future.set_result(
+            navigation_result(node_module.FakeGoalStatus.STATUS_SUCCEEDED)
+        )
+
+    assert node._running_bt_nodes == set()
 
 
 def test_node_creates_exact_navigate_to_pose_action_client(node_module):
@@ -1722,6 +2069,73 @@ def test_navigation_terminal_result_clears_the_displayed_path(
     assert node.navigation_state()["layers"]["path"] is None
 
 
+def test_terminal_result_cannot_clear_path_claimed_by_new_goal(node_module):
+    node, _old_handle = start_navigation(node_module)
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(1.0, 2.0), (3.0, 4.0)]
+    )
+    node._path_error = "old path error"
+    node._navigation_client.send_future = FakeFuture(complete=False)
+
+    terminal_released = threading.Event()
+    new_path_ready = threading.Event()
+    thread_errors = []
+
+    class InterleavingLock:
+        def __init__(self):
+            self._lock = threading.Lock()
+            self._interleave = True
+
+        def __enter__(self):
+            self._lock.acquire()
+            return self
+
+        def __exit__(self, *exc_info):
+            self._lock.release()
+            if self._interleave:
+                self._interleave = False
+                terminal_released.set()
+                if not new_path_ready.wait(timeout=1.0):
+                    raise AssertionError("new goal did not claim a path")
+            return False
+
+    node._goal_lock = InterleavingLock()
+
+    new_path = None
+
+    def claim_new_goal():
+        nonlocal new_path
+        try:
+            assert terminal_released.wait(timeout=1.0)
+            assert node.send_navigation_goal(initial_pose_payload()) == "sending"
+            new_path = update_path_snapshot(
+                None, "map", [(5.0, 6.0), (7.0, 8.0)]
+            )
+            node._path_snapshot = new_path
+            node._path_error = "new path error"
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            thread_errors.append(exc)
+        finally:
+            new_path_ready.set()
+
+    thread = threading.Thread(target=claim_new_goal)
+    thread.start()
+    node._navigation_result_callback(
+        FakeFuture(
+            response=navigation_result(
+                node_module.FakeGoalStatus.STATUS_SUCCEEDED
+            )
+        )
+    )
+    thread.join(timeout=1.0)
+
+    assert not thread.is_alive()
+    assert thread_errors == []
+    assert new_path is not None
+    assert node._path_snapshot is new_path
+    assert node._path_error == "new path error"
+
+
 def test_navigation_result_future_error_fails_and_clears(node_module):
     node, handle = start_navigation(node_module)
     node._goal_distance = 2.5
@@ -1901,6 +2315,9 @@ def test_navigation_state_copies_locked_goal_facts_and_exact_cancel_availability
     node_module, status, has_handle, cancel_available
 ):
     node = ready_navigation_node(node_module)
+    node._path_snapshot = update_path_snapshot(
+        None, "map", [(1.0, 2.0)]
+    )
     node._goal_status = status
     node._goal_handle = FakeClientGoalHandle() if has_handle else None
     node._goal_distance = 3.5
@@ -1916,6 +2333,7 @@ def test_navigation_state_copies_locked_goal_facts_and_exact_cancel_availability
         "action_server_ready": True,
         "goal_status": status,
         "cancel_available": cancel_available,
+        "phase": None,
         "distance_remaining": 3.5,
         "message": "working",
     }
