@@ -216,6 +216,7 @@
       context.moveTo(0.32, 0);
       context.lineTo(-0.2, 0.2);
       context.lineTo(-0.2, -0.2);
+      context.closePath();
       context.fill();
       context.strokeStyle = PALETTE.halo;
       context.lineWidth = 2 / transform.scale;

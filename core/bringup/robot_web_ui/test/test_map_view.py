@@ -1012,6 +1012,8 @@ def _run_map_scenario(scenario):
               [["#111827", 1, 5 / mapScale], ["#55ffff", 1, 2.5 / mapScale]]
             );
             assert(canvas.operations.some((operation) => operation[0] === "robot" && operation[1] === "#ffd400"));
+            const robotIndex = canvas.operations.findIndex((operation) => operation[0] === "robot");
+            assert.strictEqual(canvas.operations[robotIndex - 1][0], "close");
             assert(canvas.operations.some((operation) => operation[0] === "stroke" && operation[1] === "#111827" && operation[4] === 2 / mapScale));
             const images = canvas.operations.filter((operation) => operation[0] === "drawImage").map((operation) => operation[1]);
             assert.deepStrictEqual(images, offscreenCanvases);
