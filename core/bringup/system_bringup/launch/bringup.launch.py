@@ -147,6 +147,7 @@ def _bringup(context, *args, **kwargs):
             "nav2_params_file": str(manifest["nav2_path"]),
             "nav_map": map_artifacts["nav2_map"],
             "cmd_vel_output_topic": "/cmd_vel_auto",
+            "rviz": str(stack_cfg["rviz"]).lower(),
             "settling": str(settling),
             **{
                 f"fast_lio_body_bridge_{name}": bridge[name]

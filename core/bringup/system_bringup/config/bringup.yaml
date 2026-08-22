@@ -3,7 +3,7 @@
 # 本文件仍不进入 setup.py data_files，避免 install 副本成为第二配置源。
 
 # === 顶层:改这两行切 4 组合(sim/real × navigation/mapping),不用 rebuild ===
-platform: sim              # sim | real
+platform: real             # sim | real
 mode: navigation           # navigation | mapping
 
 # === 平台事实 Profile：路径相对本文件解析 ===
@@ -28,4 +28,5 @@ robot_gz:
 
 # === 共享上层编排 ===
 slam_stack:
+  rviz: false                  # navigation 调试窗口；默认由 Web 页面代替
   settling: 20.0              # ready_gate 就绪后再等的稳定秒数(所有 gate 共用)

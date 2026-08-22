@@ -110,9 +110,12 @@ skips 为准。
 编辑 `core/bringup/system_bringup/config/bringup.yaml` 顶部两项：
 
 ```yaml
-platform: sim       # sim | real
+platform: real      # sim | real
 mode: navigation    # navigation | mapping
 ```
+
+导航默认使用 Web 页面且不启动 RViz；调试时可把同一文件中的
+`slam_stack.rviz` 临时改为 `true`。
 
 Profile 和该选择文件从源码位置读取，修改后不需要重建；新增或修改安装到 package share
 的 launch/template 文件仍需要重新 `colcon build`。

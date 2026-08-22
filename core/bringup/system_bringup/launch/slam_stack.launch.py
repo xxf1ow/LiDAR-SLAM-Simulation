@@ -10,6 +10,7 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
                             LogInfo, OpaqueFunction)
+from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -96,6 +97,7 @@ def _stack(context, *args, **kwargs):
             executable="rviz2",
             name="rviz2",
             output="log",
+            condition=IfCondition(LaunchConfiguration("rviz")),
             arguments=[
                 "-d",
                 os.path.join(
@@ -135,6 +137,7 @@ def generate_launch_description():
         DeclareLaunchArgument("nav2_params_file"),
         DeclareLaunchArgument("nav_map"),
         DeclareLaunchArgument("cmd_vel_output_topic", default_value="/cmd_vel"),
+        DeclareLaunchArgument("rviz"),
         DeclareLaunchArgument("fast_lio_body_bridge_x"),
         DeclareLaunchArgument("fast_lio_body_bridge_y"),
         DeclareLaunchArgument("fast_lio_body_bridge_z"),

@@ -143,9 +143,10 @@ echo $?
 
 ### 真机静态验收与 bag
 
-真机静态验收时临时把源码 `config/bringup.yaml` 设为 `platform: real`，再选
+真机静态验收时使用源码 `config/bringup.yaml` 的默认 `platform: real`，再选
 `mode: mapping` 或 `mode: navigation`，启动 `ros2 launch system_bringup bringup.launch.py`。
-验收后必须恢复仓库默认 `platform: sim`、`mode: navigation`；该切换不需要 rebuild。
+验收后必须恢复仓库默认 `platform: real`、`mode: navigation`；该切换不需要 rebuild。
+导航默认由 Web 页面代替 RViz；需要调试时可临时设置 `slam_stack.rviz: true`。
 
 建图模式应复验真实底盘、Vanjee、control gate、Web 与 LIO-SAM real 均启动，正式参数使用
 `lio_sam.generated.yaml`，`/lio_sam/mapping/odometry` 持续发布，且 `map → base_footprint`

@@ -1086,7 +1086,7 @@ def test_final_bringup_shape_passes_runtime_consistency(
     runtime_factory, platform, mode
 ):
     repo_root, manifest = runtime_factory(platform, mode)
-    assert set(manifest["bringup_config"]["slam_stack"]) == {"settling"}
+    assert set(manifest["bringup_config"]["slam_stack"]) == {"rviz", "settling"}
     assert cc.run_runtime_consistency(repo_root, manifest) == []
 
 

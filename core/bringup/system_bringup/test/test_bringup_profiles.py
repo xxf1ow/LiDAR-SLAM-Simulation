@@ -33,12 +33,19 @@ def test_runtime_selection_uses_supported_platform_and_mode_schema():
     assert cfg["mode"] in {"mapping", "navigation"}
 
 
+def test_runtime_selection_defaults_to_real_navigation():
+    cfg = _load()
+    assert cfg["platform"] == "real"
+    assert cfg["mode"] == "navigation"
+
+
 def test_bringup_has_only_runtime_selection_resources_and_orchestration():
     cfg = _load()
     assert set(cfg) == {
         "platform", "mode", "profiles", "map_artifacts", "robot_gz", "slam_stack"
     }
-    assert set(cfg["slam_stack"]) == {"settling"}
+    assert set(cfg["slam_stack"]) == {"rviz", "settling"}
+    assert cfg["slam_stack"]["rviz"] is False
     settling = cfg["slam_stack"]["settling"]
     assert not isinstance(settling, bool)
     assert isinstance(settling, (int, float))

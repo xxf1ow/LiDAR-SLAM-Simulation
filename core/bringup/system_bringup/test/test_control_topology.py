@@ -320,7 +320,7 @@ def test_slam_stack_navigation_owns_one_manifest_driven_body_bridge():
     assert first_term.elts[2].id == "fast_lio"
 
 
-def test_slam_stack_starts_one_rviz_before_localization_gate():
+def test_slam_stack_keeps_navigation_rviz_disabled_unless_requested():
     function = _function(_tree(SLAM_STACK), "_stack")
     navigation = _mode_branch(function, "navigation")
     rviz_nodes = [
@@ -330,6 +330,12 @@ def test_slam_stack_starts_one_rviz_before_localization_gate():
     ]
     assert len(rviz_nodes) == 1
     assert _string(_keyword(rviz_nodes[0], "name")) == "rviz2"
+    condition = _keyword(rviz_nodes[0], "condition")
+    assert isinstance(condition, ast.Call)
+    assert condition.func.id == "IfCondition"
+    assert isinstance(condition.args[0], ast.Call)
+    assert condition.args[0].func.id == "LaunchConfiguration"
+    assert _string(condition.args[0].args[0]) == "rviz"
 
     result = next(
         node.value for node in navigation.body if isinstance(node, ast.Return)
@@ -625,7 +631,7 @@ def test_slam_stack_algorithm_and_map_paths_are_all_required():
     tree = _tree(SLAM_STACK)
     required = {
         "lio_sam_params_file", "fast_lio_params_file", "gicp_config_file",
-        "prior_map_path", "nav2_params_file", "nav_map",
+        "prior_map_path", "nav2_params_file", "nav_map", "rviz",
     }
     declarations = {
         _string(call.args[0]): call
@@ -687,6 +693,8 @@ def test_formal_bringup_passes_generated_slam_runtime_selections():
     settling = _dict_value(arguments, "settling")
     assert isinstance(settling, ast.Call) and settling.func.id == "str"
     assert isinstance(settling.args[0], ast.Name) and settling.args[0].id == "settling"
+    rviz = _dict_value(arguments, "rviz")
+    assert ast.unparse(rviz) == "str(stack_cfg['rviz']).lower()"
 
 
 def test_gicp_launch_requires_config_and_map_without_clock_override():
