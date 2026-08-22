@@ -194,15 +194,20 @@ def _run_browser_scenario(scenario):
           }}
         }};
 
+        let fakeNow = 0;
+        global.performance = {{now: () => fakeNow}};
         const timers = [];
         global.setTimeout = (callback, milliseconds) => {{
-          timers.push({{callback, milliseconds}});
-          return timers.length;
+          const timer = {{callback, milliseconds, canceled: false}};
+          timers.push(timer);
+          return timer;
         }};
+        global.clearTimeout = (timer) => {{ timer.canceled = true; }};
 
         const requests = [];
         const eventLog = [];
         const pending = [];
+        let maxPending = 0;
         global.fetch = (path, options) => {{
           const request = {{
             path,
@@ -222,6 +227,7 @@ def _run_browser_scenario(scenario):
               async json() {{ return payload; }}
             }});
             pending.push(request);
+            maxPending = Math.max(maxPending, pending.length);
           }});
         }};
 
@@ -236,12 +242,28 @@ def _run_browser_scenario(scenario):
           await flush();
         }}
 
-        async function tick() {{
-          assert(timers.length > 0, "missing command delay");
-          const timer = timers.shift();
-          assert.strictEqual(timer.milliseconds, 100);
+        async function tick(expectedMilliseconds = 100) {{
+          let timer = null;
+          while (timers.length > 0) {{
+            const candidate = timers.shift();
+            if (!candidate.canceled) {{
+              timer = candidate;
+              break;
+            }}
+          }}
+          if (timer === null) {{
+            fakeNow += expectedMilliseconds;
+            await flush();
+            return;
+          }}
+          assert.strictEqual(timer.milliseconds, expectedMilliseconds);
+          fakeNow += expectedMilliseconds;
           timer.callback();
           await flush();
+        }}
+
+        function advance(milliseconds) {{
+          fakeNow += milliseconds;
         }}
 
         {script}
@@ -430,16 +452,28 @@ def _run_browser_scenario(scenario):
             commandLoop();
             await flush();
             assert.strictEqual(requests.length, 1);
+            assert.strictEqual(
+              timers.filter((timer) => !timer.canceled).length,
+              1
+            );
+            assert.strictEqual(timers[0].milliseconds, 100);
             await directionButtons[0].emit("pointerdown");
             assert.strictEqual(desiredDirection, "forward");
-            await tick();
+            await flush();
             assert.strictEqual(requests.length, 2);
             assert.strictEqual(requests[1].body.direction, "forward");
             await directionButtons[0].emit("pointerup");
             assert.strictEqual(desiredDirection, "stop");
+            await flush();
+            assert.strictEqual(requests.length, 2);
             await resolveNext();
-            await tick();
+            assert.strictEqual(requests.length, 3);
             assert.strictEqual(requests[2].body.direction, "stop");
+            advance(150);
+            await resolveNext();
+            assert.strictEqual(requests.length, 4);
+            assert.strictEqual(requests[3].body.direction, "stop");
+            assert.strictEqual(maxPending, 1);
             return;
           }}
 

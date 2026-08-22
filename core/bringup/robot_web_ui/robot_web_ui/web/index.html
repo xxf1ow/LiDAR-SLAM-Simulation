@@ -193,6 +193,9 @@
   let mapView = null;
   let desiredDirection = "stop";
   let commandLoopRunning = false;
+  const COMMAND_PERIOD_MS = 100;
+  let commandGeneration = 0;
+  let commandWake = null;
   let noticeOwner = null;
   const heldMovementKeys = [];
   const motionButtons = document.querySelectorAll("[data-direction]");
@@ -203,10 +206,41 @@
 
   speed.addEventListener("input", () => {
     speedValue.textContent = speed.value + "%";
+    signalCommandChange();
   });
 
-  function delay(milliseconds) {
-    return new Promise((resolve) => setTimeout(resolve, milliseconds));
+  function signalCommandChange() {
+    commandGeneration += 1;
+    if (commandWake) commandWake();
+  }
+
+  function setDesiredDirection(direction) {
+    if (desiredDirection === direction) return;
+    desiredDirection = direction;
+    signalCommandChange();
+  }
+
+  function waitForNextCommand(startedAt, generation) {
+    const remaining = Math.max(
+      0,
+      COMMAND_PERIOD_MS - (performance.now() - startedAt)
+    );
+    if (remaining === 0 || commandGeneration !== generation) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      let timerId = null;
+      let finished = false;
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        if (timerId !== null) clearTimeout(timerId);
+        if (commandWake === finish) commandWake = null;
+        queueMicrotask(() => queueMicrotask(resolve));
+      };
+      commandWake = finish;
+      timerId = setTimeout(finish, remaining);
+    });
   }
 
   function applyMotionFeedback(payload) {
@@ -315,6 +349,8 @@
     if (commandLoopRunning) return;
     commandLoopRunning = true;
     while (commandLoopRunning) {
+      const startedAt = performance.now();
+      const generation = commandGeneration;
       try {
         const payload = await post("/api/manual-command", {
           direction: desiredDirection,
@@ -329,21 +365,21 @@
         if (error.payload) applyResponseMode(error.payload);
         showRequestFailure(error);
       }
-      await delay(100);
+      await waitForNextCommand(startedAt, generation);
     }
   }
 
   function beginMotion(event) {
     if (currentMode !== "manual" || modeSwitchInProgress()) return;
     buttonMotionOwner = event.currentTarget;
-    desiredDirection = event.currentTarget.dataset.direction;
+    setDesiredDirection(event.currentTarget.dataset.direction);
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function stopMotion() {
     buttonMotionOwner = null;
     heldMovementKeys.length = 0;
-    desiredDirection = "stop";
+    setDesiredDirection("stop");
   }
 
   function stopOwnedButtonMotion(event) {
@@ -356,7 +392,7 @@
     if ((event.key !== " " && event.key !== "Enter") || event.repeat) return;
     event.preventDefault();
     buttonMotionOwner = event.currentTarget;
-    desiredDirection = event.currentTarget.dataset.direction;
+    setDesiredDirection(event.currentTarget.dataset.direction);
   }
 
   motionButtons.forEach((button) => {
@@ -385,7 +421,7 @@
     const previousIndex = heldMovementKeys.indexOf(key);
     if (previousIndex !== -1) heldMovementKeys.splice(previousIndex, 1);
     heldMovementKeys.push(key);
-    desiredDirection = direction;
+    setDesiredDirection(direction);
   }
 
   function endWasdMotion(event) {
@@ -395,9 +431,9 @@
     const keyIndex = heldMovementKeys.indexOf(key);
     if (keyIndex !== -1) heldMovementKeys.splice(keyIndex, 1);
     const activeKey = heldMovementKeys[heldMovementKeys.length - 1];
-    desiredDirection = activeKey === undefined
+    setDesiredDirection(activeKey === undefined
       ? "stop"
-      : keyboardDirections[activeKey];
+      : keyboardDirections[activeKey]);
   }
 
   document.addEventListener("keydown", beginWasdMotion);
