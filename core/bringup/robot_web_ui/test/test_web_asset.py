@@ -45,9 +45,19 @@ def test_page_structure_matches_contextual_mobile_contract():
     status_markup = source.split('id="statusStrip"', 1)[1].split(
         'id="controlDock"', 1
     )[0]
+    manual_markup = source.split('id="manualControls"', 1)[1].split(
+        'id="modeToggle"', 1
+    )[0]
     assert "<button" not in status_markup
     status_css = source.split("#statusStrip {", 1)[1].split("}", 1)[0]
-    assert "background:" not in status_css
+    assert 'id="speedValue"' not in status_markup
+    assert 'id="speedValue"' in manual_markup
+    assert "background: rgba(11, 18, 32, 0.68)" in status_css
+    assert "color: #f2f6fb" in status_css
+    assert "padding: 8px 10px" in status_css
+    assert "border-radius: 10px" in status_css
+    assert "text-shadow: -1px -1px 0 #fff" not in status_css
+    assert "backdrop-filter" not in status_css
     assert "pointer-events: none" in status_css
     assert "safe-area-inset-bottom" in source
     assert "grid-template-columns: repeat(2, 1fr)" in source
@@ -299,8 +309,13 @@ def _run_browser_scenario(scenario):
             );
             assert.strictEqual(
               elements.get("feedbackState").textContent,
-              "底盘反馈正常"
+              ""
             );
+            assert.strictEqual(elements.get("feedbackState").hidden, true);
+
+            elements.get("speed").value = "35";
+            await elements.get("speed").emit("input");
+            assert.strictEqual(elements.get("speedValue").textContent, "35%");
 
             applyMotionFeedback({{
               linear_x: null,
@@ -319,6 +334,7 @@ def _run_browser_scenario(scenario):
               elements.get("feedbackState").textContent,
               "底盘反馈中断"
             );
+            assert.strictEqual(elements.get("feedbackState").hidden, false);
 
             await resolveNext({{
               payload: {{
@@ -339,8 +355,9 @@ def _run_browser_scenario(scenario):
             );
             assert.strictEqual(
               elements.get("feedbackState").textContent,
-              "底盘反馈正常"
+              ""
             );
+            assert.strictEqual(elements.get("feedbackState").hidden, true);
             return;
           }}
 
@@ -569,8 +586,9 @@ def _run_browser_scenario(scenario):
             );
             assert.strictEqual(
               elements.get("feedbackState").textContent,
-              "底盘反馈正常"
+              ""
             );
+            assert.strictEqual(elements.get("feedbackState").hidden, true);
             return;
           }}
 
