@@ -63,13 +63,18 @@ def _run_map_scenario(scenario):
             const contextStates = [];
             this.context = {
               fillStyle: "", strokeStyle: "", lineWidth: 1, globalAlpha: 1,
+              font: "10px sans-serif", textAlign: "start", textBaseline: "alphabetic",
               setTransform: (...args) => this.operations.push(["transform", ...args]),
               clearRect: (...args) => this.operations.push(["clear", ...args]),
               save: () => {
                 contextStates.push({
                   globalAlpha: this.context.globalAlpha,
+                  fillStyle: this.context.fillStyle,
                   strokeStyle: this.context.strokeStyle,
-                  lineWidth: this.context.lineWidth
+                  lineWidth: this.context.lineWidth,
+                  font: this.context.font,
+                  textAlign: this.context.textAlign,
+                  textBaseline: this.context.textBaseline
                 });
                 this.operations.push(["save"]);
               },
@@ -92,8 +97,17 @@ def _run_map_scenario(scenario):
               lineTo: (...args) => { this.path.push(["line", ...args]); this.operations.push(["line", ...args]); },
               stroke: () => this.operations.push(["stroke", this.context.strokeStyle, this.context.globalAlpha, [...this.path], this.context.lineWidth]),
               fill: () => this.operations.push(["robot", this.context.fillStyle, this.context.globalAlpha]),
-              fillText: (...args) => this.operations.push(["text", ...args]),
-              arc: (...args) => this.operations.push(["arc", ...args]),
+              fillText: (...args) => this.operations.push([
+                "text", ...args, this.context.fillStyle, this.context.font
+              ]),
+              strokeText: (...args) => this.operations.push([
+                "strokeText", ...args, this.context.strokeStyle,
+                this.context.lineWidth, this.context.font
+              ]),
+              arc: (...args) => {
+                this.path.push(["arc", ...args]);
+                this.operations.push(["arc", ...args]);
+              },
               closePath: () => {
                 if (this.subpathStart) this.path.push(["line", ...this.subpathStart]);
                 this.operations.push(["close"]);
@@ -434,14 +448,62 @@ def _run_map_scenario(scenario):
               [116, 18, 14, 0, Math.PI * 2],
               [84, 34, 14, 0, Math.PI * 2]
             ]);
-            const labels = canvas.operations
-              .filter((operation) => operation[0] === "text")
-              .map((operation) => operation[1]);
-            assert.deepStrictEqual(labels, ["1", "7"]);
+            const labels = canvas.operations.filter(
+              (operation) => operation[0] === "text"
+            );
+            assert.deepStrictEqual(labels.map((operation) => operation[1]), ["1", "7"]);
+            labels.forEach((operation) => {
+              assert.strictEqual(operation[4], "#ffffff");
+              assert.strictEqual(operation[5], "bold 16px sans-serif");
+            });
+            const outlinedLabels = canvas.operations.filter(
+              (operation) => operation[0] === "strokeText"
+            );
+            assert.deepStrictEqual(
+              outlinedLabels.map((operation) => operation[1]),
+              ["1", "7"]
+            );
+            outlinedLabels.forEach((operation) => {
+              assert.strictEqual(operation[4], "#111827");
+              assert.strictEqual(operation[5], 3);
+              assert.strictEqual(operation[6], "bold 16px sans-serif");
+            });
+            const circleStrokes = canvas.operations.filter(
+              (operation) => operation[0] === "stroke"
+                && operation[1] === "#111827"
+                && operation[4] === 3
+                && operation[3][0]?.[0] === "arc"
+            );
+            assert.strictEqual(circleStrokes.length, 2);
             const arrowStrokes = canvas.operations.filter(
-              (operation) => operation[0] === "stroke" && operation[4] === 3
+              (operation) => operation[0] === "stroke"
+                && operation[1] === "#00c853"
+                && operation[4] === 3
+                && operation[3][0]?.[0] === "move"
             );
             assert.strictEqual(arrowStrokes.length, 2);
+            const arrowHalos = canvas.operations.filter(
+              (operation) => operation[0] === "stroke"
+                && operation[1] === "#111827"
+                && operation[4] === 6
+                && operation[3][0]?.[0] === "move"
+            );
+            assert.strictEqual(arrowHalos.length, 2);
+            const arrowStrokeIndexes = canvas.operations
+              .map((operation, index) => [operation, index])
+              .filter(([operation]) => operation[0] === "stroke"
+                && operation[1] === "#00c853"
+                && operation[4] === 3
+                && operation[3][0]?.[0] === "move")
+              .map(([, index]) => index);
+            const labelIndexes = canvas.operations
+              .map((operation, index) => [operation, index])
+              .filter(([operation]) => operation[0] === "text")
+              .map(([, index]) => index);
+            assert.strictEqual(arrowStrokeIndexes.length, labelIndexes.length);
+            arrowStrokeIndexes.forEach((index, markerIndex) => {
+              assert(index < labelIndexes[markerIndex], "label must paint above its arrow");
+            });
             arrowStrokes.forEach((operation) => {
               const path = operation[3];
               assert.strictEqual(path.length, 6);
@@ -453,6 +515,10 @@ def _run_map_scenario(scenario):
               assert.strictEqual(path[5][0], "line");
               assert.deepStrictEqual(path[2].slice(1), path[1].slice(1));
               assert.deepStrictEqual(path[4].slice(1), path[1].slice(1));
+              const matchingArc = arcs.find((arc) => Math.abs(Math.hypot(
+                path[0][1] - arc[1], path[0][2] - arc[2]
+              ) - 14) < 1e-12);
+              assert(matchingArc, "arrow shaft must start at the circle edge");
               assert(
                 Math.abs(Math.hypot(
                   path[1][1] - path[0][1], path[1][2] - path[0][2]
@@ -484,7 +550,10 @@ def _run_map_scenario(scenario):
               .map((operation) => operation.slice(1, 3));
             assert.notDeepStrictEqual(afterZoomArcs, afterPan);
             canvas.operations
-              .filter((operation) => operation[0] === "stroke" && operation[4] === 3)
+              .filter((operation) => operation[0] === "stroke"
+                && operation[1] === "#00c853"
+                && operation[4] === 3
+                && operation[3][0]?.[0] === "move")
               .forEach((operation) => {
                 const path = operation[3];
                 assert(
@@ -500,7 +569,10 @@ def _run_map_scenario(scenario):
               });
             assert.strictEqual(
               canvas.operations
-                .filter((operation) => operation[0] === "stroke" && operation[4] === 3)
+                .filter((operation) => operation[0] === "stroke"
+                  && operation[1] === "#00c853"
+                  && operation[4] === 3
+                  && operation[3][0]?.[0] === "move")
                 .every((operation) => Math.abs(Math.hypot(
                   operation[3][1][1] - operation[3][0][1],
                   operation[3][1][2] - operation[3][0][2]

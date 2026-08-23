@@ -18,11 +18,13 @@
     path: "#55ffff",
     robot: "#ffd400",
     placement: "#ff8a00",
-    parking: "#7c3aed"
+    parking: "#00c853",
+    parkingText: "#ffffff"
   };
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 128;
   const PARKING_ARROW_LENGTH = 20;
+  const PARKING_ARROW_START = 14;
   const PARKING_ARROWHEAD_LENGTH = 8;
   const PARKING_ARROWHEAD_ANGLE = Math.PI / 6;
   const PLACEMENT_ALPHA = 0.90;
@@ -288,21 +290,18 @@
       context.fillStyle = PALETTE.parking;
       context.strokeStyle = PALETTE.halo;
       context.lineWidth = 3;
+      context.font = "bold 16px sans-serif";
       context.textAlign = "center";
       context.textBaseline = "middle";
       parkingPoints.forEach((point) => {
         const screenX = transform.x + point.x * transform.scale;
         const screenY = transform.y - point.y * transform.scale;
+        const startX = screenX + Math.cos(point.yaw) * PARKING_ARROW_START;
+        const startY = screenY - Math.sin(point.yaw) * PARKING_ARROW_START;
+        const tipX = startX + Math.cos(point.yaw) * PARKING_ARROW_LENGTH;
+        const tipY = startY - Math.sin(point.yaw) * PARKING_ARROW_LENGTH;
         context.beginPath();
-        context.arc(screenX, screenY, 14, 0, Math.PI * 2);
-        context.fill();
-        context.fillStyle = PALETTE.halo;
-        context.fillText(String(point.number), screenX, screenY);
-        context.fillStyle = PALETTE.parking;
-        const tipX = screenX + Math.cos(point.yaw) * PARKING_ARROW_LENGTH;
-        const tipY = screenY - Math.sin(point.yaw) * PARKING_ARROW_LENGTH;
-        context.beginPath();
-        context.moveTo(screenX, screenY);
+        context.moveTo(startX, startY);
         context.lineTo(tipX, tipY);
         context.moveTo(tipX, tipY);
         context.lineTo(
@@ -318,7 +317,22 @@
           tipY + Math.sin(point.yaw + PARKING_ARROWHEAD_ANGLE)
             * PARKING_ARROWHEAD_LENGTH
         );
+        context.strokeStyle = PALETTE.halo;
+        context.lineWidth = 6;
         context.stroke();
+        context.strokeStyle = PALETTE.parking;
+        context.lineWidth = 3;
+        context.stroke();
+        context.fillStyle = PALETTE.parking;
+        context.strokeStyle = PALETTE.halo;
+        context.lineWidth = 3;
+        context.beginPath();
+        context.arc(screenX, screenY, 14, 0, Math.PI * 2);
+        context.fill();
+        context.stroke();
+        context.strokeText(String(point.number), screenX, screenY);
+        context.fillStyle = PALETTE.parkingText;
+        context.fillText(String(point.number), screenX, screenY);
       });
       context.restore();
     }
