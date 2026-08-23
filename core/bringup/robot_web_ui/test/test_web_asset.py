@@ -722,6 +722,42 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(modeSwitchInProgress(), false);
             assert(directionButtons.every((button) => button.disabled));
+
+            elements.get("notice").textContent = "newer notice";
+            noticeOwner = "mode";
+            const staleModePromise = modeToggle.emit("click");
+            const staleModeRequest = pending[
+              pending.findLastIndex((request) =>
+                request.path === "/api/takeover-manual"
+              )
+            ];
+            assert(staleModeRequest);
+            terminateManualSession();
+            assert.strictEqual(currentMode, null);
+            assert.strictEqual(elements.get("notice").textContent, "newer notice");
+            assert.strictEqual(
+              elements.get("linearVelocity").textContent,
+              "0.40 m/s"
+            );
+            staleModeRequest.resolve({{payload: {{
+              ok: true,
+              mode: "manual",
+              linear_x: 9.9,
+              angular_z: 8.8,
+              feedback_fresh: true
+            }}}});
+            await staleModePromise;
+            await flush();
+            assert.strictEqual(currentMode, null);
+            assert.strictEqual(elements.get("notice").textContent, "newer notice");
+            assert.strictEqual(
+              elements.get("linearVelocity").textContent,
+              "0.40 m/s"
+            );
+            assert.strictEqual(
+              elements.get("angularVelocity").textContent,
+              "-0.20 rad/s"
+            );
             return;
           }}
 

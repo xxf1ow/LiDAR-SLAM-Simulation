@@ -534,10 +534,11 @@
     stopMotion();
     renderControls();
     try {
-      const payload = await post(path, {});
+      const payload = await post(path, {}, {applyFeedback: false});
       if (requestGeneration !== modeGeneration) return;
       modeGeneration += 1;
       settledGeneration = modeGeneration;
+      applyResponseFeedback(payload);
       applyResponseMode(payload);
       noticeOwner = "mode";
       notice.textContent = payload.pending
@@ -547,6 +548,7 @@
       if (requestGeneration !== modeGeneration) return;
       modeGeneration += 1;
       settledGeneration = modeGeneration;
+      if (error.payload) applyResponseFeedback(error.payload);
       if (error.payload) applyResponseMode(error.payload);
       modeSwitchPending = false;
       modeSwitchTarget = null;
