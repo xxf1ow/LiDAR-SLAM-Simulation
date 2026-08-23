@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import secrets
 import socket
+import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,6 +12,7 @@ from .navigation_request import MapRevisionConflict
 
 
 REQUEST_TIMEOUT = 0.5
+MANUAL_SEQUENCE_MAX = 9_007_199_254_740_991
 ASSET_PATHS = {
     "/api/map/static": "static",
     "/api/map/global-costmap": "global_costmap",
@@ -40,7 +43,37 @@ class RobotWebHttpServer(ThreadingHTTPServer):
     daemon_threads = True
 
 
+def _manual_command_payload(payload):
+    if set(payload) != {
+        "session_id",
+        "sequence",
+        "direction",
+        "speed_percent",
+    }:
+        raise ValueError("manual command fields are invalid")
+    session_id, sequence, direction, speed_percent = (
+        payload["session_id"],
+        payload["sequence"],
+        payload["direction"],
+        payload["speed_percent"],
+    )
+    if not (isinstance(session_id, str) and session_id):
+        raise ValueError("session_id must be a nonempty string")
+    if (
+        not isinstance(sequence, int)
+        or isinstance(sequence, bool)
+        or not 1 <= sequence <= MANUAL_SEQUENCE_MAX
+    ):
+        raise ValueError("sequence must be a positive safe integer")
+    return session_id, sequence, direction, speed_percent
+
+
 def _handler_for(actions, html_path: Path):
+    manual_lock = threading.Lock()
+    active_session_id = None
+    last_sequence = 0
+    manual_mode = None
+
     class RobotWebRequestHandler(BaseHTTPRequestHandler):
         def setup(self) -> None:
             super().setup()
@@ -174,6 +207,7 @@ def _handler_for(actions, html_path: Path):
         def do_POST(self) -> None:
             path = urlsplit(self.path).path
             if path not in {
+                "/api/manual-session",
                 "/api/manual-command",
                 "/api/takeover-manual",
                 "/api/resume-automatic",
@@ -184,14 +218,86 @@ def _handler_for(actions, html_path: Path):
                 self._send_json(404, {"error": "not found"})
                 return
 
+            manual_command_context = None
             try:
                 payload = self._read_json()
-                if path == "/api/manual-command":
-                    mode = actions.manual_command(
-                        payload.get("direction"),
-                        payload.get("speed_percent"),
+                if path == "/api/manual-session":
+                    if payload != {}:
+                        raise ValueError("manual session request must be {}")
+                    nonlocal active_session_id, last_sequence, manual_mode
+                    with manual_lock:
+                        mode = actions.manual_command("stop", 0)
+                        session_id = secrets.token_urlsafe(16)
+                        active_session_id = session_id
+                        last_sequence = 0
+                        manual_mode = mode
+                    self._send_action_json(
+                        200,
+                        {
+                            "ok": True,
+                            "session_id": session_id,
+                            "mode": mode,
+                        },
                     )
-                elif path == "/api/takeover-manual":
+                    return
+                if path == "/api/manual-command":
+                    (
+                        session_id,
+                        sequence,
+                        direction,
+                        speed_percent,
+                    ) = _manual_command_payload(payload)
+                    manual_response = None
+                    manual_status = 200
+                    manual_response_with_status = False
+                    with manual_lock:
+                        previous_sequence = last_sequence
+                        manual_command_context = (
+                            sequence,
+                            previous_sequence,
+                        )
+                        if active_session_id != session_id:
+                            manual_status = 409
+                            manual_response = {
+                                "error": "inactive manual session",
+                                "accepted": False,
+                                "reason": "inactive_session",
+                                "sequence": sequence,
+                            }
+                        elif sequence <= last_sequence:
+                            manual_response_with_status = True
+                            manual_response = {
+                                "ok": True,
+                                "accepted": False,
+                                "reason": "stale_sequence",
+                                "sequence": sequence,
+                                "last_sequence": last_sequence,
+                                "mode": manual_mode,
+                            }
+                        else:
+                            mode = actions.manual_command(
+                                direction,
+                                speed_percent,
+                            )
+                            last_sequence = sequence
+                            manual_mode = mode
+                            manual_response_with_status = True
+                            manual_response = {
+                                "ok": True,
+                                "accepted": True,
+                                "sequence": sequence,
+                                "last_sequence": sequence,
+                                "mode": mode,
+                            }
+                    if manual_response_with_status:
+                        self._send_action_json(
+                            manual_status,
+                            manual_response,
+                        )
+                    else:
+                        self._send_json(manual_status, manual_response)
+                    return
+                if path == "/api/takeover-manual":
                     mode = actions.takeover_manual()
                 elif path == "/api/resume-automatic":
                     mode = actions.resume_automatic()
@@ -219,27 +325,81 @@ def _handler_for(actions, html_path: Path):
                 self._send_json(409, {"error": str(exc)})
                 return
             except ValueError as exc:
-                self._send_json(400, {"error": str(exc)})
+                if manual_command_context is None:
+                    self._send_json(400, {"error": str(exc)})
+                else:
+                    sequence, previous_sequence = manual_command_context
+                    self._send_action_json(
+                        400,
+                        {
+                            "error": str(exc),
+                            "accepted": False,
+                            "sequence": sequence,
+                            "last_sequence": previous_sequence,
+                            "mode": manual_mode,
+                        },
+                    )
                 return
             except ActionConflict as exc:
-                self._send_action_json(
-                    409,
-                    {"error": str(exc), "mode": exc.mode},
-                )
+                if manual_command_context is None:
+                    self._send_action_json(
+                        409,
+                        {"error": str(exc), "mode": exc.mode},
+                    )
+                else:
+                    sequence, previous_sequence = manual_command_context
+                    self._send_action_json(
+                        409,
+                        {
+                            "error": str(exc),
+                            "accepted": False,
+                            "sequence": sequence,
+                            "last_sequence": previous_sequence,
+                            "mode": exc.mode,
+                        },
+                    )
                 return
             except ActionPending as exc:
-                self._send_action_json(
-                    202,
-                    {
-                        "ok": False,
-                        "pending": True,
-                        "error": str(exc),
-                        "mode": exc.mode,
-                    },
-                )
+                if manual_command_context is None:
+                    self._send_action_json(
+                        202,
+                        {
+                            "ok": False,
+                            "pending": True,
+                            "error": str(exc),
+                            "mode": exc.mode,
+                        },
+                    )
+                else:
+                    sequence, previous_sequence = manual_command_context
+                    self._send_action_json(
+                        202,
+                        {
+                            "ok": False,
+                            "pending": True,
+                            "error": str(exc),
+                            "accepted": False,
+                            "sequence": sequence,
+                            "last_sequence": previous_sequence,
+                            "mode": exc.mode,
+                        },
+                    )
                 return
             except ActionUnavailable as exc:
-                self._send_json(503, {"error": str(exc)})
+                if manual_command_context is None:
+                    self._send_json(503, {"error": str(exc)})
+                else:
+                    sequence, previous_sequence = manual_command_context
+                    self._send_action_json(
+                        503,
+                        {
+                            "error": str(exc),
+                            "accepted": False,
+                            "sequence": sequence,
+                            "last_sequence": previous_sequence,
+                            "mode": manual_mode,
+                        },
+                    )
                 return
             self._send_action_json(200, {"ok": True, "mode": mode})
 
