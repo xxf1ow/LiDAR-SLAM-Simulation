@@ -21,7 +21,11 @@ def test_page_structure_matches_contextual_mobile_contract():
     for element_id in (
         "mapCanvas", "statusStrip", "modeStatus", "motionStatus",
         "notice", "navigationStatus", "controlDock", "mapActions",
-        "navigationActions", "manualControls", "modeToggle",
+        "operationRegion", "navigationActions", "parkingActions",
+        "manualControls", "saveParkingForm", "parkingName",
+        "confirmSaveParkingPoint", "cancelSaveParkingPoint",
+        "parkingDrawer", "parkingDrawerHeader", "parkingDrawerClose",
+        "parkingList", "modeToggle",
         "setInitialPose", "navigationAction", "confirmPlacement",
         "cancelPlacement", "speed", "linearVelocity",
         "angularVelocity", "feedbackState", "mapZoomIn",
@@ -36,8 +40,8 @@ def test_page_structure_matches_contextual_mobile_contract():
     ) < source.index('data-direction="left"') < source.index(
         'data-direction="right"'
     )
-    assert 'id="saveParkingPoint"' not in source
-    assert 'id="goToParkingPoint"' not in source
+    assert source.count('id="saveParkingPoint"') == 1
+    assert source.count('id="goToParkingPoint"') == 1
     assert 'addEventListener("wheel"' not in source
     assert 'addEventListener("touch' not in source
     assert 'controlDock: document.getElementById("controlDock")' in source
@@ -62,6 +66,9 @@ def test_page_structure_matches_contextual_mobile_contract():
     assert "pointer-events: none" in status_css
     assert "safe-area-inset-bottom" in source
     assert "grid-template-columns: repeat(2, 1fr)" in source
+    assert "max-height: 55dvh" in source
+    assert "overflow-y: auto" in source
+    assert "id=\"parkingList\"" in source
     assert "min-height: 44px" in source
     assert '<input id="speed" type="range" min="0" max="100"' in source
     assert '<script src="/map_view.js"></script>' in source
@@ -103,6 +110,8 @@ def _run_browser_scenario(scenario):
             this.value = id === "speed" ? "20" : "";
                 this.textContent = "";
                 this.dataset = {{}};
+                this.children = [];
+                this.parentNode = null;
                 this.disabled = false;
                 this.hidden = false;
                 this.listeners = new Map();
@@ -116,10 +125,22 @@ def _run_browser_scenario(scenario):
             if (!this.listeners.has(name)) this.listeners.set(name, []);
             this.listeners.get(name).push(callback);
           }}
+          append(...children) {{
+            children.forEach((child) => {{
+              child.parentNode = this;
+              this.children.push(child);
+            }});
+          }}
+          replaceChildren(...children) {{
+            this.children.forEach((child) => {{ child.parentNode = null; }});
+            this.children = [];
+            this.append(...children);
+          }}
           emit(name, event = {{}}) {{
             const callbacks = this.listeners.get(name) || [];
             return Promise.all(callbacks.map((callback) => callback({{
               currentTarget: this,
+              target: this,
               pointerId: 7,
               key: "",
               repeat: false,
@@ -162,7 +183,12 @@ def _run_browser_scenario(scenario):
         const elements = new Map(
           ["speed", "speedValue", "notice", "modeToggle", "modeStatus",
            "motionStatus", "statusStrip", "controlDock", "mapActions",
-           "navigationActions", "manualControls",
+               "navigationActions", "manualControls",
+               "parkingActions", "saveParkingForm", "parkingName",
+               "saveParkingPoint", "goToParkingPoint",
+           "confirmSaveParkingPoint", "cancelSaveParkingPoint",
+           "parkingDrawer", "parkingDrawerHeader", "parkingDrawerClose",
+           "parkingList", "operationRegion",
             "linearVelocity", "angularVelocity", "feedbackState",
             "mapCanvas", "mapZoomIn", "mapZoomOut",
             "mapFit", "mapCenterRobot"].map(
@@ -171,15 +197,26 @@ def _run_browser_scenario(scenario):
         );
         elements.set("mapCanvas", new FakeCanvas());
         const mapViewCalls = [];
+        let mapViewOptions = null;
         global.RobotMapView = {{
           create(options) {{
+            mapViewOptions = options;
             assert.strictEqual(options.controlDock, elements.get("controlDock"));
             return {{
               cancelPlacement() {{
                 mapViewCalls.push(["cancelPlacement"]);
                 eventLog.push(["cancelPlacement"]);
               }},
-              refreshViewport() {{ mapViewCalls.push(["refreshViewport"]); }}
+              refreshViewport() {{ mapViewCalls.push(["refreshViewport"]); }},
+              setParkingPoints(points) {{
+                mapViewCalls.push(["setParkingPoints", points]);
+              }},
+              setParkingPointsVisible(visible) {{
+                mapViewCalls.push(["setParkingPointsVisible", visible]);
+              }},
+              showNavigationRequestFailure(error) {{
+                mapViewCalls.push(["showNavigationRequestFailure", error.message]);
+              }}
             }};
           }}
         }};
@@ -196,6 +233,7 @@ def _run_browser_scenario(scenario):
         global.document = {{
           hidden: false,
           getElementById(id) {{ return elements.get(id); }},
+          createElement(tagName) {{ return new FakeElement(tagName); }},
           querySelectorAll() {{ return directionButtons; }},
           addEventListener(name, callback) {{
             documentListeners.set(name, callback);
@@ -221,10 +259,13 @@ def _run_browser_scenario(scenario):
         const eventLog = [];
         const pending = [];
         global.fetch = (path, options) => {{
+          const requestOptions = options || {{}};
           const request = {{
             path,
-            body: JSON.parse(options.body),
-            signal: options.signal,
+            body: requestOptions.body === undefined
+              ? undefined
+              : JSON.parse(requestOptions.body),
+            signal: requestOptions.signal,
             resolve: null,
             reject: null,
             settled: false
@@ -292,6 +333,216 @@ def _run_browser_scenario(scenario):
           assert.strictEqual(requests.length, 1);
           assert.strictEqual(requests[0].path, "/api/manual-session");
           assert.deepStrictEqual(requests[0].body, {{}});
+
+          if (scenario === "parking_lifecycle") {{
+            const saveParkingPoint = elements.get("saveParkingPoint");
+            const goToParkingPoint = elements.get("goToParkingPoint");
+            const parkingActions = elements.get("parkingActions");
+            const saveParkingForm = elements.get("saveParkingForm");
+            const parkingName = elements.get("parkingName");
+            const parkingDrawer = elements.get("parkingDrawer");
+            const parkingDrawerClose = elements.get("parkingDrawerClose");
+            const parkingList = elements.get("parkingList");
+            const points = [
+              {{number: 2, name: "停车点 7", x: 1, y: 2, yaw: 0}},
+              {{number: 5, name: "备用点", x: 3, y: 4, yaw: 1}}
+            ];
+            assert.deepStrictEqual(
+              mapViewOptions.navigationButtons.parkingActions,
+              [saveParkingPoint, goToParkingPoint]
+            );
+
+            await resolveNext({{payload: {{
+              ok: true, session_id: "session-a", mode: "manual"
+            }}}});
+            assert.strictEqual(parkingActions.hidden, true);
+            assert.strictEqual(requests[1].path, "/api/manual-command");
+            assert.deepStrictEqual(requests[1].body, {{
+              session_id: "session-a", sequence: 1,
+              direction: "stop", speed_percent: 20
+            }});
+            await resolveNext({{payload: {{
+              ok: true, sequence: 1, mode: "manual"
+            }}}});
+
+            const automaticPromise = elements.get("modeToggle").emit("click");
+            await flush();
+            assert.strictEqual(requests[2].path, "/api/manual-command");
+            assert.deepStrictEqual(requests[2].body, {{
+              session_id: "session-a", sequence: 2,
+              direction: "stop", speed_percent: 20
+            }});
+            assert.strictEqual(requests[3].path, "/api/resume-automatic");
+            assert.deepStrictEqual(requests[3].body, {{}});
+            await resolveNext({{payload: {{
+              ok: true, sequence: 2, mode: "manual"
+            }}}});
+            await resolveNext({{payload: {{ok: true, mode: "automatic"}}}});
+            await flush();
+            assert.strictEqual(requests[4].path, "/api/parking-points");
+            assert.strictEqual(requests[4].body, undefined);
+            await resolveNext({{payload: {{points}}}});
+            await automaticPromise;
+            await flush();
+            assert.strictEqual(parkingActions.hidden, false);
+            assert.strictEqual(saveParkingForm.hidden, true);
+            assert.deepStrictEqual(
+              mapViewCalls.at(-1), ["setParkingPoints", points]
+            );
+            const parkingGetCount = requests.filter(
+              (request) => request.path === "/api/parking-points"
+            ).length;
+            applyMode("automatic");
+            await flush();
+            assert.strictEqual(
+              requests.filter(
+                (request) => request.path === "/api/parking-points"
+              ).length,
+              parkingGetCount
+            );
+
+            const requestCountBeforeCancel = requests.length;
+            await saveParkingPoint.emit("click");
+            assert.strictEqual(saveParkingForm.hidden, false);
+            assert.strictEqual(parkingName.value, "停车点 8");
+            await elements.get("cancelSaveParkingPoint").emit("click");
+            assert.strictEqual(saveParkingForm.hidden, true);
+            assert.strictEqual(requests.length, requestCountBeforeCancel);
+
+            await saveParkingPoint.emit("click");
+            parkingName.value = "新停车点";
+            const failedSave = elements.get("confirmSaveParkingPoint").emit("click");
+            await flush();
+            assert.strictEqual(requests.at(-1).path, "/api/parking-points/save");
+            assert.deepStrictEqual(requests.at(-1).body, {{name: "新停车点"}});
+            requests.at(-1).resolve({{
+              ok: false, status: 409, payload: {{error: "重复停车点"}}
+            }});
+            await failedSave;
+            await flush();
+            assert.strictEqual(saveParkingForm.hidden, false);
+            assert.strictEqual(parkingName.value, "新停车点");
+            assert.strictEqual(
+              elements.get("notice").textContent,
+              "请求失败：重复停车点"
+            );
+
+            const saved = elements.get("confirmSaveParkingPoint").emit("click");
+            await flush();
+            assert.deepStrictEqual(requests.at(-1).body, {{name: "新停车点"}});
+            requests.at(-1).resolve({{payload: {{ok: true}}}});
+            await flush();
+            assert.strictEqual(requests.at(-1).path, "/api/parking-points");
+            const refreshedPoints = [
+              ...points, {{number: 9, name: "新停车点", x: 5, y: 6, yaw: 2}}
+            ];
+            requests.at(-1).resolve({{payload: {{points: refreshedPoints}}}});
+            await saved;
+            await flush();
+            assert.strictEqual(saveParkingForm.hidden, true);
+            assert.strictEqual(elements.get("notice").textContent, "");
+            assert.deepStrictEqual(
+              mapViewCalls.at(-1), ["setParkingPoints", refreshedPoints]
+            );
+
+            await goToParkingPoint.emit("click");
+            assert.strictEqual(parkingDrawer.hidden, false);
+            assert.strictEqual(parkingList.children.length, 3);
+            assert.strictEqual(parkingList.children[0].dataset.name, "停车点 7");
+            assert.strictEqual(parkingList.children[1].dataset.name, "备用点");
+            assert.strictEqual(parkingList.children[2].dataset.name, "新停车点");
+            assert.strictEqual(parkingList.children[0].children[0].textContent, "2");
+            assert.strictEqual(parkingList.children[1].children[0].textContent, "5");
+            assert.strictEqual(parkingList.children[2].children[0].textContent, "9");
+            assert.strictEqual(elements.get("parkingSearch"), undefined);
+            assert.deepStrictEqual(
+              mapViewCalls[
+                mapViewCalls.findLastIndex(
+                  (call) => call[0] === "setParkingPoints"
+                )
+              ], ["setParkingPoints", refreshedPoints]
+            );
+            assert.deepStrictEqual(
+              mapViewCalls[
+                mapViewCalls.findLastIndex(
+                  (call) => call[0] === "setParkingPointsVisible"
+                )
+              ], ["setParkingPointsVisible", true]
+            );
+            const firstRow = parkingList.children[0];
+            const firstDelete = firstRow.children.find(
+              (child) => child.dataset.action === "delete"
+            );
+            await parkingList.emit("click", {{target: firstDelete}});
+            assert(firstRow.children.some(
+              (child) => child.dataset.action === "delete-confirm"
+            ));
+            const deleteCancel = firstRow.children.find(
+              (child) => child.dataset.action === "delete-cancel"
+            );
+            await parkingList.emit("click", {{target: deleteCancel}});
+            assert(firstRow.children.some(
+              (child) => child.dataset.action === "delete"
+            ));
+            const deleteAgain = firstRow.children.find(
+              (child) => child.dataset.action === "delete"
+            );
+            await parkingList.emit("click", {{target: deleteAgain}});
+            const deleteConfirm = firstRow.children.find(
+              (child) => child.dataset.action === "delete-confirm"
+            );
+            const deletePromise = parkingList.emit("click", {{target: deleteConfirm}});
+            await flush();
+            assert.strictEqual(requests.at(-1).path, "/api/parking-points/delete");
+            assert.deepStrictEqual(requests.at(-1).body, {{name: "停车点 7"}});
+            requests.at(-1).resolve({{payload: {{ok: true}}}});
+            await flush();
+            assert.strictEqual(requests.at(-1).path, "/api/parking-points");
+            const afterDelete = refreshedPoints.slice(1);
+            requests.at(-1).resolve({{payload: {{points: afterDelete}}}});
+            await deletePromise;
+            await flush();
+            assert.strictEqual(parkingList.children.length, 2);
+            assert.deepStrictEqual(
+              mapViewCalls.at(-1), ["setParkingPoints", afterDelete]
+            );
+
+            await parkingDrawerClose.emit("click");
+            assert.strictEqual(parkingDrawer.hidden, true);
+            assert.deepStrictEqual(
+              mapViewCalls[
+                mapViewCalls.findLastIndex(
+                  (call) => call[0] === "setParkingPointsVisible"
+                )
+              ], ["setParkingPointsVisible", false]
+            );
+
+            await goToParkingPoint.emit("click");
+            const navigateRow = parkingList.children[0];
+            const navigateButton = navigateRow.children.find(
+              (child) => child.dataset.action === "navigate"
+            );
+            const navigatePromise = parkingList.emit("click", {{target: navigateButton}});
+            await flush();
+            assert.strictEqual(requests.at(-1).path, "/api/parking-points/navigate");
+            assert.deepStrictEqual(requests.at(-1).body, {{name: "备用点"}});
+            assert.strictEqual(parkingDrawer.hidden, true);
+            assert.deepStrictEqual(
+              mapViewCalls[
+                mapViewCalls.findLastIndex(
+                  (call) => call[0] === "setParkingPointsVisible"
+                )
+              ], ["setParkingPointsVisible", false]
+            );
+            requests.at(-1).reject(new Error("导航服务不可用"));
+            await navigatePromise;
+            await flush();
+            assert.deepStrictEqual(
+              mapViewCalls.at(-1),
+              ["showNavigationRequestFailure", "导航服务不可用"]
+            );
+            return;
+          }}
 
           if (scenario === "contextual-layout") {{
             const modeStatus = elements.get("modeStatus");
@@ -1061,6 +1312,7 @@ def _run_browser_scenario(scenario):
 @pytest.mark.parametrize(
     "scenario",
     [
+        "parking_lifecycle",
         "contextual-layout",
         "initial-and-authoritative-interlock",
         "motion-feedback",

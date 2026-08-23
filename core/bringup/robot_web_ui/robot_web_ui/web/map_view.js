@@ -84,6 +84,7 @@
     let placement = null;
     let parkingPoints = [];
     let parkingPointsVisible = false;
+    let parkingActionStates = null;
     let navigationRequestMessage = "";
     let cancelRequestPending = false;
     const transform = {scale: 16, x: 100, y: 50};
@@ -418,11 +419,19 @@
     function updateNavigationButtons() {
       const placing = placement !== null;
       if (Array.isArray(navigationButtons.parkingActions)) {
-        navigationButtons.parkingActions.forEach((action) => {
-          if (!action) return;
-          action.hidden = placing;
-          action.disabled = placing;
-        });
+        if (placing) {
+          navigationButtons.parkingActions.forEach((action) => {
+            if (!action) return;
+            action.hidden = true;
+            action.disabled = true;
+          });
+        } else if (parkingActionStates !== null) {
+          parkingActionStates.forEach((state) => {
+            state.action.hidden = state.hidden;
+            state.action.disabled = state.disabled;
+          });
+          parkingActionStates = null;
+        }
       }
       const navigation = latestState.navigation || {};
       const requestPending = Boolean(
@@ -636,6 +645,18 @@
     function startPlacement(mode) {
       if (mode !== "initial_pose" && mode !== "navigation_goal") return;
       clearNavigationRequestMessage();
+      if (
+        parkingActionStates === null
+        && Array.isArray(navigationButtons.parkingActions)
+      ) {
+        parkingActionStates = navigationButtons.parkingActions
+          .filter((action) => action)
+          .map((action) => ({
+            action,
+            hidden: action.hidden,
+            disabled: action.disabled
+          }));
+      }
       const pose = latestState.localization;
       placement = {
         mode,

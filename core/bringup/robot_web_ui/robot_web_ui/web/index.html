@@ -79,6 +79,49 @@
       grid-template-columns: repeat(2, 1fr);
       gap: 8px;
     }
+    #operationRegion {
+      display: grid;
+      gap: 8px;
+      min-height: 0;
+    }
+    #parkingActions { border-top: 1px solid var(--line); padding-top: 8px; }
+    #saveParkingForm {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+    }
+    #parkingName { min-height: 44px; min-width: 0; }
+    #parkingDrawer {
+      display: grid;
+      gap: 8px;
+      max-height: 55dvh;
+      min-height: 0;
+      overflow: hidden;
+    }
+    #parkingDrawerHeader {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 44px;
+    }
+    #parkingList {
+      display: grid;
+      gap: 8px;
+      min-height: 0;
+      overflow-y: auto;
+      overscroll-behavior: contain;
+    }
+    .parking-row {
+      display: grid;
+      grid-template-columns: 2.5rem minmax(0, 1fr) auto auto;
+      gap: 8px;
+      align-items: center;
+      min-height: 44px;
+      padding: 4px 0;
+    }
+    .parking-row button { min-height: 40px; padding: 4px 10px; }
+    .parking-row-confirm { grid-template-columns: minmax(0, 1fr) auto auto; }
     #manualControls { display: grid; gap: 8px; }
     .speed-row {
       display: grid;
@@ -150,29 +193,47 @@
     <p id="navigationStatus" role="status" aria-live="polite"></p>
   </section>
   <section id="controlDock" class="overlay" aria-label="操作区">
-    <section id="mapActions" class="map-actions" aria-label="地图视图">
-      <button id="mapZoomOut" aria-label="缩小地图">−</button>
-      <button id="mapZoomIn" aria-label="放大地图">+</button>
-      <button id="mapFit" aria-label="适配地图">适配</button>
-      <button id="mapCenterRobot" aria-label="居中机器人">居中</button>
-    </section>
-    <section id="navigationActions" class="context-grid" aria-label="导航操作" hidden>
-      <button id="setInitialPose" disabled>设置初始位姿</button>
-      <button id="navigationAction" disabled>设置导航目标</button>
-      <button id="confirmPlacement" hidden disabled>确认位置</button>
-      <button id="cancelPlacement" hidden disabled>取消放置</button>
-    </section>
-    <section id="manualControls" aria-label="手动控制" hidden>
-      <section class="speed-row" aria-label="速度设置">
-        <label for="speed">速度</label>
-        <input id="speed" type="range" min="0" max="100" value="20" step="1">
-        <output id="speedValue" for="speed">20%</output>
+    <section id="operationRegion">
+      <section id="mapActions" class="map-actions" aria-label="地图视图">
+        <button id="mapZoomOut" aria-label="缩小地图">−</button>
+        <button id="mapZoomIn" aria-label="放大地图">+</button>
+        <button id="mapFit" aria-label="适配地图">适配</button>
+        <button id="mapCenterRobot" aria-label="居中机器人">居中</button>
       </section>
-      <section class="controls" aria-label="移动方向">
-      <button disabled data-direction="forward" aria-label="前进">前进</button>
-      <button disabled data-direction="backward" aria-label="后退">后退</button>
-      <button disabled data-direction="left" aria-label="左转">左转</button>
-      <button disabled data-direction="right" aria-label="右转">右转</button>
+      <section id="navigationActions" class="context-grid" aria-label="导航操作" hidden>
+        <button id="setInitialPose" disabled>设置初始位姿</button>
+        <button id="navigationAction" disabled>设置导航目标</button>
+        <button id="confirmPlacement" hidden disabled>确认位置</button>
+        <button id="cancelPlacement" hidden disabled>取消放置</button>
+      </section>
+      <section id="parkingActions" class="context-grid" aria-label="停车点操作" hidden>
+        <button id="saveParkingPoint" type="button">保存停车点</button>
+        <button id="goToParkingPoint" type="button">前往停车点</button>
+      </section>
+      <form id="saveParkingForm" aria-label="保存停车点" hidden>
+        <input id="parkingName" type="text" autocomplete="off" aria-label="停车点名称">
+        <button id="confirmSaveParkingPoint" type="button">保存</button>
+        <button id="cancelSaveParkingPoint" type="button">取消</button>
+      </form>
+      <section id="parkingDrawer" aria-label="停车点列表" hidden>
+        <header id="parkingDrawerHeader">
+          <strong>停车点</strong>
+          <button id="parkingDrawerClose" type="button">关闭</button>
+        </header>
+        <section id="parkingList" aria-label="已保存停车点"></section>
+      </section>
+      <section id="manualControls" aria-label="手动控制" hidden>
+        <section class="speed-row" aria-label="速度设置">
+          <label for="speed">速度</label>
+          <input id="speed" type="range" min="0" max="100" value="20" step="1">
+          <output id="speedValue" for="speed">20%</output>
+        </section>
+        <section class="controls" aria-label="移动方向">
+        <button disabled data-direction="forward" aria-label="前进">前进</button>
+        <button disabled data-direction="backward" aria-label="后退">后退</button>
+        <button disabled data-direction="left" aria-label="左转">左转</button>
+        <button disabled data-direction="right" aria-label="右转">右转</button>
+        </section>
       </section>
     </section>
     <button id="modeToggle" disabled>状态同步中…</button>
@@ -189,7 +250,18 @@
   const linearVelocity = document.getElementById("linearVelocity");
   const angularVelocity = document.getElementById("angularVelocity");
   const feedbackState = document.getElementById("feedbackState");
+  const mapActions = document.getElementById("mapActions");
   const navigationActions = document.getElementById("navigationActions");
+  const parkingActions = document.getElementById("parkingActions");
+  const saveParkingPoint = document.getElementById("saveParkingPoint");
+  const goToParkingPoint = document.getElementById("goToParkingPoint");
+  const saveParkingForm = document.getElementById("saveParkingForm");
+  const parkingName = document.getElementById("parkingName");
+  const confirmSaveParkingPoint = document.getElementById("confirmSaveParkingPoint");
+  const cancelSaveParkingPoint = document.getElementById("cancelSaveParkingPoint");
+  const parkingDrawer = document.getElementById("parkingDrawer");
+  const parkingDrawerClose = document.getElementById("parkingDrawerClose");
+  const parkingList = document.getElementById("parkingList");
   const manualControls = document.getElementById("manualControls");
   let mapView = null;
   let desiredDirection = "stop";
@@ -209,6 +281,9 @@
   let modeSwitchPending = false;
   let modeSwitchTarget = null;
   let buttonMotionOwner = null;
+  let parkingPoints = [];
+  let parkingDrawerOpen = false;
+  let saveParkingFormOpen = false;
 
   speed.addEventListener("input", () => {
     speedValue.textContent = speed.value + "%";
@@ -273,13 +348,217 @@
     }
   }
 
+  async function get(path) {
+    const response = await fetch(path);
+    const payload = await response.json();
+    if (!response.ok) {
+      const error = new Error(payload.error || `HTTP ${response.status}`);
+      error.payload = payload;
+      throw error;
+    }
+    return payload;
+  }
+
+  function clearParkingNotice() {
+    if (noticeOwner !== "parking") return;
+    noticeOwner = null;
+    notice.textContent = "";
+  }
+
+  function showParkingRequestFailure(error) {
+    noticeOwner = "parking";
+    notice.textContent = `请求失败：${error.message}`;
+  }
+
+  function nextParkingName(points = parkingPoints) {
+    let highest = 0;
+    points.forEach((point) => {
+      if (!point || typeof point.name !== "string") return;
+      const match = point.name.match(/^停车点 ([1-9][0-9]*)$/);
+      if (match) highest = Math.max(highest, Number(match[1]));
+    });
+    return `停车点 ${highest + 1}`;
+  }
+
+  function updateParkingPoints(points) {
+    parkingPoints = Array.isArray(points) ? points.slice() : [];
+    if (mapView) mapView.setParkingPoints(parkingPoints);
+    if (parkingDrawerOpen) renderParkingDrawer();
+  }
+
+  async function refreshParkingPoints() {
+    try {
+      const payload = await get("/api/parking-points");
+      updateParkingPoints(payload.points);
+      return parkingPoints;
+    } catch (error) {
+      showParkingRequestFailure(error);
+      return null;
+    }
+  }
+
+  function closeSaveParkingForm() {
+    saveParkingFormOpen = false;
+    saveParkingForm.hidden = true;
+    confirmSaveParkingPoint.disabled = false;
+    cancelSaveParkingPoint.disabled = false;
+  }
+
+  function openSaveParkingForm() {
+    if (currentMode !== "automatic" || parkingDrawerOpen) return;
+    parkingName.value = nextParkingName();
+    saveParkingFormOpen = true;
+    saveParkingForm.hidden = false;
+  }
+
+  async function saveParkingPointRequest() {
+    if (!saveParkingFormOpen) return;
+    confirmSaveParkingPoint.disabled = true;
+    cancelSaveParkingPoint.disabled = true;
+    try {
+      await post("/api/parking-points/save", {name: parkingName.value}, {
+        applyFeedback: false
+      });
+      closeSaveParkingForm();
+      clearParkingNotice();
+      await refreshParkingPoints();
+    } catch (error) {
+      confirmSaveParkingPoint.disabled = false;
+      cancelSaveParkingPoint.disabled = false;
+      showParkingRequestFailure(error);
+    }
+  }
+
+  function parkingButton(label, name, action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.dataset.name = name;
+    button.dataset.action = action;
+    return button;
+  }
+
+  function renderParkingRow(row) {
+    const point = parkingPoints.find((candidate) =>
+      candidate.name === row.dataset.name
+    );
+    if (!point) return;
+    row.dataset.name = point.name;
+    row.dataset.action = "row";
+    row.classList.add("parking-row");
+    const number = document.createElement("span");
+    number.textContent = String(point.number);
+    const name = document.createElement("span");
+    name.textContent = point.name;
+    row.replaceChildren(
+      number,
+      name,
+      parkingButton("前往", point.name, "navigate"),
+      parkingButton("删除", point.name, "delete")
+    );
+  }
+
+  function showDeleteConfirmation(row) {
+    row.classList.add("parking-row-confirm");
+    const prompt = document.createElement("span");
+    prompt.textContent = "删除这个停车点？";
+    row.replaceChildren(
+      prompt,
+      parkingButton("确认删除", row.dataset.name, "delete-confirm"),
+      parkingButton("取消", row.dataset.name, "delete-cancel")
+    );
+  }
+
+  function renderParkingDrawer() {
+    parkingList.replaceChildren();
+    parkingPoints.forEach((point) => {
+      const row = document.createElement("article");
+      row.dataset.name = point.name;
+      parkingList.append(row);
+      renderParkingRow(row);
+    });
+  }
+
+  function parkingRowForTarget(target) {
+    let candidate = target;
+    while (candidate && candidate !== parkingList) {
+      if (candidate.dataset && candidate.dataset.action === "row") {
+        return candidate;
+      }
+      candidate = candidate.parentNode;
+    }
+    return null;
+  }
+
+  async function handleParkingListClick(event) {
+    const target = event.target;
+    const action = target && target.dataset ? target.dataset.action : null;
+    const row = parkingRowForTarget(target);
+    const name = target && target.dataset && target.dataset.name
+      ? target.dataset.name
+      : row && row.dataset.name;
+    if (!action || !name || !row) return;
+    if (action === "navigate") {
+      closeParkingDrawer();
+      try {
+        await post("/api/parking-points/navigate", {name}, {
+          applyFeedback: false
+        });
+      } catch (error) {
+        if (mapView) mapView.showNavigationRequestFailure(error);
+      }
+      return;
+    }
+    if (action === "delete") {
+      showDeleteConfirmation(row);
+      return;
+    }
+    if (action === "delete-cancel") {
+      row.classList.remove("parking-row-confirm");
+      renderParkingRow(row);
+      return;
+    }
+    if (action !== "delete-confirm") return;
+    target.disabled = true;
+    try {
+      await post("/api/parking-points/delete", {name}, {
+        applyFeedback: false
+      });
+      clearParkingNotice();
+      await refreshParkingPoints();
+    } catch (error) {
+      target.disabled = false;
+      showParkingRequestFailure(error);
+    }
+  }
+
+  function openParkingDrawer() {
+    if (currentMode !== "automatic" || modeSwitchInProgress()) return;
+    parkingDrawerOpen = true;
+    closeSaveParkingForm();
+    renderParkingDrawer();
+    if (mapView) {
+      mapView.setParkingPoints(parkingPoints);
+      mapView.setParkingPointsVisible(true);
+    }
+    renderControls();
+  }
+
+  function closeParkingDrawer() {
+    parkingDrawerOpen = false;
+    if (mapView) mapView.setParkingPointsVisible(false);
+    renderControls();
+  }
+
   function modeSwitchInProgress() {
     return modeSwitchPending || modeSwitchTarget !== null;
   }
 
   function renderControls() {
     const modePending = modeSwitchInProgress();
-    const previousContext = navigationActions.hidden + ":" + manualControls.hidden;
+    const previousContext = navigationActions.hidden + ":"
+      + parkingActions.hidden + ":" + manualControls.hidden + ":"
+      + parkingDrawer.hidden;
     if (modePending) {
       modeToggle.textContent = "切换中…";
       modeToggle.disabled = true;
@@ -303,13 +582,24 @@
         : currentMode === "manual"
           ? "控制模式：人工接管"
           : "控制模式：状态同步中";
-    navigationActions.hidden = currentMode !== "automatic" || modePending;
+    const drawerVisible = parkingDrawerOpen && currentMode === "automatic";
+    mapActions.hidden = drawerVisible;
+    navigationActions.hidden = currentMode !== "automatic"
+      || modePending || drawerVisible;
+    parkingActions.hidden = currentMode !== "automatic"
+      || modePending || drawerVisible;
+    parkingDrawer.hidden = !drawerVisible;
+    saveParkingForm.hidden = !saveParkingFormOpen || drawerVisible
+      || currentMode !== "automatic" || modePending;
     manualControls.hidden = currentMode !== "manual" || modePending;
-    const nextContext = navigationActions.hidden + ":" + manualControls.hidden;
+    const nextContext = navigationActions.hidden + ":"
+      + parkingActions.hidden + ":" + manualControls.hidden + ":"
+      + parkingDrawer.hidden;
     if (mapView && previousContext !== nextContext) mapView.refreshViewport();
   }
 
-  function applyMode(mode) {
+  function applyMode(mode, skipStop = false) {
+    const previousMode = currentMode;
     currentMode = mode === "manual" || mode === "automatic"
       ? mode
       : null;
@@ -317,13 +607,23 @@
       modeSwitchPending = false;
       modeSwitchTarget = null;
     }
-    if (currentMode !== "manual") stopMotion();
+    if (currentMode !== "manual" && !skipStop) stopMotion();
+    if (currentMode !== "automatic") {
+      closeSaveParkingForm();
+      if (parkingDrawerOpen) {
+        parkingDrawerOpen = false;
+        if (mapView) mapView.setParkingPointsVisible(false);
+      }
+    }
     renderControls();
+    if (currentMode === "automatic" && previousMode !== "automatic") {
+      refreshParkingPoints();
+    }
   }
 
-  function applyResponseMode(payload) {
+  function applyResponseMode(payload, options = {}) {
     if (Object.prototype.hasOwnProperty.call(payload, "mode")) {
-      applyMode(payload.mode);
+      applyMode(payload.mode, options.skipStop === true);
     }
   }
 
@@ -539,7 +839,7 @@
       modeGeneration += 1;
       settledGeneration = modeGeneration;
       applyResponseFeedback(payload);
-      applyResponseMode(payload);
+      applyResponseMode(payload, {skipStop: true});
       noticeOwner = "mode";
       notice.textContent = payload.pending
         ? "切换结果尚未确认"
@@ -558,6 +858,12 @@
     }
   }
 
+  saveParkingPoint.addEventListener("click", openSaveParkingForm);
+  confirmSaveParkingPoint.addEventListener("click", saveParkingPointRequest);
+  cancelSaveParkingPoint.addEventListener("click", closeSaveParkingForm);
+  goToParkingPoint.addEventListener("click", openParkingDrawer);
+  parkingDrawerClose.addEventListener("click", closeParkingDrawer);
+  parkingList.addEventListener("click", handleParkingListClick);
   modeToggle.addEventListener("click", requestMode);
 
   document.addEventListener("visibilitychange", () => {
@@ -596,13 +902,15 @@
         initialPose: document.getElementById("setInitialPose"),
         navigationAction: document.getElementById("navigationAction"),
         placementConfirm: document.getElementById("confirmPlacement"),
-        placementCancel: document.getElementById("cancelPlacement")
+        placementCancel: document.getElementById("cancelPlacement"),
+        parkingActions: [saveParkingPoint, goToParkingPoint]
       },
       statusStrip: document.getElementById("statusStrip"),
       controlDock: document.getElementById("controlDock"),
       navigationStatus: document.getElementById("navigationStatus"),
       request: post
     });
+    mapView.setParkingPoints(parkingPoints);
   }
 </script>
 </body>

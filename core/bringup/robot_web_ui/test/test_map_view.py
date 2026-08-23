@@ -477,16 +477,24 @@ def _run_map_scenario(scenario):
             assert.strictEqual(canvas.operations.some((operation) => operation[0] === "arc"), false);
             assert.strictEqual(canvas.operations.some((operation) => operation[0] === "text"), false);
             view.setParkingPointsVisible(true);
+            navigationButtons.parkingActions[0].hidden = true;
+            navigationButtons.parkingActions[0].disabled = true;
+            navigationButtons.parkingActions[1].hidden = false;
+            navigationButtons.parkingActions[1].disabled = false;
             view.startPlacement("initial_pose");
+            await view.applyState(state({
+              navigation: {goal_status: "idle"},
+              localization: {x: 0, y: 0, yaw: 0}
+            }));
             navigationButtons.parkingActions.forEach((action) => {
               assert.strictEqual(action.hidden, true);
               assert.strictEqual(action.disabled, true);
             });
             view.cancelPlacement();
-            navigationButtons.parkingActions.forEach((action) => {
-              assert.strictEqual(action.hidden, false);
-              assert.strictEqual(action.disabled, false);
-            });
+            assert.strictEqual(navigationButtons.parkingActions[0].hidden, true);
+            assert.strictEqual(navigationButtons.parkingActions[0].disabled, true);
+            assert.strictEqual(navigationButtons.parkingActions[1].hidden, false);
+            assert.strictEqual(navigationButtons.parkingActions[1].disabled, false);
             return;
           }
           if (scenario === "placement-requests") {
