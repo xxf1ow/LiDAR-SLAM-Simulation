@@ -7,25 +7,21 @@
     local_costmap: "/api/map/local-costmap",
     path: "/api/navigation-path"
   };
-  const STATIC_PALETTE = {
-    free: [229, 231, 235, 255],
-    unknown: [102, 112, 133, 255],
-    occupied: [217, 79, 79, 255]
-  };
-  const COSTMAP_PALETTE = {
-    free: [0, 0, 0, 0],
-    unknown: [102, 112, 133, 128],
-    inflated: [240, 191, 104, 160],
-    lethal: [217, 79, 79, 200]
+  const UNKNOWN_COLOR = [112, 137, 134, 255];
+  const GRID_ALPHA = {
+    static: 1,
+    global_costmap: 0.45,
+    local_costmap: 0.70
   };
   const PALETTE = {
-    path: "#4db7d6",
-    robot: "#ffffff",
-    placement: "#f0bf68"
+    halo: "#111827",
+    path: "#55ffff",
+    robot: "#ffd400",
+    placement: "#ff8a00"
   };
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 128;
-  const PLACEMENT_ALPHA = 0.72;
+  const PLACEMENT_ALPHA = 0.90;
   const PLACEMENT_ARROW_LENGTH = 36;
   const PLACEMENT_TIP_HIT_RADIUS = 22;
   const ACTIVE_GOAL_STATUSES = new Set(["sending", "navigating", "canceling"]);
@@ -88,10 +84,30 @@
     let navigationRequestMessage = "";
     let cancelRequestPending = false;
     const transform = {scale: 16, x: 100, y: 50};
+    let autoFit = true;
+    let hasFitted = false;
+    const controlDock = options.controlDock || null;
 
     function bounds() {
       const rect = canvas.getBoundingClientRect();
       return {width: rect.width || 1, height: rect.height || 1};
+    }
+
+    function viewportBounds() {
+      const canvasRect = canvas.getBoundingClientRect();
+      const full = {
+        left: 0,
+        top: 0,
+        width: canvasRect.width || 1,
+        height: canvasRect.height || 1
+      };
+      if (!controlDock) return full;
+      const dockRect = controlDock.getBoundingClientRect();
+      const height = dockRect.top - canvasRect.top;
+      if (!Number.isFinite(height) || height <= 0 || height > full.height) {
+        return full;
+      }
+      return {...full, height};
     }
 
     function resize() {
@@ -106,15 +122,18 @@
     }
 
     function cellRgba(name, cell) {
+      if (cell === 255) return UNKNOWN_COLOR;
       if (name === "static") {
-        if (cell === 255) return STATIC_PALETTE.unknown;
-        if (cell >= 100) return STATIC_PALETTE.occupied;
-        return STATIC_PALETTE.free;
+        const occupancy = Math.max(0, Math.min(100, cell));
+        const value = 255 - Math.floor(255 * occupancy / 100);
+        return [value, value, value, 255];
       }
-      if (cell === 255) return COSTMAP_PALETTE.unknown;
-      if (cell >= 99) return COSTMAP_PALETTE.lethal;
-      if (cell >= 1) return COSTMAP_PALETTE.inflated;
-      return COSTMAP_PALETTE.free;
+      if (cell === 0) return [0, 0, 0, 0];
+      if (cell === 99) return [0, 255, 255, 255];
+      if (cell === 100) return [255, 0, 255, 255];
+      const cost = Math.max(1, Math.min(98, cell));
+      const red = Math.floor(255 * cost / 100);
+      return [red, 0, 255 - red, 255];
     }
 
     function buildGridRaster(name, info, cells) {
@@ -156,6 +175,7 @@
       context.translate(drawInfo.origin[0], drawInfo.origin[1]);
       context.rotate(drawInfo.origin[2]);
       context.scale(drawInfo.resolution, drawInfo.resolution);
+      context.globalAlpha = GRID_ALPHA[name];
       context.drawImage(
         layer.raster, 0, 0, drawInfo.width, drawInfo.height
       );
@@ -177,8 +197,11 @@
         if (offset === 0) context.moveTo(x, y);
         else context.lineTo(x, y);
       }
+      context.strokeStyle = PALETTE.halo;
+      context.lineWidth = 5 / transform.scale;
+      context.stroke();
       context.strokeStyle = PALETTE.path;
-      context.lineWidth = 2 / transform.scale;
+      context.lineWidth = 2.5 / transform.scale;
       context.stroke();
     }
 
@@ -193,7 +216,11 @@
       context.moveTo(0.32, 0);
       context.lineTo(-0.2, 0.2);
       context.lineTo(-0.2, -0.2);
+      context.closePath();
       context.fill();
+      context.strokeStyle = PALETTE.halo;
+      context.lineWidth = 2 / transform.scale;
+      context.stroke();
       context.restore();
     }
 
@@ -202,8 +229,8 @@
       const statusRect = options.statusStrip
         ? options.statusStrip.getBoundingClientRect()
         : canvasRect;
-      const lowerBoundary = options.manualPanel && !options.manualPanel.hidden
-        ? options.manualPanel.getBoundingClientRect().top
+      const lowerBoundary = controlDock
+        ? controlDock.getBoundingClientRect().top
         : canvasRect.bottom;
       return {
         x: canvasRect.width / 2,
@@ -222,15 +249,11 @@
       const wingAngle = Math.PI / 7;
       context.save();
       context.globalAlpha = PLACEMENT_ALPHA;
-      context.strokeStyle = PALETTE.placement;
-      context.lineWidth = 2.5;
       context.beginPath();
       context.moveTo(anchor.x - 12, anchor.y);
       context.lineTo(anchor.x + 12, anchor.y);
       context.moveTo(anchor.x, anchor.y - 12);
       context.lineTo(anchor.x, anchor.y + 12);
-      context.stroke();
-      context.beginPath();
       context.moveTo(anchor.x, anchor.y);
       context.lineTo(tip.x, tip.y);
       context.moveTo(tip.x, tip.y);
@@ -243,9 +266,13 @@
         tip.x - Math.cos(placement.yaw + wingAngle) * wingLength,
         tip.y + Math.sin(placement.yaw + wingAngle) * wingLength
       );
+      context.strokeStyle = PALETTE.halo;
+      context.lineWidth = 5;
+      context.stroke();
+      context.strokeStyle = PALETTE.placement;
+      context.lineWidth = 2.5;
       context.stroke();
       context.restore();
-      context.globalAlpha = 1;
     }
 
     function render() {
@@ -450,6 +477,7 @@
       const layers = latestState.layers || {};
       for (const name of Object.keys(LAYERS)) await updateLayer(name, layers[name]);
       updateNavigationStatus();
+      if (!hasFitted) fitToMap();
       render();
     }
 
@@ -468,6 +496,7 @@
     }
 
     function zoom(multiplier) {
+      autoFit = false;
       transform.scale = Math.max(
         MIN_SCALE,
         Math.min(MAX_SCALE, transform.scale * multiplier)
@@ -475,36 +504,65 @@
       render();
     }
 
-    function fit() {
+    function fitToMap() {
       const stateInfo = latestState.layers && latestState.layers.static;
       const info = effectiveGridInfo("static", stateInfo);
-      if (!info) return;
+      if (!info) return false;
+      const [originX, originY, yaw] = info.origin;
+      const cosine = Math.cos(yaw);
+      const sine = Math.sin(yaw);
+      const mapWidth = info.width * info.resolution;
+      const mapHeight = info.height * info.resolution;
       const corners = [
-        gridToWorld(info, 0, 0),
-        gridToWorld(info, info.width - 1, 0),
-        gridToWorld(info, 0, info.height - 1),
-        gridToWorld(info, info.width - 1, info.height - 1)
-      ];
+        [0, 0],
+        [mapWidth, 0],
+        [0, mapHeight],
+        [mapWidth, mapHeight]
+      ].map(([localX, localY]) => ({
+        x: originX + localX * cosine - localY * sine,
+        y: originY + localX * sine + localY * cosine
+      }));
       const minX = Math.min(...corners.map((point) => point.x));
       const maxX = Math.max(...corners.map((point) => point.x));
       const minY = Math.min(...corners.map((point) => point.y));
       const maxY = Math.max(...corners.map((point) => point.y));
-      const rect = bounds();
+      const viewport = viewportBounds();
       transform.scale = Math.max(
         MIN_SCALE,
-        Math.min(MAX_SCALE, 0.9 * Math.min(rect.width / (maxX - minX + info.resolution), rect.height / (maxY - minY + info.resolution)))
+        Math.min(
+          MAX_SCALE,
+          0.9 * Math.min(
+            viewport.width / (maxX - minX),
+            viewport.height / (maxY - minY)
+          )
+        )
       );
-      transform.x = rect.width / 2 - transform.scale * (minX + maxX) / 2;
-      transform.y = rect.height / 2 + transform.scale * (minY + maxY) / 2;
+      transform.x = viewport.left + viewport.width / 2
+        - transform.scale * (minX + maxX) / 2;
+      transform.y = viewport.top + viewport.height / 2
+        + transform.scale * (minY + maxY) / 2;
+      hasFitted = true;
+      return true;
+    }
+
+    function fit() {
+      if (!fitToMap()) return;
+      autoFit = true;
+      render();
+    }
+
+    function refreshViewport() {
+      if (autoFit && hasFitted) fitToMap();
       render();
     }
 
     function centerRobot() {
       const pose = latestState.localization;
       if (!pose) return;
-      const rect = bounds();
-      transform.x = rect.width / 2 - pose.x * transform.scale;
-      transform.y = rect.height / 2 + pose.y * transform.scale;
+      const viewport = viewportBounds();
+      transform.x = viewport.left + viewport.width / 2 - pose.x * transform.scale;
+      transform.y = viewport.top + viewport.height / 2 + pose.y * transform.scale;
+      autoFit = false;
       render();
     }
 
@@ -647,6 +705,7 @@
         return;
       }
       if (!dragging || event.pointerId !== dragging.pointerId) return;
+      autoFit = false;
       transform.x += event.clientX - dragging.x;
       transform.y += event.clientY - dragging.y;
       dragging.x = event.clientX;
@@ -690,7 +749,7 @@
     if (navigationButtons.placementCancel) {
       navigationButtons.placementCancel.addEventListener("click", cancelPlacement);
     }
-    if (globalThis.addEventListener) globalThis.addEventListener("resize", render);
+    if (globalThis.addEventListener) globalThis.addEventListener("resize", refreshViewport);
     updateNavigationStatus();
     render();
     if (options.poll !== false) poll();
@@ -702,6 +761,7 @@
       zoomIn: () => zoom(1.25),
       zoomOut: () => zoom(0.8),
       fit,
+      refreshViewport,
       centerRobot,
       startPlacement,
       cancelPlacement,

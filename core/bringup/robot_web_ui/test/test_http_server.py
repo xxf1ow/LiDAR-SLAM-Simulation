@@ -6,7 +6,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import HTTPServer, ThreadingHTTPServer
 from pathlib import Path
@@ -39,6 +39,9 @@ class FakeActions:
         self.pending = False
         self.mode = "manual"
         self.motion_status_calls = 0
+        self.block_manual_action = False
+        self.manual_action_started = threading.Event()
+        self.allow_manual_action = threading.Event()
         self.asset_read_started = threading.Event()
         self.allow_asset_read = threading.Event()
         self.blocked_asset_name = None
@@ -121,6 +124,10 @@ class FakeActions:
             )
         if self.unavailable:
             raise ActionUnavailable("publisher unavailable")
+        if self.block_manual_action:
+            self.manual_action_started.set()
+            if not self.allow_manual_action.wait(timeout=1.0):
+                raise AssertionError("test did not release blocked manual action")
         self.calls.append(("manual_command", direction, speed_percent))
         return self.mode
 
@@ -221,6 +228,209 @@ def response_json(response):
     return json.loads(response.read())
 
 
+def manual_payload(session_id, sequence, direction="forward", speed_percent=20):
+    return {
+        "session_id": session_id,
+        "sequence": sequence,
+        "direction": direction,
+        "speed_percent": speed_percent,
+    }
+
+
+def start_manual_session(base_url):
+    body = response_json(post_json(base_url, "/api/manual-session", {}))
+    assert set(body) == {
+        "ok",
+        "session_id",
+        "mode",
+        "linear_x",
+        "angular_z",
+        "feedback_fresh",
+    }
+    assert body["ok"] is True and body["mode"] == "manual"
+    assert isinstance(body["session_id"], str) and body["session_id"]
+    assert body["linear_x"] == 0.25
+    assert body["angular_z"] == -0.1
+    assert body["feedback_fresh"] is True
+    return body["session_id"]
+
+
+def send_manual(
+    base_url, session_id, sequence, direction="forward", speed_percent=20
+):
+    response = post_json(
+        base_url,
+        "/api/manual-command",
+        manual_payload(session_id, sequence, direction, speed_percent),
+    )
+    return response, response_json(response)
+
+
+def test_manual_session_sequence_and_concurrency_are_atomic(
+    tmp_path, monkeypatch
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    token_sizes = []
+
+    def token_urlsafe(nbytes):
+        assert nbytes == 24
+        token_sizes.append(nbytes)
+        return f"session-{len(token_sizes)}"
+
+    monkeypatch.setattr(http_server.secrets, "token_urlsafe", token_urlsafe)
+
+    with running_server(actions, html_path) as base_url:
+        session_a = start_manual_session(base_url)
+        first, first_body = send_manual(base_url, session_a, 1)
+        assert first_body["accepted"] is True
+        assert first_body.get("reason") is None
+        calls_after_first = len(actions.calls)
+
+        second, second_body = send_manual(
+            base_url, session_a, 2, "stop", 0
+        )
+        assert second_body["accepted"] is True
+
+        delayed, delayed_body = send_manual(base_url, session_a, 1)
+        assert delayed_body == {
+            "ok": True,
+            "accepted": False,
+            "reason": "stale_sequence",
+            "sequence": 1,
+            "last_sequence": 2,
+            "mode": "manual",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
+        }
+        assert len(actions.calls) == calls_after_first + 1
+
+        original_manual_command = actions.manual_command
+
+        def fail_manual(_direction, _speed_percent):
+            raise ActionUnavailable("publisher unavailable")
+
+        monkeypatch.setattr(actions, "manual_command", fail_manual)
+        failed, failed_body = send_manual(base_url, session_a, 3)
+        assert failed.status == 503
+        assert failed_body == {
+            "error": "publisher unavailable",
+            "accepted": False,
+            "sequence": 3,
+            "last_sequence": 2,
+            "mode": "manual",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
+        }
+        monkeypatch.setattr(actions, "manual_command", original_manual_command)
+
+        retry, retry_body = send_manual(base_url, session_a, 3)
+        assert retry_body["accepted"] is True
+
+        session_b = start_manual_session(base_url)
+        inactive, inactive_body = send_manual(base_url, session_a, 4)
+        assert inactive.status == 409
+        assert inactive_body == {
+            "error": "inactive manual session",
+            "accepted": False,
+            "reason": "inactive_session",
+            "sequence": 4,
+        }
+
+        actions.block_manual_action = True
+        first_submitted = threading.Event()
+        second_submitted = threading.Event()
+
+        def submit_duplicate(submitted):
+            submitted.set()
+            return send_manual(base_url, session_b, 1)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first_future = pool.submit(submit_duplicate, first_submitted)
+            assert first_submitted.wait(timeout=1.0)
+            assert actions.manual_action_started.wait(timeout=1.0)
+            second_future = pool.submit(submit_duplicate, second_submitted)
+            assert second_submitted.wait(timeout=1.0)
+            assert not first_future.done()
+            assert not second_future.done()
+            actions.allow_manual_action.set()
+            duplicate_results = [
+                first_future.result(timeout=1.0),
+                second_future.result(timeout=1.0),
+            ]
+        duplicate_responses, duplicate_bodies = zip(*duplicate_results)
+        assert all(response.status == 200 for response in duplicate_responses)
+        assert sum(body["accepted"] for body in duplicate_bodies) == 1
+        assert sum(
+            body.get("reason") == "stale_sequence"
+            for body in duplicate_bodies
+        ) == 1
+
+    assert actions.calls == [
+        ("manual_command", "stop", 0),
+        ("manual_command", "forward", 20),
+        ("manual_command", "stop", 0),
+        ("manual_command", "forward", 20),
+        ("manual_command", "stop", 0),
+        ("manual_command", "forward", 20),
+    ]
+    assert session_b != session_a
+    assert token_sizes == [24, 24]
+
+
+def test_manual_action_failure_captures_mode_before_session_replacement(
+    tmp_path
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        session_id = start_manual_session(base_url)
+        original_manual_command = actions.manual_command
+
+        class SessionReplacingUnavailable(ActionUnavailable):
+            def __init__(self):
+                super().__init__("publisher unavailable")
+                self.replaced = False
+
+            def __str__(self):
+                if not self.replaced:
+                    self.replaced = True
+                    actions.mode = "replacement"
+                    replacement = post_json(
+                        base_url, "/api/manual-session", {}
+                    )
+                    assert replacement.status == 200
+                    response_json(replacement)
+                return super().__str__()
+
+        failure = SessionReplacingUnavailable()
+
+        def fail_manual(direction, speed_percent):
+            if direction == "stop":
+                return original_manual_command(direction, speed_percent)
+            raise failure
+
+        actions.manual_command = fail_manual
+        response, body = send_manual(base_url, session_id, 1)
+
+        assert response.status == 503
+        assert body == {
+            "error": "publisher unavailable",
+            "accepted": False,
+            "sequence": 1,
+            "last_sequence": 0,
+            "mode": "manual",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
+        }
+
+
 def navigation_pose_payload():
     return {
         "x": 1.25,
@@ -310,14 +520,18 @@ def test_navigation_state_serialization_failure_returns_500_and_server_recovers(
         assert response.read() == b'{"error":"response serialization failed"}'
 
         actions.navigation_state_override = None
+        session_id = start_manual_session(base_url)
         manual = post_json(
             base_url,
             "/api/manual-command",
-            {"direction": "forward", "speed_percent": 20},
+            manual_payload(session_id, 1),
         )
         assert manual.status == 200
         assert response_json(manual)["ok"] is True
-        assert actions.calls == [("manual_command", "forward", 20)]
+        assert actions.calls == [
+            ("manual_command", "stop", 0),
+            ("manual_command", "forward", 20),
+        ]
 
 
 @pytest.mark.parametrize(
@@ -394,10 +608,11 @@ def test_unknown_get_and_existing_post_contracts_are_unchanged(tmp_path):
 
     with running_server(actions, html_path) as base_url:
         get_response = request(base_url, "/missing")
+        session_id = start_manual_session(base_url)
         post_response = post_json(
             base_url,
             "/api/manual-command",
-            {"direction": "forward", "speed_percent": 20},
+            manual_payload(session_id, 1),
         )
 
         assert get_response.status == 404
@@ -405,6 +620,9 @@ def test_unknown_get_and_existing_post_contracts_are_unchanged(tmp_path):
         assert post_response.status == 200
         expected_body = {
             "ok": True,
+            "accepted": True,
+            "sequence": 1,
+            "last_sequence": 1,
             "mode": "manual",
             "linear_x": 0.25,
             "angular_z": -0.1,
@@ -414,7 +632,10 @@ def test_unknown_get_and_existing_post_contracts_are_unchanged(tmp_path):
             expected_body,
             separators=(",", ":"),
         ).encode()
-        assert actions.calls == [("manual_command", "forward", 20)]
+        assert actions.calls == [
+            ("manual_command", "stop", 0),
+            ("manual_command", "forward", 20),
+        ]
 
 
 def test_map_download_does_not_block_manual_post(tmp_path):
@@ -440,7 +661,7 @@ def test_map_download_does_not_block_manual_post(tmp_path):
             response = post_json(
                 base_url,
                 "/api/manual-command",
-                {"direction": "forward", "speed_percent": 20},
+                manual_payload(session_id, 1),
             )
             results["manual"] = (response.status, response_json(response))
         except BaseException as exc:
@@ -449,6 +670,7 @@ def test_map_download_does_not_block_manual_post(tmp_path):
             manual_done.set()
 
     with running_server(actions, html_path) as base_url:
+        session_id = start_manual_session(base_url)
         download_thread = threading.Thread(target=download, args=(base_url,))
         manual_thread = threading.Thread(target=manual_post, args=(base_url,))
         download_thread.start()
@@ -540,10 +762,11 @@ def test_abandoned_map_download_does_not_disrupt_manual_post(
 
         actions.allow_asset_read.set()
         assert response_handled.wait(timeout=1.0)
+        session_id = start_manual_session(base_url)
         response = post_json(
             base_url,
             "/api/manual-command",
-            {"direction": "forward", "speed_percent": 20},
+            manual_payload(session_id, 1),
         )
 
         assert response.status == 200
@@ -556,22 +779,29 @@ def test_manual_command_calls_action_once(tmp_path):
     actions = FakeActions()
 
     with running_server(actions, html_path) as base_url:
+        session_id = start_manual_session(base_url)
         response = post_json(
             base_url,
             "/api/manual-command",
-            {"direction": "forward", "speed_percent": 20},
+            manual_payload(session_id, 1),
         )
 
         assert response.status == 200
         assert response_json(response) == {
             "ok": True,
+            "accepted": True,
+            "sequence": 1,
+            "last_sequence": 1,
             "mode": "manual",
             "linear_x": 0.25,
             "angular_z": -0.1,
             "feedback_fresh": True,
         }
-        assert actions.calls == [("manual_command", "forward", 20)]
-        assert actions.motion_status_calls == 1
+        assert actions.calls == [
+            ("manual_command", "stop", 0),
+            ("manual_command", "forward", 20),
+        ]
+        assert actions.motion_status_calls == 2
 
 
 @pytest.mark.parametrize(
@@ -615,9 +845,6 @@ def test_mode_endpoints_call_corresponding_action_once(
     "body",
     [
         b"{",
-        json.dumps({"direction": "diagonal", "speed_percent": 20}).encode(),
-        json.dumps({"direction": "forward", "speed_percent": -1}).encode(),
-        json.dumps({"direction": "forward", "speed_percent": 101}).encode(),
         b'{"direction":"forward","speed_percent":NaN}',
         b"x" * 4097,
     ],
@@ -635,6 +862,75 @@ def test_bad_manual_requests_return_400_without_actions(
         assert response.status == 400
         assert "error" in response_json(response)
         assert actions.calls == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {},
+        {"session_id": "session", "sequence": 1, "direction": "forward"},
+        {
+            "session_id": "session",
+            "sequence": 1,
+            "direction": "forward",
+            "speed_percent": 20,
+            "extra": True,
+        },
+        manual_payload("", 1),
+        manual_payload("session", True),
+        manual_payload("session", 9_007_199_254_740_992),
+    ],
+    ids=[
+        "missing-fields",
+        "missing-speed",
+        "extra-field",
+        "empty-session",
+        "boolean-sequence",
+        "unsafe-sequence",
+    ],
+)
+def test_manual_command_envelope_validation_returns_400_without_actions(
+    tmp_path, payload
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        response = post_json(base_url, "/api/manual-command", payload)
+
+        assert response.status == 400
+        assert "error" in response_json(response)
+        assert actions.calls == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        manual_payload("session", 1, "diagonal"),
+        manual_payload("session", 1, "forward", -1),
+        manual_payload("session", 1, "forward", 101),
+    ],
+    ids=["invalid-direction", "negative-speed", "over-max-speed"],
+)
+def test_manual_command_action_validation_does_not_advance_sequence(
+    tmp_path, payload
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        session_id = start_manual_session(base_url)
+        payload["session_id"] = session_id
+        response = post_json(base_url, "/api/manual-command", payload)
+        body = response_json(response)
+
+        assert response.status == 400
+        assert body["accepted"] is False
+        assert body["sequence"] == 1
+        assert body["last_sequence"] == 0
+        assert actions.calls == [("manual_command", "stop", 0)]
 
 
 def test_unknown_routes_return_404_without_actions(tmp_path):
@@ -854,7 +1150,7 @@ def test_blocked_navigation_request_does_not_block_manual_post(
             response = post_json(
                 base_url,
                 "/api/manual-command",
-                {"direction": "forward", "speed_percent": 20},
+                manual_payload(session_id, 1),
             )
             results["manual"] = (response.status, response_json(response))
         except BaseException as exc:
@@ -863,6 +1159,7 @@ def test_blocked_navigation_request_does_not_block_manual_post(
             manual_done.set()
 
     with running_server(actions, html_path) as base_url:
+        session_id = start_manual_session(base_url)
         navigation_thread = threading.Thread(
             target=navigation_post,
             args=(base_url,),
@@ -956,16 +1253,18 @@ def test_abandoned_navigation_response_does_not_disrupt_later_post(
             allow_response_write.set()
 
         assert response_handled.wait(timeout=1.0)
+        session_id = start_manual_session(base_url)
         response = post_json(
             base_url,
             "/api/manual-command",
-            {"direction": "forward", "speed_percent": 20},
+            manual_payload(session_id, 1),
         )
 
         assert response.status == 200
         assert response_json(response)["ok"] is True
         assert actions.calls == [
             ("send_navigation_goal", navigation_pose_payload()),
+            ("manual_command", "stop", 0),
             ("manual_command", "forward", 20),
         ]
 
@@ -1047,7 +1346,7 @@ def test_non_json_content_type_is_rejected_without_actions(tmp_path):
     html_path.write_text("ok")
     actions = FakeActions()
     body = json.dumps(
-        {"direction": "forward", "speed_percent": 20}
+        manual_payload("session", 1)
     ).encode()
 
     with running_server(actions, html_path) as base_url:
@@ -1126,26 +1425,30 @@ def test_manual_command_conflict_returns_409(tmp_path):
     html_path = tmp_path / "index.html"
     html_path.write_text("ok")
     actions = FakeActions()
-    actions.conflict = True
-    actions.mode = "automatic"
 
     with running_server(actions, html_path) as base_url:
+        session_id = start_manual_session(base_url)
+        actions.mode = "automatic"
+        actions.conflict = True
         response = post_json(
             base_url,
             "/api/manual-command",
-            {"direction": "forward", "speed_percent": 20},
+            manual_payload(session_id, 1),
         )
 
         assert response.status == 409
         assert response_json(response) == {
             "error": "manual control is not active",
+            "accepted": False,
+            "sequence": 1,
+            "last_sequence": 0,
             "mode": "automatic",
             "linear_x": 0.25,
             "angular_z": -0.1,
             "feedback_fresh": True,
         }
-        assert actions.calls == []
-        assert actions.motion_status_calls == 1
+        assert actions.calls == [("manual_command", "stop", 0)]
+        assert actions.motion_status_calls == 2
 
 
 def test_pending_mode_switch_returns_202_with_observed_mode(tmp_path):

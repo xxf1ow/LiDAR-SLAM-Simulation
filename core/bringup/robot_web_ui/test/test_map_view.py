@@ -60,23 +60,43 @@ def _run_map_scenario(scenario):
           constructor() {
             super("mapCanvas"); this.width = 200; this.height = 100;
             this.operations = []; this.path = [];
+            const contextStates = [];
             this.context = {
               fillStyle: "", strokeStyle: "", lineWidth: 1, globalAlpha: 1,
               setTransform: (...args) => this.operations.push(["transform", ...args]),
               clearRect: (...args) => this.operations.push(["clear", ...args]),
-              save: () => this.operations.push(["save"]), restore: () => this.operations.push(["restore"]),
+              save: () => {
+                contextStates.push({
+                  globalAlpha: this.context.globalAlpha,
+                  strokeStyle: this.context.strokeStyle,
+                  lineWidth: this.context.lineWidth
+                });
+                this.operations.push(["save"]);
+              },
+              restore: () => {
+                Object.assign(this.context, contextStates.pop());
+                this.operations.push(["restore"]);
+              },
               translate: (...args) => this.operations.push(["translate", ...args]),
               rotate: (...args) => this.operations.push(["rotate", ...args]),
               scale: (...args) => this.operations.push(["scale", ...args]),
-              drawImage: (...args) => this.operations.push(["drawImage", ...args]),
+              drawImage: (...args) => this.operations.push(["drawImage", ...args, this.context.globalAlpha]),
               fillRect: (...args) => this.operations.push(["fill", this.context.fillStyle, ...args]),
-              beginPath: () => { this.path = []; this.operations.push(["begin"]); },
-              moveTo: (...args) => { this.path.push(["move", ...args]); this.operations.push(["move", ...args]); },
+              beginPath: () => {
+                this.path = []; this.subpathStart = null; this.operations.push(["begin"]);
+              },
+              moveTo: (...args) => {
+                this.subpathStart = [...args];
+                this.path.push(["move", ...args]); this.operations.push(["move", ...args]);
+              },
               lineTo: (...args) => { this.path.push(["line", ...args]); this.operations.push(["line", ...args]); },
-              stroke: () => this.operations.push(["stroke", this.context.strokeStyle, this.context.globalAlpha, [...this.path]]),
+              stroke: () => this.operations.push(["stroke", this.context.strokeStyle, this.context.globalAlpha, [...this.path], this.context.lineWidth]),
               fill: () => this.operations.push(["robot", this.context.fillStyle, this.context.globalAlpha]),
               arc: (...args) => this.operations.push(["arc", ...args]),
-              closePath: () => this.operations.push(["close"])
+              closePath: () => {
+                if (this.subpathStart) this.path.push(["line", ...this.subpathStart]);
+                this.operations.push(["close"]);
+              }
             };
           }
           getContext() { return this.context; }
@@ -164,8 +184,8 @@ def _run_map_scenario(scenario):
           const statusStrip = new FakeElement(
             "statusStrip", {left: 0, top: 0, width: 200, height: 20}
           );
-          const manualPanel = new FakeElement(
-            "manualPanel", {left: 0, top: 80, width: 200, height: 20}
+          const controlDock = new FakeElement(
+            "controlDock", {left: 0, top: 80, width: 200, height: 20}
           );
           const buttons = {
             zoomIn: new FakeElement("mapZoomIn"),
@@ -188,9 +208,83 @@ def _run_map_scenario(scenario):
             return result || {ok: true};
           };
           const view = RobotMapView.create({
-            canvas, buttons, navigationStatus, statusStrip, manualPanel,
+            canvas, buttons, navigationStatus, statusStrip, controlDock,
             navigationButtons, request, poll: false
           });
+          if (scenario === "auto-fit-lifecycle") {
+            const staticMap = grid(1, {width: 20, height: 10});
+            responses.push(bytes(new Array(200).fill(0)));
+            await view.applyState(state({
+              layers: {
+                static: staticMap, global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            assert.deepStrictEqual(view.getTransform(), {scale: 7.2, x: 28, y: 76});
+
+            const firstFit = view.getTransform();
+            await view.applyState(state({
+              layers: {
+                static: staticMap, global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            assert.deepStrictEqual(view.getTransform(), firstFit);
+
+            controlDock.rect.top = 100;
+            view.refreshViewport();
+            assert.deepStrictEqual(view.getTransform(), {scale: 9, x: 10, y: 95});
+
+            view.zoomIn();
+            const userView = view.getTransform();
+            controlDock.rect.top = 80;
+            view.refreshViewport();
+            assert.deepStrictEqual(view.getTransform(), userView);
+
+            view.fit();
+            assert.deepStrictEqual(view.getTransform(), {scale: 7.2, x: 28, y: 76});
+
+            const rotatedMap = grid(2, {
+              width: 4, height: 3, resolution: 2,
+              origin: [-2, 1, Math.PI / 6]
+            });
+            responses.push(bytes(new Array(12).fill(0), '"2"'));
+            await view.applyState(state({
+              layers: {
+                static: rotatedMap, global_costmap: null,
+                local_costmap: null, path: null
+              }
+            }));
+            view.fit();
+            const fitted = view.getTransform();
+            const [originX, originY, yaw] = rotatedMap.origin;
+            const cosine = Math.cos(yaw);
+            const sine = Math.sin(yaw);
+            const outerCorners = [
+              [0, 0],
+              [rotatedMap.width * rotatedMap.resolution, 0],
+              [0, rotatedMap.height * rotatedMap.resolution],
+              [rotatedMap.width * rotatedMap.resolution, rotatedMap.height * rotatedMap.resolution]
+            ].map(([localX, localY]) => ({
+              x: originX + localX * cosine - localY * sine,
+              y: originY + localX * sine + localY * cosine
+            }));
+            const marginX = canvas.width * 0.05;
+            const marginY = controlDock.rect.top * 0.05;
+            outerCorners.forEach((corner) => {
+              const screenX = fitted.x + fitted.scale * corner.x;
+              const screenY = fitted.y - fitted.scale * corner.y;
+              assert(
+                screenX >= marginX && screenX <= canvas.width - marginX,
+                JSON.stringify({fitted, corner, screenX, marginX})
+              );
+              assert(
+                screenY >= marginY && screenY <= controlDock.rect.top - marginY,
+                JSON.stringify({fitted, corner, screenY, marginY})
+              );
+            });
+            return;
+          }
           if (scenario === "placement-preview-and-pointer") {
             assert.strictEqual(typeof view.startPlacement, "function");
             assert.strictEqual(typeof view.cancelPlacement, "function");
@@ -217,7 +311,7 @@ def _run_map_scenario(scenario):
             view.startPlacement("initial_pose");
             const preview = view.getPlacementPreview();
             assert.deepStrictEqual(preview, {
-              x: 0, y: 0, yaw: 0.25, map_revision: 7
+              x: 1, y: 13 / 18, yaw: 0.25, map_revision: 7
             });
             assert.notStrictEqual(view.getPlacementPreview(), preview);
             assert.strictEqual(navigationButtons.initialPose.hidden, true);
@@ -230,7 +324,9 @@ def _run_map_scenario(scenario):
             );
             assert(placementStrokes.length >= 2, "crosshair and arrow must both draw");
             const arrowStroke = placementStrokes.at(-1);
-            const tipSegment = arrowStroke[3].find((segment) => segment[0] === "line");
+            const tipSegment = arrowStroke[3].find((segment) =>
+              segment[0] === "line" && Math.hypot(segment[1] - 100, segment[2] - 50) > 20
+            );
             assert(tipSegment, "direction arrow needs a screen-space tip");
             const transformBeforeRotate = view.getTransform();
             await canvas.emit("pointerdown", {
@@ -277,13 +373,17 @@ def _run_map_scenario(scenario):
             const beforeZoomStroke = canvas.operations.filter((operation) =>
               operation[0] === "stroke" && operation[2] > 0 && operation[2] < 1
             ).at(-1);
-            const beforeZoomTip = beforeZoomStroke[3].find((segment) => segment[0] === "line");
+            const beforeZoomTip = beforeZoomStroke[3].find((segment) =>
+              segment[0] === "line" && Math.hypot(segment[1] - 100, segment[2] - 50) > 20
+            );
             view.zoomIn();
             const afterZoom = view.getPlacementPreview();
             const afterZoomStroke = canvas.operations.filter((operation) =>
               operation[0] === "stroke" && operation[2] > 0 && operation[2] < 1
             ).at(-1);
-            const afterZoomTip = afterZoomStroke[3].find((segment) => segment[0] === "line");
+            const afterZoomTip = afterZoomStroke[3].find((segment) =>
+              segment[0] === "line" && Math.hypot(segment[1] - 100, segment[2] - 50) > 20
+            );
             assert.notDeepStrictEqual(afterZoom, beforeZoom);
             assert.strictEqual(
               Math.hypot(beforeZoomTip[1] - 100, beforeZoomTip[2] - 50),
@@ -292,10 +392,10 @@ def _run_map_scenario(scenario):
             assert.strictEqual(canvas.width, initialWidth);
             assert.strictEqual(canvas.height, initialHeight);
 
-            manualPanel.hidden = true;
-            view.render();
-            const hiddenPanelPreview = view.getPlacementPreview();
-            assert.notStrictEqual(hiddenPanelPreview.y, afterZoom.y);
+            controlDock.rect.top = 100;
+            view.refreshViewport();
+            const resizedDockPreview = view.getPlacementPreview();
+            assert.notStrictEqual(resizedDockPreview.y, afterZoom.y);
             const beforeFit = view.getPlacementPreview();
             view.fit();
             assert.notDeepStrictEqual(view.getPlacementPreview(), beforeFit);
@@ -837,7 +937,7 @@ def _run_map_scenario(scenario):
             const secondPath = {revision: 2, etag: '"Q"'};
             responses.push(json(state({layers: {static: first, global_costmap: null, local_costmap: null, path: firstPath}})), bytes([0, 0, 0, 0], '"A"'), pathBytes([[1, 2]], '"P"'));
             await view.poll();
-            assert(canvas.operations.some((operation) => operation[0] === "stroke"));
+            assert(canvas.operations.some((operation) => operation[0] === "stroke" && operation[1] === "#55ffff"));
             canvas.operations.length = 0;
             responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([], '"B"'), bytes([], '"Q"'));
             await view.poll();
@@ -846,8 +946,8 @@ def _run_map_scenario(scenario):
             responses.push(json(state({layers: {static: second, global_costmap: null, local_costmap: null, path: secondPath}})), bytes([], '"B"'), bytes([], '"Q"'));
             await view.poll();
             assert.strictEqual(offscreenCanvases.length, 1);
-            assert.strictEqual(emptyRevisionOperations.some((operation) => operation[0] === "stroke"), false);
-            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "stroke"), false);
+            assert.strictEqual(emptyRevisionOperations.some((operation) => operation[0] === "stroke" && operation[1] === "#55ffff"), false);
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "stroke" && operation[1] === "#55ffff"), false);
             assert.strictEqual(requests.filter((request) => request.path === "/api/map/static").length, 3);
             assert.strictEqual(requests.filter((request) => request.path === "/api/navigation-path").length, 2);
             return;
@@ -902,7 +1002,8 @@ def _run_map_scenario(scenario):
             return;
           }
           if (scenario === "raster-semantics") {
-            const info = grid(1, {origin: [3, -2, Math.PI / 2]});
+            const info = grid(1, {width: 4, height: 1, origin: [3, -2, Math.PI / 2]});
+            const costmap = grid(1, {width: 7, height: 1, origin: [3, -2, Math.PI / 2]});
             const bottom = RobotMapView.gridToWorld(info, 0, 0);
             const top = RobotMapView.gridToWorld(info, 0, 1);
             responses.push(
@@ -910,58 +1011,83 @@ def _run_map_scenario(scenario):
                 localization: {...bottom, yaw: 0},
                 layers: {
                   static: info,
-                  global_costmap: info,
-                  local_costmap: {...info, map_from_source: [0, 0, 0], transform_available: true},
+                  global_costmap: costmap,
+                  local_costmap: {...costmap, map_from_source: [0, 0, 0], transform_available: true},
                   path: {revision: 1, etag: '"path"'}
                 }
               })),
-              bytes([0, 100, 255, 1]),
-              bytes([0, 1, 98, 99]),
-              bytes([255, 100, 0, 50]),
-              pathBytes([[top.x, top.y]])
+              bytes([0, 50, 100, 255]),
+              bytes([0, 1, 50, 98, 99, 100, 255]),
+              bytes([0, 1, 50, 98, 99, 100, 255]),
+              pathBytes([[top.x, top.y], [top.x + 1, top.y]])
             );
             await view.poll();
             assert.deepStrictEqual([...offscreenCanvases[0].imageData.data], [
-              229, 231, 235, 255, 217, 79, 79, 255,
-              102, 112, 133, 255, 229, 231, 235, 255
+              255, 255, 255, 255,
+              128, 128, 128, 255,
+              0, 0, 0, 255,
+              112, 137, 134, 255
             ]);
             assert.deepStrictEqual([...offscreenCanvases[1].imageData.data], [
-              0, 0, 0, 0, 240, 191, 104, 160,
-              240, 191, 104, 160, 217, 79, 79, 200
+              0, 0, 0, 0,
+              2, 0, 253, 255,
+              127, 0, 128, 255,
+              249, 0, 6, 255,
+              0, 255, 255, 255,
+              255, 0, 255, 255,
+              112, 137, 134, 255
             ]);
             assert.deepStrictEqual([...offscreenCanvases[2].imageData.data], [
-              102, 112, 133, 128, 217, 79, 79, 200,
-              0, 0, 0, 0, 240, 191, 104, 160
+              0, 0, 0, 0,
+              2, 0, 253, 255,
+              127, 0, 128, 255,
+              249, 0, 6, 255,
+              0, 255, 255, 255,
+              255, 0, 255, 255,
+              112, 137, 134, 255
             ]);
             assert.deepStrictEqual(bottom, {x: 2.5, y: -1.5});
             assert.deepStrictEqual(top, {x: 1.5, y: -1.5});
             assert(canvas.operations.some((operation) => operation[0] === "move" && Math.abs(operation[1] - top.x) < 1e-6 && Math.abs(operation[2] - top.y) < 1e-6));
             assert(canvas.operations.some((operation) => operation[0] === "translate" && operation[1] === bottom.x && operation[2] === bottom.y));
-            return;
-          }
-          if (scenario === "draw-order") {
-            responses.push(json(state({layers: {static: grid(1), global_costmap: grid(1), local_costmap: grid(1, {map_from_source: [1, 0, 0], transform_available: true}), path: {revision: 1, etag: '"path"'}}})), bytes([0, 0, 0, 0]), bytes([50, 50, 50, 50]), bytes([100, 100, 100, 100]), pathBytes([[0, 0]]));
-            await view.poll();
-            canvas.operations.length = 0;
-            view.render();
             assert.deepStrictEqual(
-              canvas.operations.filter((operation) => ["drawImage", "stroke", "robot"].includes(operation[0])).map((operation) => operation[0]),
-              ["drawImage", "drawImage", "drawImage", "stroke", "robot"]
+              canvas.operations.filter((operation) => operation[0] === "drawImage").map((operation) => operation.at(-1)),
+              [1, 0.45, 0.70]
+            );
+            const mapScale = view.getTransform().scale;
+            assert.deepStrictEqual(
+              canvas.operations.filter((operation) => operation[0] === "stroke").slice(0, 2).map((operation) => [operation[1], operation[2], operation[4]]),
+              [["#111827", 1, 5 / mapScale], ["#55ffff", 1, 2.5 / mapScale]]
+            );
+            assert(canvas.operations.some((operation) => operation[0] === "robot" && operation[1] === "#ffd400"));
+            const robotIndex = canvas.operations.findIndex((operation) => operation[0] === "robot");
+            assert.strictEqual(canvas.operations[robotIndex - 1][0], "close");
+            const robotStroke = canvas.operations.find((operation) =>
+              operation[0] === "stroke" && operation[1] === "#111827" && operation[4] === 2 / mapScale
+            );
+            assert(robotStroke);
+            assert.deepStrictEqual(
+              robotStroke[3][0].slice(1), robotStroke[3].at(-1).slice(1),
+              "robot outline stroke must return to its starting point"
             );
             const images = canvas.operations.filter((operation) => operation[0] === "drawImage").map((operation) => operation[1]);
             assert.deepStrictEqual(images, offscreenCanvases);
-            return;
-          }
-          if (scenario === "robot-heading") {
-            await view.applyState(state({localization: {x: 4, y: 5, yaw: 0}}));
-            const first = canvas.operations.slice();
+            assert.deepStrictEqual(
+              canvas.operations.filter((operation) => ["drawImage", "stroke", "robot"].includes(operation[0])).map((operation) => operation[0]),
+              ["drawImage", "drawImage", "drawImage", "stroke", "stroke", "robot", "stroke"]
+            );
+            const firstRobotRotation = canvas.operations.filter((operation) => operation[0] === "rotate").at(-1)[1];
+            assert.strictEqual(firstRobotRotation, 0);
             canvas.operations.length = 0;
             await view.applyState(state({localization: {x: 4, y: 5, yaw: Math.PI / 2}}));
-            const second = canvas.operations.slice();
-            assert(first.some((operation) => operation[0] === "move" && operation[1] > 0));
-            assert(second.some((operation) => operation[0] === "move" && operation[1] > 0));
-            assert.strictEqual(first.filter((operation) => operation[0] === "rotate").at(-1)[1], 0);
-            assert.strictEqual(second.filter((operation) => operation[0] === "rotate").at(-1)[1], Math.PI / 2);
+            assert.strictEqual(canvas.operations.filter((operation) => operation[0] === "rotate").at(-1)[1], Math.PI / 2);
+            canvas.operations.length = 0;
+            view.startPlacement("initial_pose");
+            const placementStrokes = canvas.operations.filter((operation) => operation[0] === "stroke" && operation[2] === 0.90);
+            assert.deepStrictEqual(
+              placementStrokes.map((operation) => [operation[1], operation[2], operation[4]]),
+              [["#111827", 0.90, 5], ["#ff8a00", 0.90, 2.5]]
+            );
             return;
           }
           if (scenario === "raster-cache") {
@@ -1035,7 +1161,7 @@ def _run_map_scenario(scenario):
             responses.push(json(state({layers: {static: grid(2, {etag: '"1"'}), global_costmap: null, local_costmap: null, path: null}})), notModified);
             await view.poll();
             assert(canvas.operations.some((operation) => operation[0] === "drawImage" && operation[1] === offscreenCanvases[0]));
-            assert.deepStrictEqual([...offscreenCanvases[0].imageData.data.slice(0, 4)], [102, 112, 133, 255]);
+            assert.deepStrictEqual([...offscreenCanvases[0].imageData.data.slice(0, 4)], [112, 137, 134, 255]);
             assert.strictEqual(offscreenCanvases.length, 1);
             responses.push(json(state({layers: {static: grid(2, {etag: '"1"'}), global_costmap: null, local_costmap: null, path: null}})));
             await view.poll();
@@ -1167,16 +1293,6 @@ def test_binary_gzip_response_is_interpreted_as_one_byte_cells():
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
-def test_draw_order_is_static_global_local_path_robot():
-    _run_map_scenario("draw-order")
-
-
-@pytest.mark.skipif(NODE is None, reason="Node.js is required")
-def test_robot_heading_uses_yaw_dependent_directional_geometry():
-    _run_map_scenario("robot-heading")
-
-
-@pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_grid_rasters_are_built_once_and_composited_for_view_changes():
     _run_map_scenario("raster-cache")
 
@@ -1187,8 +1303,9 @@ def test_single_pointer_drag_pans_without_pinch_or_rotation_modes():
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
-def test_zoom_in_out_fit_and_center_robot_are_bounded():
-    _run_map_scenario("zoom")
+@pytest.mark.parametrize("scenario", ["zoom", "auto-fit-lifecycle"])
+def test_view_transform_controls_and_auto_fit_lifecycle(scenario):
+    _run_map_scenario(scenario)
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
