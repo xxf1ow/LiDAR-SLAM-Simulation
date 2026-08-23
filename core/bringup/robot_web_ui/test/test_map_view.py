@@ -63,13 +63,18 @@ def _run_map_scenario(scenario):
             const contextStates = [];
             this.context = {
               fillStyle: "", strokeStyle: "", lineWidth: 1, globalAlpha: 1,
+              font: "10px sans-serif", textAlign: "start", textBaseline: "alphabetic",
               setTransform: (...args) => this.operations.push(["transform", ...args]),
               clearRect: (...args) => this.operations.push(["clear", ...args]),
               save: () => {
                 contextStates.push({
                   globalAlpha: this.context.globalAlpha,
+                  fillStyle: this.context.fillStyle,
                   strokeStyle: this.context.strokeStyle,
-                  lineWidth: this.context.lineWidth
+                  lineWidth: this.context.lineWidth,
+                  font: this.context.font,
+                  textAlign: this.context.textAlign,
+                  textBaseline: this.context.textBaseline
                 });
                 this.operations.push(["save"]);
               },
@@ -92,7 +97,17 @@ def _run_map_scenario(scenario):
               lineTo: (...args) => { this.path.push(["line", ...args]); this.operations.push(["line", ...args]); },
               stroke: () => this.operations.push(["stroke", this.context.strokeStyle, this.context.globalAlpha, [...this.path], this.context.lineWidth]),
               fill: () => this.operations.push(["robot", this.context.fillStyle, this.context.globalAlpha]),
-              arc: (...args) => this.operations.push(["arc", ...args]),
+              fillText: (...args) => this.operations.push([
+                "text", ...args, this.context.fillStyle, this.context.font
+              ]),
+              strokeText: (...args) => this.operations.push([
+                "strokeText", ...args, this.context.strokeStyle,
+                this.context.lineWidth, this.context.font
+              ]),
+              arc: (...args) => {
+                this.path.push(["arc", ...args]);
+                this.operations.push(["arc", ...args]);
+              },
               closePath: () => {
                 if (this.subpathStart) this.path.push(["line", ...this.subpathStart]);
                 this.operations.push(["close"]);
@@ -197,7 +212,8 @@ def _run_map_scenario(scenario):
             initialPose: new FakeElement("setInitialPose"),
             navigationAction: new FakeElement("navigationAction"),
             placementConfirm: new FakeElement("confirmPlacement"),
-            placementCancel: new FakeElement("cancelPlacement")
+            placementCancel: new FakeElement("cancelPlacement"),
+            parkingActions: [new FakeElement("parkingOne"), new FakeElement("parkingTwo")]
           };
           const navigationRequests = [];
           const navigationResults = [];
@@ -416,6 +432,177 @@ def _run_map_scenario(scenario):
               false
             );
             assert.deepStrictEqual(navigationRequests, []);
+            return;
+          }
+          if (scenario === "parking-overlay") {
+            const points = [
+              {number: 1, name: "A", x: 1, y: 2, yaw: 0},
+              {number: 7, name: "G", x: -1, y: 1, yaw: Math.PI / 2}
+            ];
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "arc"), false);
+            view.setParkingPointsVisible(true);
+            view.setParkingPoints(points);
+            points[0].x = 99;
+            const arcs = canvas.operations.filter((operation) => operation[0] === "arc");
+            assert.deepStrictEqual(arcs.map((operation) => operation.slice(1)), [
+              [116, 18, 14, 0, Math.PI * 2],
+              [84, 34, 14, 0, Math.PI * 2]
+            ]);
+            const labels = canvas.operations.filter(
+              (operation) => operation[0] === "text"
+            );
+            assert.deepStrictEqual(labels.map((operation) => operation[1]), ["1", "7"]);
+            labels.forEach((operation) => {
+              assert.strictEqual(operation[4], "#ffffff");
+              assert.strictEqual(operation[5], "bold 16px sans-serif");
+            });
+            const outlinedLabels = canvas.operations.filter(
+              (operation) => operation[0] === "strokeText"
+            );
+            assert.deepStrictEqual(
+              outlinedLabels.map((operation) => operation[1]),
+              ["1", "7"]
+            );
+            outlinedLabels.forEach((operation) => {
+              assert.strictEqual(operation[4], "#111827");
+              assert.strictEqual(operation[5], 3);
+              assert.strictEqual(operation[6], "bold 16px sans-serif");
+            });
+            const circleStrokes = canvas.operations.filter(
+              (operation) => operation[0] === "stroke"
+                && operation[1] === "#111827"
+                && operation[4] === 3
+                && operation[3][0]?.[0] === "arc"
+            );
+            assert.strictEqual(circleStrokes.length, 2);
+            const arrowStrokes = canvas.operations.filter(
+              (operation) => operation[0] === "stroke"
+                && operation[1] === "#00c853"
+                && operation[4] === 3
+                && operation[3][0]?.[0] === "move"
+            );
+            assert.strictEqual(arrowStrokes.length, 2);
+            const arrowHalos = canvas.operations.filter(
+              (operation) => operation[0] === "stroke"
+                && operation[1] === "#111827"
+                && operation[4] === 6
+                && operation[3][0]?.[0] === "move"
+            );
+            assert.strictEqual(arrowHalos.length, 2);
+            const arrowStrokeIndexes = canvas.operations
+              .map((operation, index) => [operation, index])
+              .filter(([operation]) => operation[0] === "stroke"
+                && operation[1] === "#00c853"
+                && operation[4] === 3
+                && operation[3][0]?.[0] === "move")
+              .map(([, index]) => index);
+            const labelIndexes = canvas.operations
+              .map((operation, index) => [operation, index])
+              .filter(([operation]) => operation[0] === "text")
+              .map(([, index]) => index);
+            assert.strictEqual(arrowStrokeIndexes.length, labelIndexes.length);
+            arrowStrokeIndexes.forEach((index, markerIndex) => {
+              assert(index < labelIndexes[markerIndex], "label must paint above its arrow");
+            });
+            arrowStrokes.forEach((operation) => {
+              const path = operation[3];
+              assert.strictEqual(path.length, 6);
+              assert.strictEqual(path[0][0], "move");
+              assert.strictEqual(path[1][0], "line");
+              assert.strictEqual(path[2][0], "move");
+              assert.strictEqual(path[3][0], "line");
+              assert.strictEqual(path[4][0], "move");
+              assert.strictEqual(path[5][0], "line");
+              assert.deepStrictEqual(path[2].slice(1), path[1].slice(1));
+              assert.deepStrictEqual(path[4].slice(1), path[1].slice(1));
+              const matchingArc = arcs.find((arc) => Math.abs(Math.hypot(
+                path[0][1] - arc[1], path[0][2] - arc[2]
+              ) - 14) < 1e-12);
+              assert(matchingArc, "arrow shaft must start at the circle edge");
+              assert(
+                Math.abs(Math.hypot(
+                  path[1][1] - path[0][1], path[1][2] - path[0][2]
+                ) - 20) < 1e-12
+              );
+              assert(
+                Math.abs(Math.hypot(
+                  path[3][1] - path[2][1], path[3][2] - path[2][2]
+                ) - 8) < 1e-12
+              );
+              assert(
+                Math.abs(Math.hypot(
+                  path[5][1] - path[4][1], path[5][2] - path[4][2]
+                ) - 8) < 1e-12
+              );
+            });
+            const beforePan = arcs.map((operation) => operation.slice(1, 3));
+            canvas.operations.length = 0;
+            await canvas.emit("pointerdown", {clientX: 0, clientY: 0});
+            await canvas.emit("pointermove", {clientX: 10, clientY: 5});
+            const afterPan = canvas.operations
+              .filter((operation) => operation[0] === "arc")
+              .map((operation) => operation.slice(1, 3));
+            assert.deepStrictEqual(afterPan, beforePan.map(([x, y]) => [x + 10, y + 5]));
+            const panScale = view.getTransform().scale;
+            view.zoomIn();
+            const afterZoomArcs = canvas.operations
+              .filter((operation) => operation[0] === "arc")
+              .map((operation) => operation.slice(1, 3));
+            assert.notDeepStrictEqual(afterZoomArcs, afterPan);
+            canvas.operations
+              .filter((operation) => operation[0] === "stroke"
+                && operation[1] === "#00c853"
+                && operation[4] === 3
+                && operation[3][0]?.[0] === "move")
+              .forEach((operation) => {
+                const path = operation[3];
+                assert(
+                  Math.abs(Math.hypot(
+                    path[3][1] - path[2][1], path[3][2] - path[2][2]
+                  ) - 8) < 1e-12
+                );
+                assert(
+                  Math.abs(Math.hypot(
+                    path[5][1] - path[4][1], path[5][2] - path[4][2]
+                  ) - 8) < 1e-12
+                );
+              });
+            assert.strictEqual(
+              canvas.operations
+                .filter((operation) => operation[0] === "stroke"
+                  && operation[1] === "#00c853"
+                  && operation[4] === 3
+                  && operation[3][0]?.[0] === "move")
+                .every((operation) => Math.abs(Math.hypot(
+                  operation[3][1][1] - operation[3][0][1],
+                  operation[3][1][2] - operation[3][0][2]
+                ) - 20) < 1e-12),
+              true
+            );
+            assert.strictEqual(view.getTransform().scale, panScale * 1.25);
+            canvas.operations.length = 0;
+            view.setParkingPointsVisible(false);
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "arc"), false);
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "text"), false);
+            view.setParkingPointsVisible(true);
+            navigationButtons.parkingActions[0].hidden = true;
+            navigationButtons.parkingActions[0].disabled = true;
+            navigationButtons.parkingActions[1].hidden = false;
+            navigationButtons.parkingActions[1].disabled = false;
+            view.startPlacement("initial_pose");
+            await view.applyState(state({
+              navigation: {goal_status: "idle"},
+              localization: {x: 0, y: 0, yaw: 0}
+            }));
+            navigationButtons.parkingActions.forEach((action) => {
+              assert.strictEqual(action.hidden, true);
+              assert.strictEqual(action.disabled, true);
+            });
+            view.cancelPlacement();
+            assert.strictEqual(navigationButtons.parkingActions[0].hidden, true);
+            assert.strictEqual(navigationButtons.parkingActions[0].disabled, true);
+            assert.strictEqual(navigationButtons.parkingActions[1].hidden, false);
+            assert.strictEqual(navigationButtons.parkingActions[1].disabled, false);
             return;
           }
           if (scenario === "placement-requests") {
@@ -1255,6 +1442,11 @@ def test_navigation_degradation_status_is_separate_and_scoped():
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_mobile_placement_preview_rendering_and_pointer_ownership():
     _run_map_scenario("placement-preview-and-pointer")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_parking_overlay_projection_visibility_and_placement_interlock():
+    _run_map_scenario("parking-overlay")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")

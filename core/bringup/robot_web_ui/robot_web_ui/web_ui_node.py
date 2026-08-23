@@ -41,6 +41,12 @@ from .map_snapshot import (
     update_path_snapshot,
 )
 from .navigation_request import parse_navigation_pose, yaw_quaternion
+from .parking_point_store import (
+    ParkingPoint,
+    ParkingPointStorageError,
+    ParkingPointStore,
+    normalize_name,
+)
 
 
 ODOM_TIMEOUT = 0.5
@@ -107,6 +113,12 @@ class WebUiNode(Node):
             self._static_map = load_nav2_pgm(Path(map_yaml_path))
         except (OSError, TypeError, ValueError, yaml.YAMLError) as exc:
             self._map_error = f"{type(exc).__name__}: {exc}"
+        self._parking_point_store = None
+        self._parking_points_error = None
+        try:
+            self._parking_point_store = ParkingPointStore(map_yaml_path)
+        except ParkingPointStorageError as exc:
+            self._parking_points_error = exc
 
         self._manual_publisher = self.create_publisher(
             TwistStamped,
@@ -356,6 +368,67 @@ class WebUiNode(Node):
                     self._running_bt_nodes.clear()
             raise ActionUnavailable(message) from exc
         return "sending"
+
+    def _parking_store(self) -> ParkingPointStore:
+        store = self._parking_point_store
+        if store is not None:
+            return store
+        error = self._parking_points_error
+        if error is not None:
+            raise error
+        raise ActionUnavailable("parking-point store unavailable")
+
+    @staticmethod
+    def _parking_point_dict(number: int, point: ParkingPoint) -> dict[str, object]:
+        return {"number": number, **point.as_dict()}
+
+    def list_parking_points(self) -> dict[str, object]:
+        points = self._parking_store().list()
+        return {
+            "points": [
+                self._parking_point_dict(number, point)
+                for number, point in enumerate(points, start=1)
+            ]
+        }
+
+    def save_parking_point(self, name: str) -> dict[str, object]:
+        normalized_name = normalize_name(name)
+        store = self._parking_store()
+        if self._gate_mode != "automatic":
+            raise ActionConflict(
+                "automatic control is not active",
+                self._gate_mode,
+            )
+        localization = self._localization_pose
+        if localization is None:
+            raise ActionUnavailable("robot is not localized")
+        number = len(store.list()) + 1
+        point = ParkingPoint(normalized_name, *localization)
+        store.save(point)
+        return {"point": self._parking_point_dict(number, point)}
+
+    def navigate_parking_point(self, name: str) -> dict[str, object]:
+        normalized_name = normalize_name(name)
+        point = self._parking_store().get(normalized_name)
+        static = self._static_map
+        if static is None:
+            raise ActionUnavailable("static map unavailable")
+        if self._localization_pose is None:
+            raise ActionUnavailable("robot is not localized")
+        self.send_navigation_goal(
+            {
+                "x": point.x,
+                "y": point.y,
+                "yaw": point.yaw,
+                "map_revision": static.binary.revision,
+            }
+        )
+        return {"name": point.name, "status": "accepted"}
+
+    def delete_parking_point(self, name: str) -> dict[str, object]:
+        normalized_name = normalize_name(name)
+        self._parking_store().delete(normalized_name)
+        return {"deleted": normalized_name}
 
     def _navigation_goal_response_callback(self, future) -> None:
         try:
