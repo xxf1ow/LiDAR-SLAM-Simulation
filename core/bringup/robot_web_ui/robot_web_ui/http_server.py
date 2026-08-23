@@ -255,6 +255,7 @@ def _handler_for(actions, html_path: Path):
                         manual_command_context = (
                             sequence,
                             previous_sequence,
+                            manual_mode,
                         )
                         if active_session_id != session_id:
                             manual_status = 409
@@ -328,7 +329,9 @@ def _handler_for(actions, html_path: Path):
                 if manual_command_context is None:
                     self._send_json(400, {"error": str(exc)})
                 else:
-                    sequence, previous_sequence = manual_command_context
+                    sequence, previous_sequence, mode_snapshot = (
+                        manual_command_context
+                    )
                     self._send_action_json(
                         400,
                         {
@@ -336,7 +339,7 @@ def _handler_for(actions, html_path: Path):
                             "accepted": False,
                             "sequence": sequence,
                             "last_sequence": previous_sequence,
-                            "mode": manual_mode,
+                            "mode": mode_snapshot,
                         },
                     )
                 return
@@ -347,7 +350,9 @@ def _handler_for(actions, html_path: Path):
                         {"error": str(exc), "mode": exc.mode},
                     )
                 else:
-                    sequence, previous_sequence = manual_command_context
+                    sequence, previous_sequence, _mode_snapshot = (
+                        manual_command_context
+                    )
                     self._send_action_json(
                         409,
                         {
@@ -371,7 +376,9 @@ def _handler_for(actions, html_path: Path):
                         },
                     )
                 else:
-                    sequence, previous_sequence = manual_command_context
+                    sequence, previous_sequence, _mode_snapshot = (
+                        manual_command_context
+                    )
                     self._send_action_json(
                         202,
                         {
@@ -389,7 +396,9 @@ def _handler_for(actions, html_path: Path):
                 if manual_command_context is None:
                     self._send_json(503, {"error": str(exc)})
                 else:
-                    sequence, previous_sequence = manual_command_context
+                    sequence, previous_sequence, mode_snapshot = (
+                        manual_command_context
+                    )
                     self._send_action_json(
                         503,
                         {
@@ -397,7 +406,7 @@ def _handler_for(actions, html_path: Path):
                             "accepted": False,
                             "sequence": sequence,
                             "last_sequence": previous_sequence,
-                            "mode": manual_mode,
+                            "mode": mode_snapshot,
                         },
                     )
                 return

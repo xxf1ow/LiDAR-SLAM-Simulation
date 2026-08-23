@@ -39,6 +39,9 @@ class FakeActions:
         self.pending = False
         self.mode = "manual"
         self.motion_status_calls = 0
+        self.block_manual_action = False
+        self.manual_action_started = threading.Event()
+        self.allow_manual_action = threading.Event()
         self.asset_read_started = threading.Event()
         self.allow_asset_read = threading.Event()
         self.blocked_asset_name = None
@@ -121,6 +124,10 @@ class FakeActions:
             )
         if self.unavailable:
             raise ActionUnavailable("publisher unavailable")
+        if self.block_manual_action:
+            self.manual_action_started.set()
+            if not self.allow_manual_action.wait(timeout=1.0):
+                raise AssertionError("test did not release blocked manual action")
         self.calls.append(("manual_command", direction, speed_percent))
         return self.mode
 
@@ -232,8 +239,19 @@ def manual_payload(session_id, sequence, direction="forward", speed_percent=20):
 
 def start_manual_session(base_url):
     body = response_json(post_json(base_url, "/api/manual-session", {}))
+    assert set(body) == {
+        "ok",
+        "session_id",
+        "mode",
+        "linear_x",
+        "angular_z",
+        "feedback_fresh",
+    }
     assert body["ok"] is True and body["mode"] == "manual"
-    assert isinstance(body["session_id"], str)
+    assert isinstance(body["session_id"], str) and body["session_id"]
+    assert body["linear_x"] == 0.25
+    assert body["angular_z"] == -0.1
+    assert body["feedback_fresh"] is True
     return body["session_id"]
 
 
@@ -268,7 +286,17 @@ def test_manual_session_sequence_and_concurrency_are_atomic(
         assert second_body["accepted"] is True
 
         delayed, delayed_body = send_manual(base_url, session_a, 1)
-        assert delayed_body.get("reason") == "stale_sequence"
+        assert delayed_body == {
+            "ok": True,
+            "accepted": False,
+            "reason": "stale_sequence",
+            "sequence": 1,
+            "last_sequence": 2,
+            "mode": "manual",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
+        }
         assert len(actions.calls) == calls_after_first + 1
 
         def fail_manual(_direction, _speed_percent):
@@ -277,8 +305,16 @@ def test_manual_session_sequence_and_concurrency_are_atomic(
         monkeypatch.setattr(actions, "manual_command", fail_manual)
         failed, failed_body = send_manual(base_url, session_a, 3)
         assert failed.status == 503
-        assert failed_body["accepted"] is False
-        assert failed_body["last_sequence"] == 2
+        assert failed_body == {
+            "error": "publisher unavailable",
+            "accepted": False,
+            "sequence": 3,
+            "last_sequence": 2,
+            "mode": "manual",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
+        }
         monkeypatch.undo()
 
         retry, retry_body = send_manual(base_url, session_a, 3)
@@ -294,13 +330,29 @@ def test_manual_session_sequence_and_concurrency_are_atomic(
             "sequence": 4,
         }
 
+        actions.block_manual_action = True
+        first_submitted = threading.Event()
+        second_submitted = threading.Event()
+
+        def submit_duplicate(submitted):
+            submitted.set()
+            return send_manual(base_url, session_b, 1)
+
         with ThreadPoolExecutor(max_workers=2) as pool:
-            duplicate_bodies = list(
-                pool.map(
-                    lambda _: send_manual(base_url, session_b, 1)[1],
-                    range(2),
-                )
-            )
+            first_future = pool.submit(submit_duplicate, first_submitted)
+            assert first_submitted.wait(timeout=1.0)
+            assert actions.manual_action_started.wait(timeout=1.0)
+            second_future = pool.submit(submit_duplicate, second_submitted)
+            assert second_submitted.wait(timeout=1.0)
+            assert not first_future.done()
+            assert not second_future.done()
+            actions.allow_manual_action.set()
+            duplicate_results = [
+                first_future.result(timeout=1.0),
+                second_future.result(timeout=1.0),
+            ]
+        duplicate_responses, duplicate_bodies = zip(*duplicate_results)
+        assert all(response.status == 200 for response in duplicate_responses)
         assert sum(body["accepted"] for body in duplicate_bodies) == 1
         assert sum(
             body.get("reason") == "stale_sequence"
@@ -316,6 +368,56 @@ def test_manual_session_sequence_and_concurrency_are_atomic(
         ("manual_command", "forward", 20),
     ]
     assert session_b != session_a
+
+
+def test_manual_action_failure_captures_mode_before_session_replacement(
+    tmp_path
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        session_id = start_manual_session(base_url)
+        original_manual_command = actions.manual_command
+
+        class SessionReplacingUnavailable(ActionUnavailable):
+            def __init__(self):
+                super().__init__("publisher unavailable")
+                self.replaced = False
+
+            def __str__(self):
+                if not self.replaced:
+                    self.replaced = True
+                    actions.mode = "replacement"
+                    replacement = post_json(
+                        base_url, "/api/manual-session", {}
+                    )
+                    assert replacement.status == 200
+                    response_json(replacement)
+                return super().__str__()
+
+        failure = SessionReplacingUnavailable()
+
+        def fail_manual(direction, speed_percent):
+            if direction == "stop":
+                return original_manual_command(direction, speed_percent)
+            raise failure
+
+        actions.manual_command = fail_manual
+        response, body = send_manual(base_url, session_id, 1)
+
+        assert response.status == 503
+        assert body == {
+            "error": "publisher unavailable",
+            "accepted": False,
+            "sequence": 1,
+            "last_sequence": 0,
+            "mode": "manual",
+            "linear_x": 0.25,
+            "angular_z": -0.1,
+            "feedback_fresh": True,
+        }
 
 
 def navigation_pose_payload():
