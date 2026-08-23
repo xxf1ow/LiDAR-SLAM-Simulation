@@ -64,7 +64,10 @@ def normalize_name(value: object) -> str:
 def _coordinate(value: object) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ParkingPointValidationError("coordinates must be numbers")
-    converted = float(value)
+    try:
+        converted = float(value)
+    except OverflowError as exc:
+        raise ParkingPointValidationError("coordinates must be finite") from exc
     if not math.isfinite(converted):
         raise ParkingPointValidationError("coordinates must be finite")
     return converted
@@ -119,6 +122,10 @@ class ParkingPointStore:
             return ()
         try:
             raw = self._path.read_text(encoding="utf-8")
+        except UnicodeError as exc:
+            raise ParkingPointCorruptError(
+                f"invalid parking-point sidecar {self._path}"
+            ) from exc
         except OSError as exc:
             raise ParkingPointStorageError(f"cannot read {self._path}") from exc
         try:
@@ -126,7 +133,7 @@ class ParkingPointStore:
             if (
                 not isinstance(root, dict)
                 or set(root) != {"version", "points"}
-                or isinstance(root["version"], bool)
+                or type(root["version"]) is not int
                 or root["version"] != 1
                 or not isinstance(root["points"], list)
             ):
@@ -150,7 +157,14 @@ class ParkingPointStore:
                 names.add(name)
                 points.append(point)
             return tuple(points)
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError, ValueError, ParkingPointError) as exc:
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            OverflowError,
+            TypeError,
+            ValueError,
+            ParkingPointError,
+        ) as exc:
             raise ParkingPointCorruptError(f"invalid parking-point sidecar {self._path}") from exc
 
     def _write_points(self, points: tuple[ParkingPoint, ...]) -> None:

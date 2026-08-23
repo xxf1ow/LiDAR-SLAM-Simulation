@@ -282,6 +282,7 @@
   let modeSwitchTarget = null;
   let buttonMotionOwner = null;
   let parkingPoints = [];
+  let parkingRefreshGeneration = 0;
   let parkingDrawerOpen = false;
   let saveParkingFormOpen = false;
 
@@ -387,11 +388,15 @@
   }
 
   async function refreshParkingPoints() {
+    const generation = ++parkingRefreshGeneration;
     try {
       const payload = await get("/api/parking-points");
+      if (generation !== parkingRefreshGeneration) return parkingPoints;
+      clearParkingNotice();
       updateParkingPoints(payload.points);
       return parkingPoints;
     } catch (error) {
+      if (generation !== parkingRefreshGeneration) return parkingPoints;
       showParkingRequestFailure(error);
       return null;
     }

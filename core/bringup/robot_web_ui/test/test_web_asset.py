@@ -720,6 +720,73 @@ def _run_browser_scenario(scenario):
           assert.strictEqual(currentMode, "manual");
           assert(directionButtons.every((button) => !button.disabled));
 
+          if (scenario === "parking-refresh-race") {{
+            await resolveNext({{payload: {{
+              ok: true, sequence: 1, mode: "manual"
+            }}}});
+            const olderPoints = [
+              {{number: 1, name: "停车点 1", x: 1, y: 2, yaw: 0}}
+            ];
+            const newerPoints = [
+              {{number: 8, name: "停车点 8", x: 8, y: 9, yaw: 1}},
+              {{number: 12, name: "备用点", x: 2, y: 3, yaw: 2}}
+            ];
+            const olderSuccess = refreshParkingPoints();
+            const newerSuccess = refreshParkingPoints();
+            await flush();
+            const parkingRequests = requests.filter(
+              (request) => request.path === "/api/parking-points"
+            );
+            assert.strictEqual(parkingRequests.length, 2);
+            noticeOwner = "parking";
+            elements.get("notice").textContent = "请求失败：previous failure";
+            parkingRequests[1].resolve({{payload: {{points: newerPoints}}}});
+            await newerSuccess;
+            assert.deepStrictEqual(parkingPoints, newerPoints);
+            assert.strictEqual(elements.get("notice").textContent, "");
+            assert.deepStrictEqual(
+              mapViewCalls.at(-1), ["setParkingPoints", newerPoints]
+            );
+            currentMode = "automatic";
+            renderControls();
+            openParkingDrawer();
+            assert.strictEqual(parkingList.children[0].children[0].textContent, "8");
+            const mapCallCount = mapViewCalls.length;
+            parkingRequests[0].resolve({{payload: {{points: olderPoints}}}});
+            await olderSuccess;
+            assert.deepStrictEqual(parkingPoints, newerPoints);
+            assert.strictEqual(parkingList.children[0].children[0].textContent, "8");
+            assert.strictEqual(mapViewCalls.length, mapCallCount);
+
+            const olderFailure = refreshParkingPoints();
+            const newerFailure = refreshParkingPoints();
+            await flush();
+            const failureRequests = requests.filter(
+              (request) => request.path === "/api/parking-points"
+            );
+            assert.strictEqual(failureRequests.length, 4);
+            failureRequests[3].resolve({{
+              ok: false, status: 503, payload: {{error: "newer failure"}}
+            }});
+            await newerFailure;
+            assert.strictEqual(
+              elements.get("notice").textContent,
+              "请求失败：newer failure"
+            );
+            failureRequests[2].resolve({{
+              ok: false, status: 503, payload: {{error: "older failure"}}
+            }});
+            await olderFailure;
+            assert.strictEqual(
+              elements.get("notice").textContent,
+              "请求失败：newer failure"
+            );
+            assert.deepStrictEqual(parkingPoints, newerPoints);
+            assert.strictEqual(parkingList.children[0].children[0].textContent, "8");
+            assert.strictEqual(mapViewCalls.length, mapCallCount);
+            return;
+          }}
+
           if (scenario === "sequenced-command-stream") {{
             elements.get("notice").textContent = "existing notice";
             noticeOwner = "mode";
@@ -1313,6 +1380,7 @@ def _run_browser_scenario(scenario):
     "scenario",
     [
         "parking_lifecycle",
+        "parking-refresh-race",
         "contextual-layout",
         "initial-and-authoritative-interlock",
         "motion-feedback",

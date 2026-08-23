@@ -442,12 +442,33 @@ def _run_map_scenario(scenario):
               (operation) => operation[0] === "stroke" && operation[4] === 3
             );
             assert.strictEqual(arrowStrokes.length, 2);
-            assert(canvas.operations.some((operation) =>
-              operation[0] === "line" && operation[1] === 136 && operation[2] === 18
-            ));
-            assert(canvas.operations.some((operation) =>
-              operation[0] === "line" && operation[1] === 84 && operation[2] === 14
-            ));
+            arrowStrokes.forEach((operation) => {
+              const path = operation[3];
+              assert.strictEqual(path.length, 6);
+              assert.strictEqual(path[0][0], "move");
+              assert.strictEqual(path[1][0], "line");
+              assert.strictEqual(path[2][0], "move");
+              assert.strictEqual(path[3][0], "line");
+              assert.strictEqual(path[4][0], "move");
+              assert.strictEqual(path[5][0], "line");
+              assert.deepStrictEqual(path[2].slice(1), path[1].slice(1));
+              assert.deepStrictEqual(path[4].slice(1), path[1].slice(1));
+              assert(
+                Math.abs(Math.hypot(
+                  path[1][1] - path[0][1], path[1][2] - path[0][2]
+                ) - 20) < 1e-12
+              );
+              assert(
+                Math.abs(Math.hypot(
+                  path[3][1] - path[2][1], path[3][2] - path[2][2]
+                ) - 8) < 1e-12
+              );
+              assert(
+                Math.abs(Math.hypot(
+                  path[5][1] - path[4][1], path[5][2] - path[4][2]
+                ) - 8) < 1e-12
+              );
+            });
             const beforePan = arcs.map((operation) => operation.slice(1, 3));
             canvas.operations.length = 0;
             await canvas.emit("pointerdown", {clientX: 0, clientY: 0});
@@ -462,13 +483,28 @@ def _run_map_scenario(scenario):
               .filter((operation) => operation[0] === "arc")
               .map((operation) => operation.slice(1, 3));
             assert.notDeepStrictEqual(afterZoomArcs, afterPan);
+            canvas.operations
+              .filter((operation) => operation[0] === "stroke" && operation[4] === 3)
+              .forEach((operation) => {
+                const path = operation[3];
+                assert(
+                  Math.abs(Math.hypot(
+                    path[3][1] - path[2][1], path[3][2] - path[2][2]
+                  ) - 8) < 1e-12
+                );
+                assert(
+                  Math.abs(Math.hypot(
+                    path[5][1] - path[4][1], path[5][2] - path[4][2]
+                  ) - 8) < 1e-12
+                );
+              });
             assert.strictEqual(
-              canvas.operations.filter((operation) => operation[0] === "line").every((line, index) =>
-                Math.abs(Math.hypot(
-                  line[1] - canvas.operations.filter((operation) => operation[0] === "move")[index][1],
-                  line[2] - canvas.operations.filter((operation) => operation[0] === "move")[index][2]
-                ) - 20) < 1e-12
-              ),
+              canvas.operations
+                .filter((operation) => operation[0] === "stroke" && operation[4] === 3)
+                .every((operation) => Math.abs(Math.hypot(
+                  operation[3][1][1] - operation[3][0][1],
+                  operation[3][1][2] - operation[3][0][2]
+                ) - 20) < 1e-12),
               true
             );
             assert.strictEqual(view.getTransform().scale, panScale * 1.25);

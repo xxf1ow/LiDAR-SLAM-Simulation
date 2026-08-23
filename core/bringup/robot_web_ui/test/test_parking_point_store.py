@@ -102,6 +102,12 @@ def test_parking_point_store_persists_exact_order_and_preserves_state_on_failure
     store = ParkingPointStore(map_path)
     original_points = store.list()
     original_bytes = target.read_bytes()
+    before_overflow_paths = set(target.parent.iterdir())
+    with pytest.raises(ParkingPointValidationError):
+        store.save(ParkingPoint("overflow", 10**1000, 0, 0))
+    assert store.list() == original_points
+    assert target.read_bytes() == original_bytes
+    assert set(target.parent.iterdir()) == before_overflow_paths
 
     def assert_write_failure(failure, expected_type=ParkingPointStorageError):
         before_paths = set(target.parent.iterdir())
@@ -166,3 +172,40 @@ def test_parking_point_store_persists_exact_order_and_preserves_state_on_failure
     assert_write_failure(fail_json_write)
     assert_write_failure(fail_flush)
     assert_write_failure(fail_replace)
+
+
+@pytest.mark.parametrize(
+    ("sidecar_bytes", "cause_type"),
+    [
+        (b"{\"version\": 1, \"points\": [\xff]}", UnicodeDecodeError),
+        (
+            json.dumps(
+                {
+                    "version": 1,
+                    "points": [
+                        {"name": "Huge", "x": 10**1000, "y": 0, "yaw": 0}
+                    ],
+                }
+            ).encode("utf-8"),
+            ParkingPointValidationError,
+        ),
+        (
+            json.dumps({"version": 1.0, "points": []}).encode("utf-8"),
+            ValueError,
+        ),
+    ],
+    ids=["invalid-utf8", "coordinate-integer-overflow", "float-version"],
+)
+def test_malformed_sidecars_are_typed_and_preserve_bytes_and_name(
+    tmp_path, sidecar_bytes, cause_type
+):
+    map_path = tmp_path / "warehouse.yaml"
+    sidecar = parking_points_path(map_path)
+    sidecar.write_bytes(sidecar_bytes)
+
+    with pytest.raises(ParkingPointCorruptError) as error:
+        ParkingPointStore(map_path)
+
+    assert isinstance(error.value.__cause__, cause_type)
+    assert sidecar.read_bytes() == sidecar_bytes
+    assert sidecar.name in str(error.value)

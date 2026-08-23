@@ -22,6 +22,9 @@
   };
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 128;
+  const PARKING_ARROW_LENGTH = 20;
+  const PARKING_ARROWHEAD_LENGTH = 8;
+  const PARKING_ARROWHEAD_ANGLE = Math.PI / 6;
   const PLACEMENT_ALPHA = 0.90;
   const PLACEMENT_ARROW_LENGTH = 36;
   const PLACEMENT_TIP_HIT_RADIUS = 22;
@@ -296,11 +299,24 @@
         context.fillStyle = PALETTE.halo;
         context.fillText(String(point.number), screenX, screenY);
         context.fillStyle = PALETTE.parking;
+        const tipX = screenX + Math.cos(point.yaw) * PARKING_ARROW_LENGTH;
+        const tipY = screenY - Math.sin(point.yaw) * PARKING_ARROW_LENGTH;
         context.beginPath();
         context.moveTo(screenX, screenY);
+        context.lineTo(tipX, tipY);
+        context.moveTo(tipX, tipY);
         context.lineTo(
-          screenX + Math.cos(point.yaw) * 20,
-          screenY - Math.sin(point.yaw) * 20
+          tipX - Math.cos(point.yaw - PARKING_ARROWHEAD_ANGLE)
+            * PARKING_ARROWHEAD_LENGTH,
+          tipY + Math.sin(point.yaw - PARKING_ARROWHEAD_ANGLE)
+            * PARKING_ARROWHEAD_LENGTH
+        );
+        context.moveTo(tipX, tipY);
+        context.lineTo(
+          tipX - Math.cos(point.yaw + PARKING_ARROWHEAD_ANGLE)
+            * PARKING_ARROWHEAD_LENGTH,
+          tipY + Math.sin(point.yaw + PARKING_ARROWHEAD_ANGLE)
+            * PARKING_ARROWHEAD_LENGTH
         );
         context.stroke();
       });
