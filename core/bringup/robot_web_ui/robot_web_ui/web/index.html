@@ -243,15 +243,16 @@
     feedbackState.hidden = false;
   }
 
-  async function post(path, body, signal) {
-    const options = {
+  async function post(path, body, options = {}) {
+    const requestOptions = {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)
     };
-    if (signal !== undefined) options.signal = signal;
-    const response = await fetch(path, options);
+    if (options.signal !== undefined) requestOptions.signal = options.signal;
+    const response = await fetch(path, requestOptions);
     const payload = await response.json();
+    if (options.applyFeedback !== false) applyResponseFeedback(payload);
     if (!response.ok) {
       const error = new Error(
         payload.error || `HTTP ${response.status}`
@@ -348,7 +349,7 @@
     ) return false;
     highestHandledSequence = snapshot.sequence;
     if (payload.reason === "stale_sequence") return false;
-    if (!modeSwitchInProgress() || payload.mode === modeSwitchTarget) {
+    if (!modeSwitchInProgress()) {
       applyResponseMode(payload);
       applyResponseFeedback(payload);
       if (noticeOwner === "motion") {
@@ -395,7 +396,10 @@
       sequence: snapshot.sequence,
       direction: desiredDirection,
       speed_percent: Number(speed.value)
-    }, controller.signal).then(
+    }, {
+      signal: controller.signal,
+      applyFeedback: false
+    }).then(
       (payload) => handleManualResponse(payload, snapshot)
     ).catch(
       (error) => handleManualError(error, snapshot)
@@ -513,6 +517,7 @@
     ) return;
     const observedMode = currentMode;
     const requestGeneration = ++modeGeneration;
+    let settledGeneration = null;
     modeSwitchTarget = currentMode === "automatic"
       ? "manual"
       : "automatic";
@@ -531,6 +536,8 @@
     try {
       const payload = await post(path, {});
       if (requestGeneration !== modeGeneration) return;
+      modeGeneration += 1;
+      settledGeneration = modeGeneration;
       applyResponseMode(payload);
       noticeOwner = "mode";
       notice.textContent = payload.pending
@@ -538,12 +545,14 @@
         : successMessage;
     } catch (error) {
       if (requestGeneration !== modeGeneration) return;
+      modeGeneration += 1;
+      settledGeneration = modeGeneration;
       if (error.payload) applyResponseMode(error.payload);
       modeSwitchPending = false;
       modeSwitchTarget = null;
       showRequestFailure(error, "mode");
     } finally {
-      if (requestGeneration === modeGeneration) renderControls();
+      if (settledGeneration !== null) renderControls();
     }
   }
 
@@ -565,7 +574,6 @@
       nextSequence = 1;
       highestHandledSequence = 0;
       applyMode(payload.mode);
-      applyResponseFeedback(payload);
       commandLoop();
     } catch (error) {
       applyMode(null);

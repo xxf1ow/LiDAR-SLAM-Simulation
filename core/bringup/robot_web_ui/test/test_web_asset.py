@@ -470,6 +470,8 @@ def _run_browser_scenario(scenario):
           assert(directionButtons.every((button) => !button.disabled));
 
           if (scenario === "sequenced-command-stream") {{
+            elements.get("notice").textContent = "existing notice";
+            noticeOwner = "mode";
             assert.deepStrictEqual(requests[1].body, {{
               session_id: "session-a",
               sequence: 1,
@@ -485,8 +487,16 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(desiredDirection, "forward");
             elements.get("speed").value = "35";
             await elements.get("speed").emit("input");
+            documentListeners.get("keydown")({{
+              key: "w",
+              repeat: false,
+              preventDefault() {{}}
+            }});
+            assert.deepStrictEqual(heldMovementKeys, ["w"]);
+            await directionButtons[0].emit("pointerup");
+            assert.strictEqual(desiredDirection, "stop");
             await flush();
-            assert.strictEqual(requests.length, 4);
+            assert.strictEqual(requests.length, 5);
             assert.deepStrictEqual(requests[2].body, {{
               session_id: "session-a",
               sequence: 2,
@@ -499,7 +509,20 @@ def _run_browser_scenario(scenario):
               direction: "forward",
               speed_percent: 35
             }});
+            assert.deepStrictEqual(requests[4].body, {{
+              session_id: "session-a",
+              sequence: 4,
+              direction: "stop",
+              speed_percent: 35
+            }});
+            assert.deepStrictEqual(heldMovementKeys, []);
+            assert.strictEqual(elements.get("notice").textContent, "existing notice");
 
+            requests[4].resolve({{payload: {{
+              ok: true, accepted: true, sequence: 4,
+              last_sequence: 4, mode: "manual"
+            }}}});
+            await flush();
             requests[3].resolve({{payload: {{
               ok: true, accepted: true, sequence: 3,
               last_sequence: 3, mode: "manual"
@@ -510,16 +533,18 @@ def _run_browser_scenario(scenario):
               last_sequence: 2, mode: "manual"
             }}}});
             await flush();
-            assert.strictEqual(highestHandledSequence, 3);
+            assert.strictEqual(highestHandledSequence, 4);
+            assert.strictEqual(elements.get("notice").textContent, "existing notice");
 
             await tick();
-            assert.strictEqual(requests.at(-1).body.sequence, 4);
+            assert.strictEqual(requests.at(-1).body.sequence, 5);
             requests.at(-1).resolve({{payload: {{
               ok: true, accepted: false, reason: "stale_sequence",
-              sequence: 4, last_sequence: 4, mode: "manual"
+              sequence: 5, last_sequence: 5, mode: "manual"
             }}}});
             await flush();
-            assert.strictEqual(highestHandledSequence, 4);
+            assert.strictEqual(highestHandledSequence, 5);
+            assert.strictEqual(elements.get("notice").textContent, "existing notice");
 
             await tick(400);
             const timedOut = requests.find((request) => request.body.sequence === 1);
@@ -529,15 +554,11 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(timedOut.signal.aborted, true);
 
             await tick();
-            assert.strictEqual(requests.at(-1).body.sequence, 5);
-            requests.at(-1).resolve({{payload: {{
-              ok: true, accepted: true, sequence: 5,
-              last_sequence: 5, mode: "manual"
-            }}}});
-            await flush();
+            assert.strictEqual(requests.at(-1).body.sequence, 6);
+            const unresolvedCommand = requests.at(-1);
             await tick();
             const inactive = requests.at(-1);
-            assert.strictEqual(inactive.body.sequence, 6);
+            assert.strictEqual(inactive.body.sequence, 7);
             inactive.resolve({{
               ok: false,
               status: 409,
@@ -545,7 +566,7 @@ def _run_browser_scenario(scenario):
                 error: "inactive manual session",
                 accepted: false,
                 reason: "inactive_session",
-                sequence: 6
+                sequence: 7
               }}
             }});
             await flush();
@@ -555,8 +576,9 @@ def _run_browser_scenario(scenario):
               timers.filter((timer) => !timer.canceled).length,
               0
             );
-            assert(requests.slice(1).filter((request) => !request.settled)
-              .every((request) => request.signal.aborted));
+            assert.strictEqual(unresolvedCommand.settled, false);
+            assert.strictEqual(unresolvedCommand.signal.aborted, true);
+            assert.strictEqual(elements.get("notice").textContent, "existing notice");
             return;
           }}
 
@@ -656,19 +678,49 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(desiredDirection, "stop");
             assert(directionButtons.every((button) => button.disabled));
             assert.strictEqual(requests.at(-1).path, "/api/resume-automatic");
+            const delayedManual = pending[
+              pending.findLastIndex((request) =>
+                request.path === "/api/manual-command"
+              )
+            ];
             pending.splice(
               pending.findIndex((request) =>
                 request.path === "/api/resume-automatic"
               ),
               1
             )[0].resolve({{
-              payload: {{ok: true, mode: "automatic"}}
+              payload: {{
+                ok: true,
+                mode: "automatic",
+                linear_x: 0.4,
+                angular_z: -0.2,
+                feedback_fresh: true
+              }}
             }});
             await resumePromise;
             await flush();
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(modeToggle.disabled, false);
             assert.strictEqual(modeToggle.textContent, "人工接管");
+            assert(directionButtons.every((button) => button.disabled));
+            assert.strictEqual(
+              elements.get("linearVelocity").textContent,
+              "0.40 m/s"
+            );
+            assert.strictEqual(
+              elements.get("angularVelocity").textContent,
+              "-0.20 rad/s"
+            );
+            assert.strictEqual(elements.get("feedbackState").hidden, true);
+
+            delayedManual.resolve({{payload: {{
+              ok: true,
+              sequence: delayedManual.body.sequence,
+              mode: "manual"
+            }}}});
+            await flush();
+            assert.strictEqual(currentMode, "automatic");
+            assert.strictEqual(modeSwitchInProgress(), false);
             assert(directionButtons.every((button) => button.disabled));
             return;
           }}
@@ -785,9 +837,9 @@ def _run_browser_scenario(scenario):
               }}
             }});
             await flush();
-            assert.strictEqual(currentMode, "automatic");
-            assert.strictEqual(modeToggle.disabled, false);
-            assert.strictEqual(modeToggle.textContent, "人工接管");
+            assert.strictEqual(currentMode, "manual");
+            assert.strictEqual(modeToggle.disabled, true);
+            assert.strictEqual(modeToggle.textContent, "切换中…");
             assert(directionButtons.every((button) => button.disabled));
             return;
           }}
