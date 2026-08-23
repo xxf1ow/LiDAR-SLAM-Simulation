@@ -227,7 +227,7 @@ def _handler_for(actions, html_path: Path):
                     nonlocal active_session_id, last_sequence, manual_mode
                     with manual_lock:
                         mode = actions.manual_command("stop", 0)
-                        session_id = secrets.token_urlsafe(16)
+                        session_id = secrets.token_urlsafe(24)
                         active_session_id = session_id
                         last_sequence = 0
                         manual_mode = mode

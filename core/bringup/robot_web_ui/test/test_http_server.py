@@ -272,6 +272,14 @@ def test_manual_session_sequence_and_concurrency_are_atomic(
     html_path = tmp_path / "index.html"
     html_path.write_text("ok")
     actions = FakeActions()
+    token_sizes = []
+
+    def token_urlsafe(nbytes):
+        assert nbytes == 24
+        token_sizes.append(nbytes)
+        return f"session-{len(token_sizes)}"
+
+    monkeypatch.setattr(http_server.secrets, "token_urlsafe", token_urlsafe)
 
     with running_server(actions, html_path) as base_url:
         session_a = start_manual_session(base_url)
@@ -299,6 +307,8 @@ def test_manual_session_sequence_and_concurrency_are_atomic(
         }
         assert len(actions.calls) == calls_after_first + 1
 
+        original_manual_command = actions.manual_command
+
         def fail_manual(_direction, _speed_percent):
             raise ActionUnavailable("publisher unavailable")
 
@@ -315,7 +325,7 @@ def test_manual_session_sequence_and_concurrency_are_atomic(
             "angular_z": -0.1,
             "feedback_fresh": True,
         }
-        monkeypatch.undo()
+        monkeypatch.setattr(actions, "manual_command", original_manual_command)
 
         retry, retry_body = send_manual(base_url, session_a, 3)
         assert retry_body["accepted"] is True
@@ -368,6 +378,7 @@ def test_manual_session_sequence_and_concurrency_are_atomic(
         ("manual_command", "forward", 20),
     ]
     assert session_b != session_a
+    assert token_sizes == [24, 24]
 
 
 def test_manual_action_failure_captures_mode_before_session_replacement(
