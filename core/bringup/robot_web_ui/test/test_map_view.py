@@ -92,6 +92,7 @@ def _run_map_scenario(scenario):
               lineTo: (...args) => { this.path.push(["line", ...args]); this.operations.push(["line", ...args]); },
               stroke: () => this.operations.push(["stroke", this.context.strokeStyle, this.context.globalAlpha, [...this.path], this.context.lineWidth]),
               fill: () => this.operations.push(["robot", this.context.fillStyle, this.context.globalAlpha]),
+              fillText: (...args) => this.operations.push(["text", ...args]),
               arc: (...args) => this.operations.push(["arc", ...args]),
               closePath: () => {
                 if (this.subpathStart) this.path.push(["line", ...this.subpathStart]);
@@ -197,7 +198,8 @@ def _run_map_scenario(scenario):
             initialPose: new FakeElement("setInitialPose"),
             navigationAction: new FakeElement("navigationAction"),
             placementConfirm: new FakeElement("confirmPlacement"),
-            placementCancel: new FakeElement("cancelPlacement")
+            placementCancel: new FakeElement("cancelPlacement"),
+            parkingActions: [new FakeElement("parkingOne"), new FakeElement("parkingTwo")]
           };
           const navigationRequests = [];
           const navigationResults = [];
@@ -416,6 +418,75 @@ def _run_map_scenario(scenario):
               false
             );
             assert.deepStrictEqual(navigationRequests, []);
+            return;
+          }
+          if (scenario === "parking-overlay") {
+            const points = [
+              {number: 1, name: "A", x: 1, y: 2, yaw: 0},
+              {number: 7, name: "G", x: -1, y: 1, yaw: Math.PI / 2}
+            ];
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "arc"), false);
+            view.setParkingPointsVisible(true);
+            view.setParkingPoints(points);
+            points[0].x = 99;
+            const arcs = canvas.operations.filter((operation) => operation[0] === "arc");
+            assert.deepStrictEqual(arcs.map((operation) => operation.slice(1)), [
+              [116, 18, 14, 0, Math.PI * 2],
+              [84, 34, 14, 0, Math.PI * 2]
+            ]);
+            const labels = canvas.operations
+              .filter((operation) => operation[0] === "text")
+              .map((operation) => operation[1]);
+            assert.deepStrictEqual(labels, ["1", "7"]);
+            const arrowStrokes = canvas.operations.filter(
+              (operation) => operation[0] === "stroke" && operation[4] === 3
+            );
+            assert.strictEqual(arrowStrokes.length, 2);
+            assert(canvas.operations.some((operation) =>
+              operation[0] === "line" && operation[1] === 136 && operation[2] === 18
+            ));
+            assert(canvas.operations.some((operation) =>
+              operation[0] === "line" && operation[1] === 84 && operation[2] === 14
+            ));
+            const beforePan = arcs.map((operation) => operation.slice(1, 3));
+            canvas.operations.length = 0;
+            await canvas.emit("pointerdown", {clientX: 0, clientY: 0});
+            await canvas.emit("pointermove", {clientX: 10, clientY: 5});
+            const afterPan = canvas.operations
+              .filter((operation) => operation[0] === "arc")
+              .map((operation) => operation.slice(1, 3));
+            assert.deepStrictEqual(afterPan, beforePan.map(([x, y]) => [x + 10, y + 5]));
+            const panScale = view.getTransform().scale;
+            view.zoomIn();
+            const afterZoomArcs = canvas.operations
+              .filter((operation) => operation[0] === "arc")
+              .map((operation) => operation.slice(1, 3));
+            assert.notDeepStrictEqual(afterZoomArcs, afterPan);
+            assert.strictEqual(
+              canvas.operations.filter((operation) => operation[0] === "line").every((line, index) =>
+                Math.abs(Math.hypot(
+                  line[1] - canvas.operations.filter((operation) => operation[0] === "move")[index][1],
+                  line[2] - canvas.operations.filter((operation) => operation[0] === "move")[index][2]
+                ) - 20) < 1e-12
+              ),
+              true
+            );
+            assert.strictEqual(view.getTransform().scale, panScale * 1.25);
+            canvas.operations.length = 0;
+            view.setParkingPointsVisible(false);
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "arc"), false);
+            assert.strictEqual(canvas.operations.some((operation) => operation[0] === "text"), false);
+            view.setParkingPointsVisible(true);
+            view.startPlacement("initial_pose");
+            navigationButtons.parkingActions.forEach((action) => {
+              assert.strictEqual(action.hidden, true);
+              assert.strictEqual(action.disabled, true);
+            });
+            view.cancelPlacement();
+            navigationButtons.parkingActions.forEach((action) => {
+              assert.strictEqual(action.hidden, false);
+              assert.strictEqual(action.disabled, false);
+            });
             return;
           }
           if (scenario === "placement-requests") {
@@ -1255,6 +1326,11 @@ def test_navigation_degradation_status_is_separate_and_scoped():
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
 def test_mobile_placement_preview_rendering_and_pointer_ownership():
     _run_map_scenario("placement-preview-and-pointer")
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_parking_overlay_projection_visibility_and_placement_interlock():
+    _run_map_scenario("parking-overlay")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")

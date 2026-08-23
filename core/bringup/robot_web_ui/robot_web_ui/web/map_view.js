@@ -17,7 +17,8 @@
     halo: "#111827",
     path: "#55ffff",
     robot: "#ffd400",
-    placement: "#ff8a00"
+    placement: "#ff8a00",
+    parking: "#7c3aed"
   };
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 128;
@@ -81,6 +82,8 @@
     let timer = null;
     let dragging = null;
     let placement = null;
+    let parkingPoints = [];
+    let parkingPointsVisible = false;
     let navigationRequestMessage = "";
     let cancelRequestPending = false;
     const transform = {scale: 16, x: 100, y: 50};
@@ -275,6 +278,34 @@
       context.restore();
     }
 
+    function drawParkingPoints() {
+      if (!parkingPointsVisible) return;
+      context.save();
+      context.fillStyle = PALETTE.parking;
+      context.strokeStyle = PALETTE.halo;
+      context.lineWidth = 3;
+      context.textAlign = "center";
+      context.textBaseline = "middle";
+      parkingPoints.forEach((point) => {
+        const screenX = transform.x + point.x * transform.scale;
+        const screenY = transform.y - point.y * transform.scale;
+        context.beginPath();
+        context.arc(screenX, screenY, 14, 0, Math.PI * 2);
+        context.fill();
+        context.fillStyle = PALETTE.halo;
+        context.fillText(String(point.number), screenX, screenY);
+        context.fillStyle = PALETTE.parking;
+        context.beginPath();
+        context.moveTo(screenX, screenY);
+        context.lineTo(
+          screenX + Math.cos(point.yaw) * 20,
+          screenY - Math.sin(point.yaw) * 20
+        );
+        context.stroke();
+      });
+      context.restore();
+    }
+
     function render() {
       const rect = resize();
       context.clearRect(0, 0, rect.width, rect.height);
@@ -288,6 +319,7 @@
       drawPath(layers.path);
       drawRobot();
       context.restore();
+      drawParkingPoints();
       drawPlacement();
     }
 
@@ -384,8 +416,15 @@
     }
 
     function updateNavigationButtons() {
-      const navigation = latestState.navigation || {};
       const placing = placement !== null;
+      if (Array.isArray(navigationButtons.parkingActions)) {
+        navigationButtons.parkingActions.forEach((action) => {
+          if (!action) return;
+          action.hidden = placing;
+          action.disabled = placing;
+        });
+      }
+      const navigation = latestState.navigation || {};
       const requestPending = Boolean(
         navigationButtons.placementConfirm
         && navigationButtons.placementConfirm.dataset
@@ -574,6 +613,24 @@
       const message = error && error.message ? error.message : String(error);
       navigationRequestMessage = `请求失败：${message}`;
       updateNavigationStatus();
+    }
+
+    function setParkingPoints(points) {
+      parkingPoints = Array.isArray(points)
+        ? points.map((point) => ({
+          number: point.number,
+          name: point.name,
+          x: point.x,
+          y: point.y,
+          yaw: point.yaw
+        }))
+        : [];
+      render();
+    }
+
+    function setParkingPointsVisible(visible) {
+      parkingPointsVisible = visible === true;
+      render();
     }
 
     function startPlacement(mode) {
@@ -766,6 +823,9 @@
       startPlacement,
       cancelPlacement,
       getPlacementPreview,
+      setParkingPoints,
+      setParkingPointsVisible,
+      showNavigationRequestFailure,
       getTransform: () => ({...transform}),
       stop: () => { if (timer !== null) clearTimeout(timer); }
     };
