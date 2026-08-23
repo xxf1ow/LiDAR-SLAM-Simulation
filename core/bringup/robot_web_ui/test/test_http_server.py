@@ -18,6 +18,13 @@ from robot_web_ui.http_server import ActionUnavailable, create_server
 from robot_web_ui.manual_command import command_values
 from robot_web_ui.map_snapshot import BinarySnapshot
 from robot_web_ui.navigation_request import MapRevisionConflict
+from robot_web_ui.parking_point_store import (
+    ParkingPointCorruptError,
+    ParkingPointDuplicateError,
+    ParkingPointNotFoundError,
+    ParkingPointStorageError,
+    ParkingPointValidationError,
+)
 
 
 SYNTHETIC_MAX_LINEAR_SPEED = 1.7
@@ -79,6 +86,8 @@ class FakeActions:
                 b"gzip-path-points",
             ),
         }
+        self.parking_points = []
+        self.parking_error = None
 
     def motion_status(self):
         self.motion_status_calls += 1
@@ -173,6 +182,44 @@ class FakeActions:
             if not self.allow_navigation_action.wait(timeout=1.0):
                 raise AssertionError("test did not release blocked navigation")
         return "canceling"
+
+    def list_parking_points(self):
+        self.calls.append(("list_parking_points",))
+        if self.parking_error is not None:
+            raise self.parking_error
+        return {"points": list(self.parking_points)}
+
+    def save_parking_point(self, name):
+        self.calls.append(("save_parking_point", name))
+        if self.parking_error is not None:
+            raise self.parking_error
+        if any(point["name"] == name.strip() for point in self.parking_points):
+            raise ParkingPointDuplicateError("Dock 1")
+        point = {
+            "number": len(self.parking_points) + 1,
+            "name": name.strip(),
+            "x": 1.0,
+            "y": 2.0,
+            "yaw": 0.5,
+        }
+        self.parking_points.append(point)
+        return {"point": point}
+
+    def navigate_parking_point(self, name):
+        self.calls.append(("navigate_parking_point", name))
+        if self.parking_error is not None:
+            raise self.parking_error
+        if name.strip() == "missing":
+            raise ParkingPointNotFoundError("missing")
+        return {"name": name.strip(), "status": "accepted"}
+
+    def delete_parking_point(self, name):
+        self.calls.append(("delete_parking_point", name))
+        if self.parking_error is not None:
+            raise self.parking_error
+        if name.strip() == "missing":
+            raise ParkingPointNotFoundError("missing")
+        return {"deleted": name.strip()}
 
 
 def test_odometry_freshness_uses_only_the_ros_node_clock():
@@ -438,6 +485,169 @@ def navigation_pose_payload():
         "yaw": 0.5,
         "map_revision": 3,
     }
+
+
+def test_parking_point_routes_have_exact_json_contract_and_dispatch_once(
+    tmp_path,
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        listed = request(base_url, "/api/parking-points")
+        saved = post_json(
+            base_url, "/api/parking-points/save", {"name": " Dock 1 "}
+        )
+        navigated = post_json(
+            base_url,
+            "/api/parking-points/navigate",
+            {"name": "Dock 1"},
+        )
+        deleted = post_json(
+            base_url,
+            "/api/parking-points/delete",
+            {"name": "Dock 1"},
+        )
+
+    assert listed.status == 200
+    assert listed.headers.get_content_type() == "application/json"
+    assert listed.read() == b'{"points":[]}'
+    assert saved.status == 201
+    assert saved.headers.get_content_type() == "application/json"
+    assert saved.read() == (
+        b'{"point":{"number":1,"name":"Dock 1","x":1.0,'
+        b'"y":2.0,"yaw":0.5}}'
+    )
+    assert navigated.status == 202
+    assert navigated.headers.get_content_type() == "application/json"
+    assert navigated.read() == b'{"name":"Dock 1","status":"accepted"}'
+    assert deleted.status == 200
+    assert deleted.headers.get_content_type() == "application/json"
+    assert deleted.read() == b'{"deleted":"Dock 1"}'
+    assert actions.calls == [
+        ("list_parking_points",),
+        ("save_parking_point", " Dock 1 "),
+        ("navigate_parking_point", "Dock 1"),
+        ("delete_parking_point", "Dock 1"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("path", "payload", "error", "status"),
+    [
+        ("/api/parking-points/save", {}, None, 400),
+        ("/api/parking-points/save", {"name": 1}, None, 400),
+        (
+            "/api/parking-points/navigate",
+            {"name": "missing"},
+            ParkingPointNotFoundError("missing"),
+            404,
+        ),
+        (
+            "/api/parking-points/delete",
+            {"name": "missing"},
+            ParkingPointNotFoundError("missing"),
+            404,
+        ),
+        (
+            "/api/parking-points/save",
+            {"name": "Dock 1"},
+            ParkingPointDuplicateError("Dock 1"),
+            409,
+        ),
+        (
+            "/api/parking-points/navigate",
+            {"name": "Dock 2"},
+            http_server.ActionConflict("navigation goal is active", "automatic"),
+            409,
+        ),
+        (
+            "/api/parking-points/save",
+            {"name": "Dock 2"},
+            http_server.ActionConflict("automatic control is not active", "manual"),
+            409,
+        ),
+        (
+            "/api/parking-points/save",
+            {"name": "Dock 2"},
+            ParkingPointStorageError("unwritable sidecar"),
+            503,
+        ),
+        (
+            "/api/parking-points/save",
+            {"name": "Dock 3"},
+            ActionUnavailable("robot is not localized"),
+            503,
+        ),
+        (
+            "/api/parking-points/navigate",
+            {"name": "Dock 3"},
+            ActionUnavailable("navigation action server unavailable"),
+            503,
+        ),
+        (
+            "/api/parking-points/navigate",
+            {"name": "Dock 4"},
+            ActionUnavailable("static map unavailable"),
+            503,
+        ),
+        (
+            "/api/parking-points/navigate",
+            {"name": "Dock 4"},
+            ActionUnavailable("map revision unavailable"),
+            503,
+        ),
+        (
+            "/api/parking-points/delete",
+            {"name": "Dock 4"},
+            ActionUnavailable("web node service unavailable"),
+            503,
+        ),
+    ],
+)
+def test_parking_point_route_status_matrix(tmp_path, path, payload, error, status):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+    if error is not None:
+        actions.parking_error = error
+
+    with running_server(actions, html_path) as base_url:
+        response = post_json(base_url, path, payload)
+
+    assert response.status == status
+    body = response_json(response)
+    assert set(body) == {"error"}
+
+
+def test_corrupt_parking_sidecar_returns_503_and_server_remains_usable(
+    tmp_path,
+):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    sidecar = tmp_path / "warehouse.parking_points.json"
+    original_bytes = b"corrupt parking points"
+    sidecar.write_bytes(original_bytes)
+    actions = FakeActions()
+    actions.parking_error = ParkingPointCorruptError(
+        f"invalid parking-point sidecar {sidecar}"
+    )
+
+    with running_server(actions, html_path) as base_url:
+        failed = post_json(
+            base_url,
+            "/api/parking-points/save",
+            {"name": "Dock"},
+        )
+        healthy = request(base_url, "/api/navigation-state")
+
+    assert failed.status == 503
+    assert response_json(failed) == {
+        "error": f"invalid parking-point sidecar {sidecar}"
+    }
+    assert sidecar.read_bytes() == original_bytes
+    assert healthy.status == 200
 
 
 def test_root_returns_exact_asset_without_caching(tmp_path):

@@ -4,6 +4,8 @@ import math
 import sys
 import threading
 import types
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 import pytest
@@ -17,6 +19,13 @@ from robot_web_ui.map_snapshot import (
     update_path_snapshot,
 )
 from robot_web_ui.navigation_request import MapRevisionConflict
+from robot_web_ui.parking_point_store import (
+    ParkingPoint,
+    ParkingPointDuplicateError,
+    ParkingPointNotFoundError,
+    ParkingPointStorageError,
+    ParkingPointStore,
+)
 
 
 SYNTHETIC_MAX_LINEAR_SPEED = 1.7
@@ -469,6 +478,280 @@ def response(success=True, message=""):
 
 def bare_node(module):
     return object.__new__(module.WebUiNode)
+
+
+def test_parking_point_domain_binds_store_once_and_exposes_operations(
+    node_module, monkeypatch
+):
+    store_calls = []
+    navigation_calls = []
+
+    class FakeParkingStore:
+        def __init__(self, map_path):
+            store_calls.append(Path(map_path))
+            self.points = []
+
+        def list(self):
+            return tuple(self.points)
+
+        def save(self, point):
+            if any(existing.name == point.name for existing in self.points):
+                raise ParkingPointDuplicateError(point.name)
+            self.points.append(point)
+
+        def get(self, name):
+            normalized = name.strip()
+            for point in self.points:
+                if point.name == normalized:
+                    return point
+            raise ParkingPointNotFoundError(normalized)
+
+        def delete(self, name):
+            normalized = name.strip()
+            before = len(self.points)
+            self.points[:] = [
+                point for point in self.points if point.name != normalized
+            ]
+            if len(self.points) == before:
+                raise ParkingPointNotFoundError(normalized)
+
+    monkeypatch.setattr(
+        node_module, "ParkingPointStore", FakeParkingStore, raising=False
+    )
+    node = node_module.WebUiNode()
+    try:
+        assert store_calls == [Path("map.yaml")]
+        node._static_map = _static_snapshot()
+        node._gate_mode = "automatic"
+        node._localization_pose = (0.5, 1.25, -0.75)
+        node.send_navigation_goal = lambda payload: navigation_calls.append(
+            payload
+        )
+
+        assert node.save_parking_point("  Dock 1  ") == {
+            "point": {
+                "number": 1,
+                "name": "Dock 1",
+                "x": 0.5,
+                "y": 1.25,
+                "yaw": -0.75,
+            }
+        }
+        assert node.save_parking_point("Dock 2") == {
+            "point": {
+                "number": 2,
+                "name": "Dock 2",
+                "x": 0.5,
+                "y": 1.25,
+                "yaw": -0.75,
+            }
+        }
+        assert node.list_parking_points() == {
+            "points": [
+                {
+                    "number": 1,
+                    "name": "Dock 1",
+                    "x": 0.5,
+                    "y": 1.25,
+                    "yaw": -0.75,
+                },
+                {
+                    "number": 2,
+                    "name": "Dock 2",
+                    "x": 0.5,
+                    "y": 1.25,
+                    "yaw": -0.75,
+                },
+            ]
+        }
+        assert node.navigate_parking_point(" Dock 2 ") == {
+            "name": "Dock 2",
+            "status": "accepted",
+        }
+        assert navigation_calls == [
+            {
+                "x": 0.5,
+                "y": 1.25,
+                "yaw": -0.75,
+                "map_revision": 3,
+            }
+        ]
+        assert node.delete_parking_point(" Dock 1 ") == {
+            "deleted": "Dock 1"
+        }
+        assert node.list_parking_points() == {
+            "points": [
+                {
+                    "number": 1,
+                    "name": "Dock 2",
+                    "x": 0.5,
+                    "y": 1.25,
+                    "yaw": -0.75,
+                }
+            ]
+        }
+    finally:
+        node.destroy_node()
+
+
+def test_parking_point_save_requires_automatic_and_localization(
+    node_module
+):
+    node = bare_node(node_module)
+    node._parking_point_store = types.SimpleNamespace()
+    node._parking_points_error = None
+    node._gate_mode = "manual"
+    node._localization_pose = (1.0, 2.0, 3.0)
+
+    with pytest.raises(node_module.ActionConflict):
+        node.save_parking_point("Dock")
+
+    node._gate_mode = "automatic"
+    node._localization_pose = None
+    with pytest.raises(node_module.ActionUnavailable):
+        node.save_parking_point("Dock")
+
+
+def test_parking_point_storage_load_failure_is_preserved(node_module):
+    node = bare_node(node_module)
+    node._parking_point_store = None
+    node._parking_points_error = ParkingPointStorageError("corrupt sidecar")
+
+    with pytest.raises(ParkingPointStorageError, match="corrupt sidecar"):
+        node.list_parking_points()
+
+
+def test_parking_point_navigation_requires_localization_before_delegation(
+    node_module, tmp_path
+):
+    node = ready_navigation_node(node_module)
+    node._parking_point_store = ParkingPointStore(tmp_path / "map.yaml")
+    node._parking_points_error = None
+    node._parking_point_store.save(
+        ParkingPoint("Dock", -0.95, 2.02, 0.4)
+    )
+    node._localization_pose = None
+    delegated = []
+    node.send_navigation_goal = lambda payload: delegated.append(payload)
+
+    with pytest.raises(node_module.ActionUnavailable, match="localized"):
+        node.navigate_parking_point(" Dock ")
+
+    assert delegated == []
+
+
+def test_parking_point_navigation_delegates_to_real_goal_path(
+    node_module, tmp_path
+):
+    node = ready_navigation_node(node_module)
+    node._parking_point_store = ParkingPointStore(tmp_path / "map.yaml")
+    node._parking_points_error = None
+    node._parking_point_store.save(
+        ParkingPoint("Dock", -0.95, 2.02, 0.4)
+    )
+
+    assert node.navigate_parking_point(" Dock ") == {
+        "name": "Dock",
+        "status": "accepted",
+    }
+    assert len(node._navigation_client.goals) == 1
+    goal = node._navigation_client.goals[0]
+    assert goal.pose.pose.position.x == -0.95
+    assert goal.pose.pose.position.y == 2.02
+    assert node._goal_status == "sending"
+
+    with pytest.raises(node_module.ActionConflict, match="active"):
+        node.navigate_parking_point("Dock")
+    assert len(node._navigation_client.goals) == 1
+
+
+def test_corrupt_real_sidecar_keeps_node_and_nonparking_http_alive(
+    node_module, monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "map.yaml").write_text("map: fake\n", encoding="utf-8")
+    (tmp_path / "web").mkdir()
+    (tmp_path / "web" / "index.html").write_text("ok", encoding="utf-8")
+    sidecar = tmp_path / "map.parking_points.json"
+    original_bytes = b"not valid parking points"
+    sidecar.write_bytes(original_bytes)
+    monkeypatch.setattr(node_module, "load_nav2_pgm", lambda _path: _static_snapshot())
+    from robot_web_ui.http_server import create_server as real_create_server
+
+    monkeypatch.setattr(node_module, "create_server", real_create_server)
+    node = node_module.WebUiNode()
+    try:
+        assert node._parking_point_store is None
+        assert isinstance(node._parking_points_error, ParkingPointStorageError)
+
+        base_url = f"http://127.0.0.1:{node._http_server.server_port}"
+        request = urllib.request.Request(
+            base_url + "/api/parking-points/save",
+            data=json.dumps({"name": "Dock"}).encode("utf-8"),
+        )
+        request.add_header("Content-Type", "application/json")
+        try:
+            parking_response = urllib.request.urlopen(request)
+        except urllib.error.HTTPError as exc:
+            parking_response = exc
+        assert parking_response.status == 503
+        parking_body = json.loads(parking_response.read())
+        assert set(parking_body) == {"error"}
+        assert "map.parking_points.json" in parking_body["error"]
+        assert sidecar.read_bytes() == original_bytes
+
+        healthy = urllib.request.urlopen(base_url + "/api/navigation-state")
+        assert healthy.status == 200
+        assert json.loads(healthy.read())["map_error"] is None
+    finally:
+        node.destroy_node()
+
+
+def test_startup_binds_and_uses_real_parking_sidecar(
+    node_module, monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    sidecar = tmp_path / "map.parking_points.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "points": [
+                    {"name": "Existing", "x": -0.95, "y": 2.02, "yaw": 0.4}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(node_module, "load_nav2_pgm", lambda _path: _static_snapshot())
+    node = node_module.WebUiNode()
+    try:
+        assert isinstance(node._parking_point_store, ParkingPointStore)
+        assert node.list_parking_points() == {
+            "points": [
+                {
+                    "number": 1,
+                    "name": "Existing",
+                    "x": -0.95,
+                    "y": 2.02,
+                    "yaw": 0.4,
+                }
+            ]
+        }
+        node._gate_mode = "automatic"
+        node._localization_pose = (-0.94, 2.01, 0.3)
+        assert node.save_parking_point(" New ") == {
+            "point": {
+                "number": 2,
+                "name": "New",
+                "x": -0.94,
+                "y": 2.01,
+                "yaw": 0.3,
+            }
+        }
+        assert "\"name\": \"New\"" in sidecar.read_text(encoding="utf-8")
+    finally:
+        node.destroy_node()
 
 
 def _static_snapshot():

@@ -9,6 +9,12 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from .navigation_request import MapRevisionConflict
+from .parking_point_store import (
+    ParkingPointDuplicateError,
+    ParkingPointNotFoundError,
+    ParkingPointStorageError,
+    ParkingPointValidationError,
+)
 
 
 REQUEST_TIMEOUT = 0.5
@@ -18,6 +24,11 @@ ASSET_PATHS = {
     "/api/map/global-costmap": "global_costmap",
     "/api/map/local-costmap": "local_costmap",
     "/api/navigation-path": "path",
+}
+PARKING_POINT_PATHS = {
+    "/api/parking-points/save",
+    "/api/parking-points/navigate",
+    "/api/parking-points/delete",
 }
 
 
@@ -66,6 +77,14 @@ def _manual_command_payload(payload):
     ):
         raise ValueError("sequence must be a positive safe integer")
     return session_id, sequence, direction, speed_percent
+
+
+def _parking_point_payload(payload) -> str:
+    if type(payload) is not dict or set(payload) != {"name"}:
+        raise ValueError("parking point request must contain exactly name")
+    if type(payload["name"]) is not str:
+        raise ValueError("parking point name must be a string")
+    return payload["name"]
 
 
 def _handler_for(actions, html_path: Path):
@@ -198,6 +217,14 @@ def _handler_for(actions, html_path: Path):
             if path == "/api/navigation-state":
                 self._send_json(200, actions.navigation_state())
                 return
+            if path == "/api/parking-points":
+                try:
+                    payload = actions.list_parking_points()
+                except ParkingPointStorageError as exc:
+                    self._send_json(503, {"error": str(exc)})
+                    return
+                self._send_json(200, payload)
+                return
             asset_name = ASSET_PATHS.get(path)
             if asset_name is not None:
                 self._send_asset(actions.navigation_asset(asset_name))
@@ -214,13 +241,32 @@ def _handler_for(actions, html_path: Path):
                 "/api/initial-pose",
                 "/api/navigation-goal",
                 "/api/navigation-cancel",
-            }:
+            } | PARKING_POINT_PATHS:
                 self._send_json(404, {"error": "not found"})
                 return
 
             manual_command_context = None
+            parking_path = path in PARKING_POINT_PATHS
             try:
                 payload = self._read_json()
+                if parking_path:
+                    name = _parking_point_payload(payload)
+                    if path == "/api/parking-points/save":
+                        self._send_json(
+                            201,
+                            actions.save_parking_point(name),
+                        )
+                    elif path == "/api/parking-points/navigate":
+                        self._send_json(
+                            202,
+                            actions.navigate_parking_point(name),
+                        )
+                    else:
+                        self._send_json(
+                            200,
+                            actions.delete_parking_point(name),
+                        )
+                    return
                 if path == "/api/manual-session":
                     if payload != {}:
                         raise ValueError("manual session request must be {}")
@@ -325,6 +371,18 @@ def _handler_for(actions, html_path: Path):
             except MapRevisionConflict as exc:
                 self._send_json(409, {"error": str(exc)})
                 return
+            except ParkingPointDuplicateError as exc:
+                self._send_json(409, {"error": str(exc)})
+                return
+            except ParkingPointNotFoundError as exc:
+                self._send_json(404, {"error": str(exc)})
+                return
+            except ParkingPointValidationError as exc:
+                self._send_json(400, {"error": str(exc)})
+                return
+            except ParkingPointStorageError as exc:
+                self._send_json(503, {"error": str(exc)})
+                return
             except ValueError as exc:
                 if manual_command_context is None:
                     self._send_json(400, {"error": str(exc)})
@@ -344,7 +402,9 @@ def _handler_for(actions, html_path: Path):
                     )
                 return
             except ActionConflict as exc:
-                if manual_command_context is None:
+                if parking_path:
+                    self._send_json(409, {"error": str(exc)})
+                elif manual_command_context is None:
                     self._send_action_json(
                         409,
                         {"error": str(exc), "mode": exc.mode},
@@ -393,7 +453,9 @@ def _handler_for(actions, html_path: Path):
                     )
                 return
             except ActionUnavailable as exc:
-                if manual_command_context is None:
+                if parking_path:
+                    self._send_json(503, {"error": str(exc)})
+                elif manual_command_context is None:
                     self._send_json(503, {"error": str(exc)})
                 else:
                     sequence, previous_sequence, mode_snapshot = (
