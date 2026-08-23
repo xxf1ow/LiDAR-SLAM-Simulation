@@ -147,6 +147,18 @@ def _run_browser_scenario(scenario):
           getContext() {{ return this.context; }}
         }}
 
+        class FakeAbortController {{
+          constructor() {{
+            this.abortCount = 0;
+            this.signal = {{aborted: false}};
+          }}
+          abort() {{
+            this.abortCount += 1;
+            this.signal.aborted = true;
+          }}
+        }}
+        global.AbortController = FakeAbortController;
+
         const elements = new Map(
           ["speed", "speedValue", "notice", "modeToggle", "modeStatus",
            "motionStatus", "statusStrip", "controlDock", "mapActions",
@@ -208,27 +220,35 @@ def _run_browser_scenario(scenario):
         const requests = [];
         const eventLog = [];
         const pending = [];
-        let maxPending = 0;
         global.fetch = (path, options) => {{
           const request = {{
             path,
             body: JSON.parse(options.body),
-            resolve: null
+            signal: options.signal,
+            resolve: null,
+            reject: null,
+            settled: false
           }};
           requests.push(request);
           eventLog.push(["request", path]);
-          return new Promise((resolve) => {{
+          return new Promise((resolve, reject) => {{
             request.resolve = ({{
               ok = true,
               status = 200,
               payload = {{ok: true, mode: "manual"}}
-            }} = {{}}) => resolve({{
-              ok,
-              status,
-              async json() {{ return payload; }}
-            }});
+            }} = {{}}) => {{
+              request.settled = true;
+              resolve({{
+                ok,
+                status,
+                async json() {{ return payload; }}
+              }});
+            }};
+            request.reject = (error) => {{
+              request.settled = true;
+              reject(error);
+            }};
             pending.push(request);
-            maxPending = Math.max(maxPending, pending.length);
           }});
         }};
 
@@ -244,14 +264,11 @@ def _run_browser_scenario(scenario):
         }}
 
         async function tick(expectedMilliseconds = 100) {{
-          let timer = null;
-          while (timers.length > 0) {{
-            const candidate = timers.shift();
-            if (!candidate.canceled) {{
-              timer = candidate;
-              break;
-            }}
-          }}
+          const timerIndex = timers.findIndex(
+            (candidate) => !candidate.canceled
+              && candidate.milliseconds === expectedMilliseconds
+          );
+          const timer = timerIndex === -1 ? null : timers.splice(timerIndex, 1)[0];
           if (timer === null) {{
             fakeNow += expectedMilliseconds;
             await flush();
@@ -273,10 +290,8 @@ def _run_browser_scenario(scenario):
           const scenario = {json.dumps(scenario)};
           await flush();
           assert.strictEqual(requests.length, 1);
-          assert.deepStrictEqual(requests[0].body, {{
-            direction: "stop",
-            speed_percent: 20
-          }});
+          assert.strictEqual(requests[0].path, "/api/manual-session");
+          assert.deepStrictEqual(requests[0].body, {{}});
 
           if (scenario === "contextual-layout") {{
             const modeStatus = elements.get("modeStatus");
@@ -362,6 +377,7 @@ def _run_browser_scenario(scenario):
             await resolveNext({{
               payload: {{
                 ok: true,
+                session_id: "session-a",
                 mode: "manual",
                 linear_x: 0.25,
                 angular_z: -0.1,
@@ -444,37 +460,103 @@ def _run_browser_scenario(scenario):
           }}
 
           await resolveNext({{
-            payload: {{ok: true, mode: "manual"}}
+            payload: {{
+              ok: true,
+              session_id: "session-a",
+              mode: "manual"
+            }}
           }});
           assert.strictEqual(currentMode, "manual");
           assert(directionButtons.every((button) => !button.disabled));
 
-          if (scenario === "single-flight-and-stop") {{
-            commandLoop();
-            await flush();
-            assert.strictEqual(requests.length, 1);
+          if (scenario === "sequenced-command-stream") {{
+            assert.deepStrictEqual(requests[1].body, {{
+              session_id: "session-a",
+              sequence: 1,
+              direction: "stop",
+              speed_percent: 20
+            }});
             assert.strictEqual(
               timers.filter((timer) => !timer.canceled).length,
-              1
+              2
             );
-            assert.strictEqual(timers[0].milliseconds, 100);
+
             await directionButtons[0].emit("pointerdown");
             assert.strictEqual(desiredDirection, "forward");
+            elements.get("speed").value = "35";
+            await elements.get("speed").emit("input");
             await flush();
-            assert.strictEqual(requests.length, 2);
-            assert.strictEqual(requests[1].body.direction, "forward");
-            await directionButtons[0].emit("pointerup");
-            assert.strictEqual(desiredDirection, "stop");
-            await flush();
-            assert.strictEqual(requests.length, 2);
-            await resolveNext();
-            assert.strictEqual(requests.length, 3);
-            assert.strictEqual(requests[2].body.direction, "stop");
-            advance(150);
-            await resolveNext();
             assert.strictEqual(requests.length, 4);
-            assert.strictEqual(requests[3].body.direction, "stop");
-            assert.strictEqual(maxPending, 1);
+            assert.deepStrictEqual(requests[2].body, {{
+              session_id: "session-a",
+              sequence: 2,
+              direction: "forward",
+              speed_percent: 20
+            }});
+            assert.deepStrictEqual(requests[3].body, {{
+              session_id: "session-a",
+              sequence: 3,
+              direction: "forward",
+              speed_percent: 35
+            }});
+
+            requests[3].resolve({{payload: {{
+              ok: true, accepted: true, sequence: 3,
+              last_sequence: 3, mode: "manual"
+            }}}});
+            await flush();
+            requests[2].resolve({{payload: {{
+              ok: true, accepted: true, sequence: 2,
+              last_sequence: 2, mode: "manual"
+            }}}});
+            await flush();
+            assert.strictEqual(highestHandledSequence, 3);
+
+            await tick();
+            assert.strictEqual(requests.at(-1).body.sequence, 4);
+            requests.at(-1).resolve({{payload: {{
+              ok: true, accepted: false, reason: "stale_sequence",
+              sequence: 4, last_sequence: 4, mode: "manual"
+            }}}});
+            await flush();
+            assert.strictEqual(highestHandledSequence, 4);
+
+            await tick(400);
+            const timedOut = requests.find((request) => request.body.sequence === 1);
+            assert(timedOut);
+            timedOut.reject(new DOMException("timed out", "AbortError"));
+            await flush();
+            assert.strictEqual(timedOut.signal.aborted, true);
+
+            await tick();
+            assert.strictEqual(requests.at(-1).body.sequence, 5);
+            requests.at(-1).resolve({{payload: {{
+              ok: true, accepted: true, sequence: 5,
+              last_sequence: 5, mode: "manual"
+            }}}});
+            await flush();
+            await tick();
+            const inactive = requests.at(-1);
+            assert.strictEqual(inactive.body.sequence, 6);
+            inactive.resolve({{
+              ok: false,
+              status: 409,
+              payload: {{
+                error: "inactive manual session",
+                accepted: false,
+                reason: "inactive_session",
+                sequence: 6
+              }}
+            }});
+            await flush();
+            assert.strictEqual(commandLoopRunning, false);
+            assert.strictEqual(manualSessionId, null);
+            assert.strictEqual(
+              timers.filter((timer) => !timer.canceled).length,
+              0
+            );
+            assert(requests.slice(1).filter((request) => !request.settled)
+              .every((request) => request.signal.aborted));
             return;
           }}
 
@@ -595,8 +677,11 @@ def _run_browser_scenario(scenario):
             await directionButtons[0].emit("pointerdown");
             assert.strictEqual(desiredDirection, "forward");
             await tick();
-            assert.strictEqual(requests[1].body.direction, "forward");
-            pending.shift().resolve({{
+            assert.strictEqual(requests.at(-1).body.direction, "forward");
+            const conflictIndex = pending.findIndex(
+              (request) => request.body.sequence === requests.at(-1).body.sequence
+            );
+            pending.splice(conflictIndex, 1)[0].resolve({{
               ok: false,
               status: 409,
               payload: {{
@@ -675,11 +760,13 @@ def _run_browser_scenario(scenario):
 
             await tick();
             assert.strictEqual(requests.at(-1).body.direction, "stop");
-            const zeroIndex = pending.findIndex((request) =>
-              request.path === "/api/manual-command"
-            );
-            pending.splice(zeroIndex, 1)[0].resolve({{
-              payload: {{ok: true, mode: "manual"}}
+            const zeroRequest = pending.at(-1);
+            zeroRequest.resolve({{
+              payload: {{
+                ok: true,
+                sequence: zeroRequest.body.sequence,
+                mode: "manual"
+              }}
             }});
             await flush();
             assert.strictEqual(currentMode, "manual");
@@ -689,11 +776,13 @@ def _run_browser_scenario(scenario):
 
             await tick();
             assert.strictEqual(requests.at(-1).body.direction, "stop");
-            const convergenceIndex = pending.findIndex((request) =>
-              request.path === "/api/manual-command"
-            );
-            pending.splice(convergenceIndex, 1)[0].resolve({{
-              payload: {{ok: true, mode: "automatic"}}
+            const convergenceRequest = pending.at(-1);
+            convergenceRequest.resolve({{
+              payload: {{
+                ok: true,
+                sequence: convergenceRequest.body.sequence,
+                mode: "automatic"
+              }}
             }});
             await flush();
             assert.strictEqual(currentMode, "automatic");
@@ -763,7 +852,7 @@ def _run_browser_scenario(scenario):
             );
 
             await tick();
-            const firstManualIndex = pending.findIndex((request) =>
+            const firstManualIndex = pending.findLastIndex((request) =>
               request.path === "/api/manual-command"
             );
             pending.splice(firstManualIndex, 1)[0].resolve({{
@@ -778,7 +867,7 @@ def _run_browser_scenario(scenario):
             );
 
             await tick();
-            const nextManualIndex = pending.findIndex((request) =>
+            const nextManualIndex = pending.findLastIndex((request) =>
               request.path === "/api/manual-command"
             );
             pending.splice(nextManualIndex, 1)[0].resolve({{
@@ -809,7 +898,7 @@ def _run_browser_scenario(scenario):
             assert(directionButtons.every((button) => button.disabled));
 
             await tick();
-            const finalManualIndex = pending.findIndex((request) =>
+            const finalManualIndex = pending.findLastIndex((request) =>
               request.path === "/api/manual-command"
             );
             pending.splice(finalManualIndex, 1)[0].resolve({{
@@ -887,7 +976,7 @@ def _run_browser_scenario(scenario):
         "contextual-layout",
         "initial-and-authoritative-interlock",
         "motion-feedback",
-        "single-flight-and-stop",
+        "sequenced-command-stream",
         "all-stop-paths",
         "stale-button-events",
         "authoritative-mode-button",

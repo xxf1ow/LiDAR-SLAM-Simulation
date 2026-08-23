@@ -194,9 +194,14 @@
   let mapView = null;
   let desiredDirection = "stop";
   let commandLoopRunning = false;
+  let manualSessionId = null;
+  let nextSequence = 1;
+  let highestHandledSequence = 0;
+  let modeGeneration = 0;
+  let commandTimer = null;
+  const activeControllers = new Set();
   const COMMAND_PERIOD_MS = 100;
-  let commandGeneration = 0;
-  let commandWake = null;
+  const COMMAND_TIMEOUT_MS = 400;
   let noticeOwner = null;
   const heldMovementKeys = [];
   const motionButtons = document.querySelectorAll("[data-direction]");
@@ -211,37 +216,13 @@
   });
 
   function signalCommandChange() {
-    commandGeneration += 1;
-    if (commandWake) commandWake();
+    dispatchManualCommand();
   }
 
-  function setDesiredDirection(direction) {
-    if (desiredDirection === direction) return;
+  function setDesiredDirection(direction, force = false) {
+    if (!force && desiredDirection === direction) return;
     desiredDirection = direction;
     signalCommandChange();
-  }
-
-  function waitForNextCommand(startedAt, generation) {
-    const remaining = Math.max(
-      0,
-      COMMAND_PERIOD_MS - (performance.now() - startedAt)
-    );
-    if (remaining === 0 || commandGeneration !== generation) {
-      return Promise.resolve();
-    }
-    return new Promise((resolve) => {
-      let timerId = null;
-      let finished = false;
-      const finish = () => {
-        if (finished) return;
-        finished = true;
-        if (timerId !== null) clearTimeout(timerId);
-        if (commandWake === finish) commandWake = null;
-        queueMicrotask(() => queueMicrotask(resolve));
-      };
-      commandWake = finish;
-      timerId = setTimeout(finish, remaining);
-    });
   }
 
   function applyMotionFeedback(payload) {
@@ -262,20 +243,15 @@
     feedbackState.hidden = false;
   }
 
-  async function post(path, body) {
-    const response = await fetch(path, {
+  async function post(path, body, signal) {
+    const options = {
       method: "POST",
       headers: {"Content-Type": "application/json"},
       body: JSON.stringify(body)
-    });
+    };
+    if (signal !== undefined) options.signal = signal;
+    const response = await fetch(path, options);
     const payload = await response.json();
-    if (
-      Object.prototype.hasOwnProperty.call(payload, "linear_x")
-      && Object.prototype.hasOwnProperty.call(payload, "angular_z")
-      && Object.prototype.hasOwnProperty.call(payload, "feedback_fresh")
-    ) {
-      applyMotionFeedback(payload);
-    }
     if (!response.ok) {
       const error = new Error(
         payload.error || `HTTP ${response.status}`
@@ -284,6 +260,16 @@
       throw error;
     }
     return payload;
+  }
+
+  function applyResponseFeedback(payload) {
+    if (
+      Object.prototype.hasOwnProperty.call(payload, "linear_x")
+      && Object.prototype.hasOwnProperty.call(payload, "angular_z")
+      && Object.prototype.hasOwnProperty.call(payload, "feedback_fresh")
+    ) {
+      applyMotionFeedback(payload);
+    }
   }
 
   function modeSwitchInProgress() {
@@ -346,28 +332,89 @@
     notice.textContent = `请求失败：${error.message}`;
   }
 
-  async function commandLoop() {
-    if (commandLoopRunning) return;
-    commandLoopRunning = true;
-    while (commandLoopRunning) {
-      const startedAt = performance.now();
-      const generation = commandGeneration;
-      try {
-        const payload = await post("/api/manual-command", {
-          direction: desiredDirection,
-          speed_percent: Number(speed.value)
-        });
-        applyResponseMode(payload);
-        if (noticeOwner === "motion") {
-          noticeOwner = null;
-          notice.textContent = "";
-        }
-      } catch (error) {
-        if (error.payload) applyResponseMode(error.payload);
-        showRequestFailure(error);
-      }
-      await waitForNextCommand(startedAt, generation);
+  function handleManualResponse(payload, snapshot) {
+    if (
+      payload.reason === "inactive_session"
+      && snapshot.sessionId === manualSessionId
+      && snapshot.generation === modeGeneration
+    ) {
+      terminateManualSession();
+      return false;
     }
+    if (
+      snapshot.sessionId !== manualSessionId
+      || snapshot.generation !== modeGeneration
+      || snapshot.sequence < highestHandledSequence
+    ) return false;
+    highestHandledSequence = snapshot.sequence;
+    if (payload.reason === "stale_sequence") return false;
+    if (!modeSwitchInProgress() || payload.mode === modeSwitchTarget) {
+      applyResponseMode(payload);
+      applyResponseFeedback(payload);
+      if (noticeOwner === "motion") {
+        noticeOwner = null;
+        notice.textContent = "";
+      }
+    }
+    return true;
+  }
+
+  function handleManualError(error, snapshot) {
+    if (error.name === "AbortError") return;
+    if (
+      snapshot.sessionId !== manualSessionId
+      || snapshot.generation !== modeGeneration
+      || snapshot.sequence < highestHandledSequence
+    ) return;
+    if (error.payload) {
+      handleManualResponse(error.payload, snapshot);
+      if (
+        snapshot.sessionId !== manualSessionId
+        || snapshot.generation !== modeGeneration
+        || snapshot.sequence < highestHandledSequence
+      ) return;
+      if (error.payload.reason === "stale_sequence") return;
+    }
+    highestHandledSequence = snapshot.sequence;
+    showRequestFailure(error);
+  }
+
+  function dispatchManualCommand() {
+    if (!commandLoopRunning || manualSessionId === null) return;
+    const snapshot = {
+      sessionId: manualSessionId,
+      sequence: nextSequence++,
+      generation: modeGeneration
+    };
+    const controller = new AbortController();
+    activeControllers.add(controller);
+    const timeoutId = setTimeout(() => controller.abort(), COMMAND_TIMEOUT_MS);
+    controller.timeoutId = timeoutId;
+    post("/api/manual-command", {
+      session_id: snapshot.sessionId,
+      sequence: snapshot.sequence,
+      direction: desiredDirection,
+      speed_percent: Number(speed.value)
+    }, controller.signal).then(
+      (payload) => handleManualResponse(payload, snapshot)
+    ).catch(
+      (error) => handleManualError(error, snapshot)
+    ).finally(() => {
+      clearTimeout(timeoutId);
+      activeControllers.delete(controller);
+    });
+  }
+
+  function commandLoop() {
+    if (commandLoopRunning || manualSessionId === null) return;
+    commandLoopRunning = true;
+    dispatchManualCommand();
+    const tick = () => {
+      if (!commandLoopRunning) return;
+      dispatchManualCommand();
+      commandTimer = setTimeout(tick, COMMAND_PERIOD_MS);
+    };
+    commandTimer = setTimeout(tick, COMMAND_PERIOD_MS);
   }
 
   function beginMotion(event) {
@@ -380,7 +427,7 @@
   function stopMotion() {
     buttonMotionOwner = null;
     heldMovementKeys.length = 0;
-    setDesiredDirection("stop");
+    setDesiredDirection("stop", true);
   }
 
   function stopOwnedButtonMotion(event) {
@@ -440,12 +487,32 @@
   document.addEventListener("keydown", beginWasdMotion);
   document.addEventListener("keyup", endWasdMotion);
 
+  function terminateManualSession() {
+    commandLoopRunning = false;
+    if (commandTimer !== null) clearTimeout(commandTimer);
+    commandTimer = null;
+    activeControllers.forEach((controller) => {
+      if (controller.timeoutId !== undefined) clearTimeout(controller.timeoutId);
+      controller.abort();
+    });
+    activeControllers.clear();
+    manualSessionId = null;
+    nextSequence = 1;
+    highestHandledSequence = 0;
+    modeGeneration += 1;
+    modeSwitchPending = false;
+    modeSwitchTarget = null;
+    stopMotion();
+    applyMode(null);
+  }
+
   async function requestMode() {
     if (
       modeSwitchPending
       || (currentMode !== "manual" && currentMode !== "automatic")
     ) return;
     const observedMode = currentMode;
+    const requestGeneration = ++modeGeneration;
     modeSwitchTarget = currentMode === "automatic"
       ? "manual"
       : "automatic";
@@ -463,18 +530,20 @@
     renderControls();
     try {
       const payload = await post(path, {});
+      if (requestGeneration !== modeGeneration) return;
       applyResponseMode(payload);
       noticeOwner = "mode";
       notice.textContent = payload.pending
         ? "切换结果尚未确认"
         : successMessage;
     } catch (error) {
+      if (requestGeneration !== modeGeneration) return;
       if (error.payload) applyResponseMode(error.payload);
       modeSwitchPending = false;
       modeSwitchTarget = null;
       showRequestFailure(error, "mode");
     } finally {
-      renderControls();
+      if (requestGeneration === modeGeneration) renderControls();
     }
   }
 
@@ -486,7 +555,24 @@
   window.addEventListener("pagehide", stopMotion);
   window.addEventListener("blur", stopMotion);
   applyMode(null);
-  commandLoop();
+  async function startManualSession() {
+    try {
+      const payload = await post("/api/manual-session", {});
+      if (typeof payload.session_id !== "string" || !payload.session_id) {
+        throw new Error("manual session was not initialized");
+      }
+      manualSessionId = payload.session_id;
+      nextSequence = 1;
+      highestHandledSequence = 0;
+      applyMode(payload.mode);
+      applyResponseFeedback(payload);
+      commandLoop();
+    } catch (error) {
+      applyMode(null);
+      showRequestFailure(error, "session");
+    }
+  }
+  startManualSession();
   if (globalThis.RobotMapView) {
     mapView = RobotMapView.create({
       canvas: document.getElementById("mapCanvas"),
