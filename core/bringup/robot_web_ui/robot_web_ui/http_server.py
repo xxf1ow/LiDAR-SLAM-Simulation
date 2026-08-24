@@ -214,6 +214,9 @@ def _handler_for(actions, html_path: Path):
                     html_path.with_name("map_view.js").read_bytes(),
                 )
                 return
+            if path == "/api/assistant-state":
+                self._send_json(200, actions.assistant_state())
+                return
             if path == "/api/navigation-state":
                 self._send_json(200, actions.navigation_state())
                 return
