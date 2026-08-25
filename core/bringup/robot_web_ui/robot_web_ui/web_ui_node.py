@@ -849,6 +849,48 @@ class WebUiNode(Node):
             },
         }
 
+    def assistant_state(self) -> dict[str, object]:
+        state = self.navigation_state()
+        navigation_state = state["navigation"]
+        goal_status = navigation_state["goal_status"]
+        phase = navigation_state["phase"]
+        navigation = (
+            phase
+            if goal_status == "navigating" and isinstance(phase, str)
+            else goal_status
+        )
+        mode = state["gate_mode"]
+        if mode not in {"automatic", "manual"}:
+            mode = "unknown"
+        distance = navigation_state["distance_remaining"]
+        if (
+            isinstance(distance, bool)
+            or not isinstance(distance, (int, float))
+            or not math.isfinite(distance)
+        ):
+            distance = None
+
+        if state["motion"]["feedback_fresh"] is not True:
+            issue = "feedback_unavailable"
+        elif state["layers"]["static"] is None:
+            issue = "map_unavailable"
+        elif (
+            state["localized"] is not True
+            or state["localization_error"] is not None
+        ):
+            issue = "localization_unavailable"
+        elif navigation_state["action_server_ready"] is not True:
+            issue = "navigation_unavailable"
+        else:
+            issue = None
+
+        return {
+            "mode": mode,
+            "navigation": navigation,
+            "distance_m": distance,
+            "issue": issue,
+        }
+
     @staticmethod
     def _grid_state(snapshot) -> dict[str, object] | None:
         if snapshot is None:

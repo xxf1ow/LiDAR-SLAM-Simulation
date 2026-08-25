@@ -1043,6 +1043,61 @@ def test_navigation_state_is_a_complete_immutable_projection(node_module):
     assert fresh["navigation"] is not state["navigation"]
 
 
+def test_assistant_state_compacts_navigation_and_prioritizes_issues(
+    node_module,
+):
+    node = bare_node(node_module)
+    state = {
+        "gate_mode": "automatic",
+        "localized": True,
+        "localization_error": None,
+        "motion": {"feedback_fresh": True},
+        "navigation": {
+            "action_server_ready": True,
+            "goal_status": "navigating",
+            "phase": "following",
+            "distance_remaining": 3.8,
+        },
+        "layers": {"static": {}},
+    }
+    node.navigation_state = lambda: state
+
+    assert node.assistant_state() == {
+        "mode": "automatic",
+        "navigation": "following",
+        "distance_m": 3.8,
+        "issue": None,
+    }
+
+    state["navigation"].update(
+        phase="clearing_local_recovery",
+        distance_remaining=float("nan"),
+    )
+    assert node.assistant_state()["navigation"] == "clearing_local_recovery"
+    assert node.assistant_state()["distance_m"] is None
+
+    state["motion"]["feedback_fresh"] = False
+    state["layers"]["static"] = None
+    state["localized"] = False
+    state["navigation"]["action_server_ready"] = False
+    assert node.assistant_state()["issue"] == "feedback_unavailable"
+    state["motion"]["feedback_fresh"] = True
+    assert node.assistant_state()["issue"] == "map_unavailable"
+    state["layers"]["static"] = {}
+    assert node.assistant_state()["issue"] == "localization_unavailable"
+    state["localized"] = True
+    state["localization_error"] = "expected map pose"
+    assert node.assistant_state()["issue"] == "localization_unavailable"
+    state["localization_error"] = None
+    assert node.assistant_state()["issue"] == "navigation_unavailable"
+
+    state["gate_mode"] = None
+    state["navigation"].update(goal_status="failed", phase=None)
+    compact = node.assistant_state()
+    assert compact["mode"] == "unknown"
+    assert compact["navigation"] == "failed"
+
+
 def test_local_costmap_state_reads_one_atomic_layer_projection(node_module):
     node = navigation_bare_node(node_module)
     node._tf_buffer = node_module.Buffer()

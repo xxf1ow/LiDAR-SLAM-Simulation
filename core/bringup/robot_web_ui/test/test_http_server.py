@@ -112,6 +112,15 @@ class FakeActions:
             },
         }
 
+    def assistant_state(self):
+        self.calls.append(("assistant_state",))
+        return {
+            "mode": "automatic",
+            "navigation": "following",
+            "distance_m": 3.8,
+            "issue": None,
+        }
+
     def navigation_asset(self, name):
         if name == self.blocked_asset_name:
             self.asset_read_started.set()
@@ -699,6 +708,25 @@ def test_navigation_state_returns_small_no_store_json(tmp_path):
         assert json.loads(body) == actions.navigation_state()
         assert b'"data"' not in body
         assert b"gzip" not in body
+
+
+def test_assistant_state_returns_exact_no_store_json(tmp_path):
+    html_path = tmp_path / "index.html"
+    html_path.write_text("ok")
+    actions = FakeActions()
+
+    with running_server(actions, html_path) as base_url:
+        response = request(base_url, "/api/assistant-state")
+        body = response.read()
+
+    assert response.status == 200
+    assert response.headers.get_content_type() == "application/json"
+    assert response.headers["Cache-Control"] == "no-store"
+    assert body == (
+        b'{"mode":"automatic","navigation":"following",'
+        b'"distance_m":3.8,"issue":null}'
+    )
+    assert actions.calls == [("assistant_state",)]
 
 
 @pytest.mark.parametrize(
