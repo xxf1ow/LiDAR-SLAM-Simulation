@@ -892,7 +892,7 @@ def _validate_runtime_protocol(platform, generated):
         ("map_frame", "map"),
         ("odom_frame", "camera_init"),
         ("base_frame", "body"),
-        ("cloud_topic", "/cloud_registered"),
+        ("cloud_topic", "/cloud_registered_body"),
         ("odom_topic", "/Odometry"),
     ):
         _runtime_protocol_value(

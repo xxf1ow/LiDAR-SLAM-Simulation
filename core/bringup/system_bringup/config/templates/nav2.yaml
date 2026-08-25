@@ -1,5 +1,5 @@
 # 5e Nav2 最小打通参数。frame: 全局 costmap=map；局部 costmap+behavior=camera_init(连续、不随 GICP 跳变)。
-# 障碍源 /cloud_registered(sensor_frame=body)。odom_topic=/base_controller/odom(diff_drive 真实 twist;
+# 障碍源 /cloud_registered_body(sensor_frame=body)。odom_topic=/base_controller/odom(diff_drive 真实 twist;
 # FAST-LIO /Odometry twist 恒零)。值多取自 nav2 Humble 官方默认 + 旧栈实测，构建机按 spec §9 再调。
 #
 # === CHASSIS-DEPENDENT（换底盘改这里）===
@@ -176,7 +176,7 @@ global_costmap:
         observation_sources: pointcloud_mark pointcloud_clear
         pointcloud_mark:
           data_type: PointCloud2
-          topic: /cloud_registered
+          topic: /cloud_registered_body
           sensor_frame: body
           marking: true
           clearing: false
@@ -192,7 +192,7 @@ global_costmap:
         pointcloud_clear:
           enabled: true
           data_type: PointCloud2
-          topic: /cloud_registered
+          topic: /cloud_registered_body
           marking: false
           clearing: true
           max_z: 20.0   # 清除视锥远端距离,与 marking obstacle_range 一致
@@ -237,7 +237,7 @@ local_costmap:
         observation_sources: pointcloud_mark pointcloud_clear
         pointcloud_mark:
           data_type: PointCloud2
-          topic: /cloud_registered
+          topic: /cloud_registered_body
           sensor_frame: body
           marking: true
           clearing: false
@@ -250,7 +250,7 @@ local_costmap:
         pointcloud_clear:
           enabled: true
           data_type: PointCloud2
-          topic: /cloud_registered
+          topic: /cloud_registered_body
           marking: false
           clearing: true
           max_z: 20.0   # 清除视锥远端距离,与 marking obstacle_range 一致

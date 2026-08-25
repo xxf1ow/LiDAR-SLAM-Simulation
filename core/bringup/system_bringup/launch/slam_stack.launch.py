@@ -112,12 +112,12 @@ def _stack(context, *args, **kwargs):
                      "use_sim_time": use_sim, "cmd_vel_output_topic": cmd_vel_output_topic})
         # 链式就绪闸门(非阻塞):等上游真发出关键话题 + settling 后才起下个,超时中止
         return [
-            flow("MODE=navigation → ② fast_lio → gate(/Odometry+/cloud_registered) → gicp → gate(/localization+/base_controller/odom) → nav2"),
+            flow("MODE=navigation → ② fast_lio → gate(/Odometry+/cloud_registered_body) → gicp → gate(/localization+/base_controller/odom) → nav2"),
             body_bridge,
             fast_lio,
             rviz,
-        ] + ready_gate(["/Odometry", "/cloud_registered"], 60.0,
-                       "fast_lio→/Odometry+/cloud_registered",
+        ] + ready_gate(["/Odometry", "/cloud_registered_body"], 60.0,
+                       "fast_lio→/Odometry+/cloud_registered_body",
                        [gicp] + ready_gate(
                            ["/localization", "/base_controller/odom"], 60.0,
                            "gicp+base_controller→/localization+/base_controller/odom",

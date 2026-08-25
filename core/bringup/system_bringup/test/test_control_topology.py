@@ -355,7 +355,7 @@ def test_slam_stack_keeps_navigation_rviz_disabled_unless_requested():
     assert _string(_dict_value(nav2_include.args[2], "use_rviz")) == "false"
 
 
-def test_navigation_rviz_supports_initial_pose_against_both_point_clouds():
+def test_navigation_rviz_supports_initial_pose_and_body_cloud():
     config = yaml.safe_load(NAV_RVIZ.read_text(encoding="utf-8"))
     manager = config["Visualization Manager"]
     assert manager["Global Options"]["Fixed Frame"] == "map"
@@ -371,7 +371,7 @@ def test_navigation_rviz_supports_initial_pose_against_both_point_clouds():
     }
     assert cloud_topics >= {
         "/gicp_localization/prior_map",
-        "/cloud_registered",
+        "/cloud_registered_body",
     }
 
 
@@ -721,6 +721,16 @@ def test_slam_stack_waits_for_localization_and_base_controller_odom_before_nav2(
         isinstance(call.args[0], ast.List)
         and {_string(item) for item in call.args[0].elts}
         == {"/localization", "/base_controller/odom"}
+        for call in _calls(function, "ready_gate")
+    )
+
+
+def test_slam_stack_waits_for_fast_lio_body_cloud_before_gicp():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    assert any(
+        isinstance(call.args[0], ast.List)
+        and {_string(item) for item in call.args[0].elts}
+        == {"/Odometry", "/cloud_registered_body"}
         for call in _calls(function, "ready_gate")
     )
 

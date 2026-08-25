@@ -40,7 +40,7 @@
       path_en: false
       effect_map_en: false
       map_en: false
-      scan_publish_en: true
+      scan_publish_en: false
       dense_publish_en: true
       scan_bodyframe_pub_en: true
 
