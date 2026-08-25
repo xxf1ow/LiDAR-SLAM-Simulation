@@ -9,12 +9,12 @@ Smac Hybrid-A*，局部控制器使用 MPPI，不运行 AMCL。
 map ── GICP ──> camera_init ── FAST-LIO ──> body ──> base_footprint
 
 map_server ──> global costmap ──> Smac planner
-/cloud_registered ──> local/global STVL ──> MPPI ──> /cmd_vel_nav
+/cloud_registered_body ──> local/global STVL ──> MPPI ──> /cmd_vel_nav
 ```
 
 - global costmap 使用 `map`，允许 GICP 校正后全局重规划。
 - local costmap 和 behavior server 使用连续的 `camera_init`。
-- 障碍源是 `/cloud_registered`、sensor frame=`body`，不是原始 `/points_raw`。
+- 障碍源是 `/cloud_registered_body`、sensor frame=`body`，不是原始 `/points_raw`。
 - 轮式速度来自 `/base_controller/odom`；FAST-LIO `/Odometry` 不提供可用 twist。
 - 完整 bringup 把 Nav2 `Twist` 转为 `/cmd_vel_auto`，再由 `cmd_vel_gate` 输出
   `TwistStamped /cmd_vel`。
@@ -65,7 +65,7 @@ ros2 launch system_bringup bringup.launch.py
 ```
 
 Navigation 模式先启动 RViz、FAST-LIO 和 GICP，但暂不启动 Nav2。RViz 同时显示
-`/gicp_localization/prior_map` 与 `/cloud_registered`：初始位姿正确时 GICP 会自动接受第一次
+`/gicp_localization/prior_map` 与 `/cloud_registered_body`：初始位姿正确时 GICP 会自动接受第一次
 配准；不正确时使用“2D Pose Estimate”发布 `/initialpose`。首次 accepted 后 `/localization`
 出现，现有 gate 才启动 Nav2。确认点云贴合后再下发“Nav2 Goal”。手机 Web 可人工接管；恢复
 自动不会自动取消或重建原 Nav2 goal。
@@ -108,7 +108,7 @@ ros2 topic info /cmd_vel -v
 
 - 车反向或不转：检查 `body -> base_footprint` 旋转和轮方向，不要用补偿性 Nav2 参数掩盖 TF。
 - MPPI 无法 configure：检查 `controller_frequency` 与 `model_dt` 约束。
-- costmap 障碍异常：检查 `/cloud_registered`、`sensor_frame=body`、STVL 视锥和高度范围。
+- costmap 障碍异常：检查 `/cloud_registered_body`、`sensor_frame=body`、STVL 视锥和高度范围。
 - behavior 报 frame/odom 缺失：确认 `camera_init`、`/base_controller/odom` 和完整 TF 链。
 - 配置修改不生效：Profile/`bringup.yaml` 不需 rebuild；安装到 package share 的 template/launch
   修改后必须重新构建。

@@ -43,7 +43,7 @@ must start_mode
 不发送 goal。记录 `$LOG_DIR/navigation.log` 和本次 `$RUNTIME_DIR`，确认：
 
 1. `rviz2` 在 Nav2 server 之前启动且只有一个实例；
-2. `/gicp_localization/prior_map` 与 `/cloud_registered` 存在；
+2. `/gicp_localization/prior_map` 与 `/cloud_registered_body` 存在；
 3. RViz 配置的 fixed frame 为 `map`，能显示 prior map 和 registered cloud；
 4. 若初始位姿正确，允许 GICP 自动完成首次 accepted；
 5. 若未自动 accepted，在 ready gate 的 discovery timeout 内用 RViz “2D Pose Estimate”发布
