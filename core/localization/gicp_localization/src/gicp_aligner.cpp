@@ -28,7 +28,7 @@ AlignOutcome GicpAligner::align(const std::vector<Eigen::Vector4f>& scan_points,
   auto result = small_gicp::align(*target_, *source, *target_tree_, seed, setting);
 
   AlignOutcome out;
-  out.T_map_odom = result.T_target_source;
+  out.T_target_source = result.T_target_source;
   out.num_inliers = result.num_inliers;
   out.num_source = source->size();
   out.fitness = computeFitness(result.num_inliers, source->size());

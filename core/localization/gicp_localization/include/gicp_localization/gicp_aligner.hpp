@@ -18,7 +18,7 @@ struct GicpParams {
 };
 
 struct AlignOutcome {
-  Eigen::Isometry3d T_map_odom = Eigen::Isometry3d::Identity();
+  Eigen::Isometry3d T_target_source = Eigen::Isometry3d::Identity();
   double fitness = 0.0;
   double mean_residual = 0.0;
   std::size_t num_inliers = 0;

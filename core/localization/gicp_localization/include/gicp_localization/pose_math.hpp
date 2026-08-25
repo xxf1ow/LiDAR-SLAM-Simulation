@@ -21,6 +21,13 @@ Eigen::Isometry3d mapToOdomFromBase(const Eigen::Isometry3d& T_map_base,
 Eigen::Isometry3d composeMapToBase(const Eigen::Isometry3d& T_map_odom,
                                    const Eigen::Isometry3d& T_odom_base);
 
+// GICP source frame can differ from odom (for example body-frame scans).
+Eigen::Isometry3d registrationSeed(const Eigen::Isometry3d& T_map_odom,
+                                   const Eigen::Isometry3d& T_odom_source);
+Eigen::Isometry3d registrationResultToMapOdom(
+    const Eigen::Isometry3d& T_map_source,
+    const Eigen::Isometry3d& T_odom_source);
+
 double computeFitness(std::size_t num_inliers, std::size_t num_source);
 
 CorrectionDelta correctionDelta(const Eigen::Isometry3d& prev,

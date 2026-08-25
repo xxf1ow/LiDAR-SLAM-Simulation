@@ -24,6 +24,17 @@ Eigen::Isometry3d composeMapToBase(const Eigen::Isometry3d& T_map_odom,
   return T_map_odom * T_odom_base;
 }
 
+Eigen::Isometry3d registrationSeed(const Eigen::Isometry3d& T_map_odom,
+                                   const Eigen::Isometry3d& T_odom_source) {
+  return T_map_odom * T_odom_source;
+}
+
+Eigen::Isometry3d registrationResultToMapOdom(
+    const Eigen::Isometry3d& T_map_source,
+    const Eigen::Isometry3d& T_odom_source) {
+  return T_map_source * T_odom_source.inverse();
+}
+
 double computeFitness(std::size_t num_inliers, std::size_t num_source) {
   if (num_source == 0) return 0.0;
   return static_cast<double>(num_inliers) / static_cast<double>(num_source);
