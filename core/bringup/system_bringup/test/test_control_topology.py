@@ -335,7 +335,7 @@ def test_slam_stack_keeps_navigation_rviz_disabled_unless_requested():
     assert condition.func.id == "IfCondition"
     assert isinstance(condition.args[0], ast.Call)
     assert condition.args[0].func.id == "LaunchConfiguration"
-    assert _string(condition.args[0].args[0]) == "rviz"
+    assert _string(condition.args[0].args[0]) == "stack_rviz"
 
     result = next(
         node.value for node in navigation.body if isinstance(node, ast.Return)
@@ -353,6 +353,26 @@ def test_slam_stack_keeps_navigation_rviz_disabled_unless_requested():
         if _string(call.args[0]) == "robot_navigation"
     )
     assert _string(_dict_value(nav2_include.args[2], "use_rviz")) == "false"
+
+
+def test_slam_stack_rviz_condition_is_isolated_from_fast_lio_arguments():
+    function = _function(_tree(SLAM_STACK), "_stack")
+    navigation = _mode_branch(function, "navigation")
+    rviz_node = next(
+        call
+        for call in _calls(navigation, "Node")
+        if _string(_keyword(call, "package")) == "rviz2"
+    )
+    condition = _keyword(rviz_node, "condition")
+    condition_name = _string(condition.args[0].args[0])
+    fast_lio_arguments = _include_arguments(
+        function, "fast_lio", "launch/mapping.launch.py"
+    )
+    fast_lio_argument_names = {
+        _string(key) for key in fast_lio_arguments.keys
+    }
+
+    assert condition_name not in fast_lio_argument_names
 
 
 def test_navigation_rviz_supports_initial_pose_and_body_cloud():
@@ -631,7 +651,7 @@ def test_slam_stack_algorithm_and_map_paths_are_all_required():
     tree = _tree(SLAM_STACK)
     required = {
         "lio_sam_params_file", "fast_lio_params_file", "gicp_config_file",
-        "prior_map_path", "nav2_params_file", "nav_map", "rviz",
+        "prior_map_path", "nav2_params_file", "nav_map", "stack_rviz",
     }
     declarations = {
         _string(call.args[0]): call
@@ -693,7 +713,7 @@ def test_formal_bringup_passes_generated_slam_runtime_selections():
     settling = _dict_value(arguments, "settling")
     assert isinstance(settling, ast.Call) and settling.func.id == "str"
     assert isinstance(settling.args[0], ast.Name) and settling.args[0].id == "settling"
-    rviz = _dict_value(arguments, "rviz")
+    rviz = _dict_value(arguments, "stack_rviz")
     assert ast.unparse(rviz) == "str(stack_cfg['rviz']).lower()"
 
 

@@ -97,7 +97,7 @@ def _stack(context, *args, **kwargs):
             executable="rviz2",
             name="rviz2",
             output="log",
-            condition=IfCondition(LaunchConfiguration("rviz")),
+            condition=IfCondition(LaunchConfiguration("stack_rviz")),
             arguments=[
                 "-d",
                 os.path.join(
@@ -137,7 +137,7 @@ def generate_launch_description():
         DeclareLaunchArgument("nav2_params_file"),
         DeclareLaunchArgument("nav_map"),
         DeclareLaunchArgument("cmd_vel_output_topic", default_value="/cmd_vel"),
-        DeclareLaunchArgument("rviz"),
+        DeclareLaunchArgument("stack_rviz"),
         DeclareLaunchArgument("fast_lio_body_bridge_x"),
         DeclareLaunchArgument("fast_lio_body_bridge_y"),
         DeclareLaunchArgument("fast_lio_body_bridge_z"),
