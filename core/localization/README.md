@@ -3,8 +3,8 @@
 本模块由两部分组成：
 
 - FAST-LIO2 消费 LiDAR/IMU，发布 `camera_init -> body`、`/Odometry` 和
-  `/cloud_registered`。
-- `gicp_localization` 把 `/cloud_registered` 配准到 LIO-SAM 先验图，高频发布供 RViz
+  `/cloud_registered_body`。
+- `gicp_localization` 把 `/cloud_registered_body` 配准到 LIO-SAM 先验图，高频发布供 RViz
   观察的 `map -> camera_init`；只有首次配准被接受后才发布 `/localization`。
 
 完整定位链：
@@ -27,7 +27,7 @@ git checkout a4743b095409588842a5b30ddfa27e29d2f99164
 git apply ../fast-lio2.patch
 ```
 
-补丁只将 IMU 订阅改为 `SensorDataQoS`。正式 FAST-LIO 参数由
+补丁将 IMU 订阅改为 `SensorDataQoS`，并让 world/body 点云发布开关独立生效。正式 FAST-LIO 参数由
 `system_bringup` 的 source template 渲染为 `fast_lio.generated.yaml`，不再由上游 clone
 中的 package YAML 提供。算法外参不等同于 URDF 的独立 LiDAR/IMU mount；真实六自由度
 外参仍需动态标定。
@@ -101,7 +101,7 @@ ros2 launch gicp_localization localization.launch.py \
 
 ```bash
 ros2 topic hz /Odometry
-ros2 topic hz /cloud_registered
+ros2 topic hz /cloud_registered_body
 ros2 topic hz /localization
 ros2 run tf2_ros tf2_echo map camera_init
 ros2 run tf2_ros tf2_echo camera_init body
@@ -109,7 +109,7 @@ ros2 run tf2_ros tf2_echo camera_init body
 
 ## 验收
 
-- `/Odometry`、`/cloud_registered` 持续发布，注册点云结构稳定。
+- `/Odometry`、`/cloud_registered_body` 持续发布，注册点云结构稳定。
 - GICP 成功加载 `GlobalMap.pcd`，`~/prior_map` 可显示。
 - `map -> camera_init -> body -> base_footprint` 连通；最后一段由 `slam_stack` permanent bridge 发布。
 - 实时注册点云与先验图贴合，错误 90° 假解被当前 fitness 阈值拒绝。

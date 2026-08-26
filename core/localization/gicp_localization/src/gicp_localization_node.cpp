@@ -74,6 +74,8 @@ GicpLocalizationNode::GicpLocalizationNode() : rclcpp::Node("gicp_localization")
 
   diag_ = make_diagnostics(this);
   tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+  tf_buffer_ = std::make_unique<tf2_ros::Buffer>(get_clock());
+  tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
 
   // ---- callback group ----
   slow_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
@@ -111,6 +113,8 @@ void GicpLocalizationNode::cloudCb(const sensor_msgs::msg::PointCloud2::SharedPt
   }
   std::lock_guard<std::mutex> lk(mtx_);
   latest_scan_ = std::move(pts);
+  latest_scan_stamp_ = rclcpp::Time(msg->header.stamp);
+  latest_scan_frame_ = msg->header.frame_id;
 }
 
 void GicpLocalizationNode::odomCb(const nav_msgs::msg::Odometry::SharedPtr msg) {
@@ -133,19 +137,44 @@ void GicpLocalizationNode::gicpTimerCb() {
   if (!aligner_->hasMap()) return;
 
   std::vector<Eigen::Vector4f> scan;
-  Eigen::Isometry3d seed;
+  rclcpp::Time scan_stamp;
+  std::string scan_frame;
   {
     std::lock_guard<std::mutex> lk(mtx_);
-    if (!latest_scan_) return;
+    if (!latest_scan_ || !latest_scan_stamp_) return;
     scan = *latest_scan_;
+    scan_stamp = *latest_scan_stamp_;
+    scan_frame = latest_scan_frame_;
+  }
+
+  Eigen::Isometry3d T_odom_source;
+  Eigen::Isometry3d T_odom_base;
+  try {
+    T_odom_source = tf2::transformToEigen(tf_buffer_->lookupTransform(
+        odom_frame_, scan_frame, scan_stamp,
+        rclcpp::Duration::from_seconds(0.1)).transform);
+    T_odom_base = scan_frame == base_frame_
+        ? T_odom_source
+        : tf2::transformToEigen(tf_buffer_->lookupTransform(
+              odom_frame_, base_frame_, scan_stamp,
+              rclcpp::Duration::from_seconds(0.1)).transform);
+  } catch (const tf2::TransformException& e) {
+    RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 5000,
+                         "扫描时刻 TF 不可用，跳过本周期：%s", e.what());
+    return;
+  }
+
+  Eigen::Isometry3d T_map_odom_seed;
+  {
+    std::lock_guard<std::mutex> lk(mtx_);
     if (pending_init_base_) {
-      Eigen::Isometry3d odom = latest_odom_.value_or(Eigen::Isometry3d::Identity());
-      seed = mapToOdomFromBase(*pending_init_base_, odom);
+      T_map_odom_seed = mapToOdomFromBase(*pending_init_base_, T_odom_base);
       pending_init_base_.reset();
     } else {
-      seed = T_map_odom_;
+      T_map_odom_seed = T_map_odom_;
     }
   }
+  const Eigen::Isometry3d seed = registrationSeed(T_map_odom_seed, T_odom_source);
 
   if (static_cast<int>(scan.size()) < min_scan_points_) {
     RCLCPP_WARN(get_logger(), "扫描点过少(%zu)，跳过本周期", scan.size());
@@ -154,6 +183,8 @@ void GicpLocalizationNode::gicpTimerCb() {
 
   AlignOutcome out = aligner_->align(scan, seed);
   const bool ok = accept(out.fitness, fitness_threshold_);
+  const Eigen::Isometry3d T_map_odom = registrationResultToMapOdom(
+      out.T_target_source, T_odom_source);
 
   GicpMetrics m;
   m.fitness = out.fitness;
@@ -166,11 +197,11 @@ void GicpLocalizationNode::gicpTimerCb() {
   std::size_t rejected_snapshot = 0;
   {
     std::lock_guard<std::mutex> lk(mtx_);
-    auto d = correctionDelta(T_map_odom_, out.T_map_odom);
+    auto d = correctionDelta(T_map_odom_, T_map_odom);
     m.correction_delta_trans = d.translation;
     m.correction_delta_rot = d.rotation;
     if (ok) {
-      T_map_odom_ = out.T_map_odom;
+      T_map_odom_ = T_map_odom;
       if (!loc_pub_) {
         loc_pub_ = create_publisher<nav_msgs::msg::Odometry>(
             "/localization", rclcpp::QoS(50));

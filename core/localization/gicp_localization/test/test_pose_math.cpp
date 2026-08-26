@@ -33,6 +33,17 @@ TEST(PoseMath, MapToOdomIdentityOdom) {
   EXPECT_TRUE(T_map_odom.isApprox(T_map_base, 1e-9));
 }
 
+TEST(PoseMath, RegistrationFrameRoundTrip) {
+  auto T_map_odom = poseParamToIsometry(2, -1, 0.4, 0.3, -0.1, 0.05);
+  auto T_odom_scan = poseParamToIsometry(1, 0.5, -0.2, -0.2, 0.08, 0.02);
+
+  auto T_map_scan = registrationSeed(T_map_odom, T_odom_scan);
+  auto recovered = registrationResultToMapOdom(T_map_scan, T_odom_scan);
+
+  EXPECT_TRUE(T_map_scan.isApprox(T_map_odom * T_odom_scan, 1e-9));
+  EXPECT_TRUE(recovered.isApprox(T_map_odom, 1e-9));
+}
+
 TEST(PoseMath, Fitness) {
   EXPECT_NEAR(computeFitness(8, 10), 0.8, 1e-9);
   EXPECT_NEAR(computeFitness(0, 0), 0.0, 1e-9);

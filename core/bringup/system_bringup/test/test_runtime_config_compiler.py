@@ -360,7 +360,7 @@ def test_gicp_template_is_complete_native_parameter_schema():
     assert params["map_frame"] == "map"
     assert params["odom_frame"] == "camera_init"
     assert params["base_frame"] == "body"
-    assert params["cloud_topic"] == "/cloud_registered"
+    assert params["cloud_topic"] == "/cloud_registered_body"
     assert params["odom_topic"] == "/Odometry"
     assert all(
         type(params[key]) is float
@@ -520,6 +520,8 @@ def test_fast_lio_template_is_complete_native_parameter_schema():
         "dense_publish_en", "scan_bodyframe_pub_en",
     }
     assert all(type(value) is bool for value in params["publish"].values())
+    assert params["publish"]["scan_publish_en"] is False
+    assert params["publish"]["scan_bodyframe_pub_en"] is True
     assert set(params["pcd_save"]) == {"pcd_save_en", "interval"}
     assert type(params["pcd_save"]["pcd_save_en"]) is bool
     assert type(params["pcd_save"]["interval"]) is int

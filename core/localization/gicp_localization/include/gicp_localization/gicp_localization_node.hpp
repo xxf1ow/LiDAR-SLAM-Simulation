@@ -10,6 +10,8 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <tf2_ros/transform_broadcaster.h>
+#include <tf2_ros/buffer.h>
+#include <tf2_ros/transform_listener.h>
 #include <Eigen/Geometry>
 
 #include "gicp_localization/gicp_aligner.hpp"
@@ -36,6 +38,8 @@ private:
   std::unique_ptr<GicpAligner> aligner_;
   std::unique_ptr<Diagnostics> diag_;
   std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+  std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
+  std::unique_ptr<tf2_ros::TransformListener> tf_listener_;
 
   rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr cloud_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
@@ -49,6 +53,8 @@ private:
   std::mutex mtx_;
   Eigen::Isometry3d T_map_odom_{Eigen::Isometry3d::Identity()};
   std::optional<std::vector<Eigen::Vector4f>> latest_scan_;
+  std::optional<rclcpp::Time> latest_scan_stamp_;
+  std::string latest_scan_frame_;
   std::optional<Eigen::Isometry3d> latest_odom_;     // T_odom_base
   std::optional<Eigen::Isometry3d> pending_init_base_;  // /initialpose 给的 T_map_base
   std::size_t rejected_{0};

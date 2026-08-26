@@ -162,7 +162,7 @@ def test_repository_fixture_resolves_from_test_location():
     assert (ROOT / "core/bringup/system_bringup").is_dir()
 
 
-def test_fast_lio_patch_contains_only_the_imu_qos_source_change():
+def test_fast_lio_patch_keeps_body_publication_independent_of_world_publication():
     patch = FAST_LIO_PATCH.read_text(encoding="utf-8")
     headers = [
         line for line in patch.splitlines() if line.startswith("diff --git ")
@@ -173,26 +173,11 @@ def test_fast_lio_patch_contains_only_the_imu_qos_source_change():
     assert "config/gazebo_velodyne.yaml" not in patch
     assert "config/vanjee_722.yaml" not in patch
     section = _patch_file_section(patch, "src/laserMapping.cpp")
-    hunks = [line for line in section.splitlines() if line.startswith("@@ ")]
-    assert hunks == ["@@ -926,7 +926,7 @@ public:"]
-    removed = [
-        line
-        for line in section.splitlines()
-        if line.startswith("-") and not line.startswith("---")
-    ]
-    added = [
-        line
-        for line in section.splitlines()
-        if line.startswith("+") and not line.startswith("+++")
-    ]
-    assert removed == [
-        "-        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
-        "(imu_topic, 10, imu_cbk);"
-    ]
-    assert added == [
-        "+        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>"
-        "(imu_topic, rclcpp::SensorDataQoS(), imu_cbk);"
-    ]
+    assert "rclcpp::SensorDataQoS(), imu_cbk" in section
+    assert "+        if (scan_pub_en)" in section
+    assert "+            pubLaserCloudFull_ = this->create_publisher" in section
+    assert "+            if (scan_body_pub_en) publish_frame_body" in section
+    assert "scan_pub_en && scan_body_pub_en" in section
 
 
 def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
@@ -206,7 +191,16 @@ def test_fast_lio_patch_passes_git_apply_check_against_pinned_context(tmp_path):
         + "        sub_imu_ = this->create_subscription<sensor_msgs::msg::Imu>(imu_topic, 10, imu_cbk);\n"
         + "        pubLaserCloudFull_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_registered\", 20);\n"
         + "        pubLaserCloudFull_body_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_registered_body\", 20);\n"
-        + "        pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_effected\", 20);\n",
+        + "        pubLaserCloudEffect_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(\"/cloud_effected\", 20);\n"
+        + "// pinned-equivalent filler\n" * 50
+        + "            /******* Publish points *******/\n"
+        + "            if (path_en)                         publish_path(pubPath_);\n"
+        + "            if (scan_pub_en)      publish_frame_world(pubLaserCloudFull_);\n"
+        + "            if (scan_pub_en && scan_body_pub_en) publish_frame_body(pubLaserCloudFull_body_);\n"
+        + "            if (effect_pub_en) publish_effect_world(pubLaserCloudEffect_);\n"
+        + "            // if (map_pub_en) publish_map(pubLaserCloudMap_);\n"
+        + "\n"
+        + "            /*** Debug variables ***/\n",
         encoding="utf-8",
     )
 
@@ -290,7 +284,7 @@ def test_gicp_advertises_localization_only_after_first_accepted_alignment():
     assert 'create_publisher<nav_msgs::msg::Odometry>("/localization"' not in constructor
     assert re.search(
         r"if \(ok\) \{\s*"
-        r"T_map_odom_ = out\.T_map_odom;\s*"
+        r"T_map_odom_ = T_map_odom;\s*"
         r"if \(!loc_pub_\) \{\s*"
         r"loc_pub_ = create_publisher<nav_msgs::msg::Odometry>\(\s*"
         r'"/localization", rclcpp::QoS\(50\)\);',

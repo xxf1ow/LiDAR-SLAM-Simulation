@@ -52,5 +52,5 @@ Visualization Manager:
       Name: CloudRegistered
       Enabled: true
       Topic:
-        Value: /cloud_registered
+        Value: /cloud_registered_body
         Durability Policy: Volatile

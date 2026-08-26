@@ -43,7 +43,7 @@ TEST(GicpAligner, RecoversKnownTranslation) {
   // source = target + shift·x，配到 target 需 -shift·x
   auto out = aligner.align(source, Eigen::Isometry3d::Identity());
   EXPECT_TRUE(out.converged);
-  EXPECT_NEAR(out.T_map_odom.translation().x(), -shift, 0.01);
+  EXPECT_NEAR(out.T_target_source.translation().x(), -shift, 0.01);
   EXPECT_GT(out.fitness, 0.9);
   EXPECT_GT(out.num_inliers, 0u);
 }

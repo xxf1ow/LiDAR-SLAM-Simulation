@@ -170,7 +170,7 @@ must cleanup
 MODE=navigation
 must start_mode
 must observe_30s Odometry 'average rate:' ros2 topic hz /Odometry
-must observe_30s cloud_registered 'average rate:' ros2 topic hz /cloud_registered
+must observe_30s cloud_registered_body 'average rate:' ros2 topic hz /cloud_registered_body
 must observe_30s map_tf 'Translation:' ros2 run tf2_ros tf2_echo map base_footprint
 must grep -q 'Rotation:' "$LOG_DIR/$MODE-map_tf.txt"
 for NODE in /map_server /planner_server /controller_server /behavior_server /bt_navigator; do must check_lifecycle "$NODE"; done

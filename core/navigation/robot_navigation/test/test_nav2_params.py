@@ -41,11 +41,11 @@ def test_local_stvl_plugin_and_combination():
     assert stvl["combination_method"] == 1
 
 
-def test_local_stvl_sources_are_cloud_registered():
+def test_local_stvl_sources_are_cloud_registered_body():
     p = _load()
     stvl = p["local_costmap"]["local_costmap"]["ros__parameters"]["stvl_layer"]
-    assert stvl["pointcloud_mark"]["topic"] == "/cloud_registered"
-    assert stvl["pointcloud_clear"]["topic"] == "/cloud_registered"
+    assert stvl["pointcloud_mark"]["topic"] == "/cloud_registered_body"
+    assert stvl["pointcloud_clear"]["topic"] == "/cloud_registered_body"
     assert stvl["pointcloud_mark"]["sensor_frame"] == "body"
 
 
@@ -80,9 +80,9 @@ def test_global_stvl_plugin_and_combination():
     assert stvl["combination_method"] == 1
 
 
-def test_global_stvl_sources_are_cloud_registered():
+def test_global_stvl_sources_are_cloud_registered_body():
     p = _load()
     stvl = p["global_costmap"]["global_costmap"]["ros__parameters"]["stvl_layer"]
-    assert stvl["pointcloud_mark"]["topic"] == "/cloud_registered"
-    assert stvl["pointcloud_clear"]["topic"] == "/cloud_registered"
+    assert stvl["pointcloud_mark"]["topic"] == "/cloud_registered_body"
+    assert stvl["pointcloud_clear"]["topic"] == "/cloud_registered_body"
     assert stvl["pointcloud_mark"]["sensor_frame"] == "body"
