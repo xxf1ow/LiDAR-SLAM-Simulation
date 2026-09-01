@@ -1,0 +1,18 @@
+{
+  "CLAUDE.md": 550,
+  "README.md": 260,
+  "core/bringup/robot_web_ui/README.md": 170,
+  "core/bringup/system_bringup/README.md": 450,
+  "core/localization/README.md": 320,
+  "core/mapping/README.md": 200,
+  "core/navigation/README.md": 360,
+  "core/robot/README.md": 230,
+  "core/robot/drivers/README.md": 80,
+  "core/robot/drivers/chassis_8030d/README.md": 230,
+  "core/robot/drivers/lidar_vanjee_722/vanjee_lidar_ros/README.md": 100,
+  "core/simulation/robot_gz_bringup/README.md": 340,
+  "docs/architecture.md": 480,
+  "docs/development.md": 320,
+  "docs/testing.md": 320,
+  "docs/agent-notes/implemented/process/2026-09-01-documentation-ownership.md": 100
+}

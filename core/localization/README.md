@@ -1,22 +1,16 @@
-# Localization：FAST-LIO2 + GICP
+# Localization：FAST-LIO2 与 GICP
 
-本模块由两部分组成：
-
-- FAST-LIO2 消费 LiDAR/IMU，发布 `camera_init -> body`、`/Odometry` 和
-  `/cloud_registered_body`。
-- `gicp_localization` 把 `/cloud_registered_body` 配准到 LIO-SAM 先验图，高频发布供 RViz
-  观察的 `map -> camera_init`；只有首次配准被接受后才发布 `/localization`。
-
-完整定位链：
+FAST-LIO2 消费 LiDAR/IMU，发布 `camera_init -> body`、`/Odometry` 和 `/cloud_registered_body`。`gicp_localization` 把注册点云配准到 LIO-SAM 先验图，发布 `map -> camera_init`；只有首次配准被接受后才发布 `/localization`。
 
 ```text
-map ── GICP ──> camera_init ── FAST-LIO ──> body ── slam_stack bridge ──> base_footprint
+map ── GICP ──> camera_init ── FAST-LIO ──> body ── slam_stack ──> base_footprint
 ```
+
+系统级 TF 和启动所有权见[系统架构](../../docs/architecture.md#传感器和坐标流)。
 
 ## FAST-LIO 集成
 
-FAST-LIO 克隆到 `core/localization/FAST_LIO`，项目修改由
-`core/localization/fast-lio2.patch` 交付：
+FAST-LIO 克隆到忽略目录 `core/localization/FAST_LIO`，项目修改由 `core/localization/fast-lio2.patch` 交付：
 
 ```bash
 git clone https://github.com/hku-mars/FAST_LIO.git -b ROS2 --single-branch --depth 1 \
@@ -27,21 +21,13 @@ git checkout a4743b095409588842a5b30ddfa27e29d2f99164
 git apply ../fast-lio2.patch
 ```
 
-补丁将 IMU 订阅改为 `SensorDataQoS`，并让 world/body 点云发布开关独立生效。正式 FAST-LIO 参数由
-`system_bringup` 的 source template 渲染为 `fast_lio.generated.yaml`，不再由上游 clone
-中的 package YAML 提供。算法外参不等同于 URDF 的独立 LiDAR/IMU mount；真实六自由度
-外参仍需动态标定。
-
-`livox_ros_driver2` 是仓库内的消息桩，只满足 FAST-LIO 编译期类型依赖，不需要 Livox SDK。
+补丁把 IMU 订阅改为 `SensorDataQoS`，并使 world/body 点云发布开关独立。正式参数由 `system_bringup` 生成的 `fast_lio.generated.yaml` 提供。算法外参不等同于 URDF 的 LiDAR/IMU mount；真实六自由度外参需要动态标定。仓库内 `livox_ros_driver2` 只提供 FAST-LIO 编译期消息类型，不依赖 Livox SDK。
 
 ## GICP 集成
 
-`gicp_localization/` 是本仓库代码。它使用 small_gicp，以低频配准更新校正，同时高频发布
-当前预览/最后一次接受的 `map -> camera_init`。接受条件是 fitness 达到阈值；被拒绝时保持
-上一次校正。首次 accepted 前不发布 `/localization`，因此后续 Nav2 gate 不会把“节点正在运行”
-误认为“已经定位成功”。
+`gicp_localization/` 是项目代码，使用 small_gicp 低频更新校正并高频发布当前预览或最后一次接受的 `map -> camera_init`。fitness 未达阈值时保留上一次校正；首次 accepted 前不发布 `/localization`，避免把进程存活当作定位就绪。
 
-small_gicp 克隆到 `core/localization/small_gicp`：
+small_gicp 克隆到忽略目录：
 
 ```bash
 GIT_LFS_SKIP_SMUDGE=1 git clone https://github.com/koide3/small_gicp.git --depth 1 \
@@ -51,84 +37,28 @@ git fetch origin 78f2e7a221720625eb95271ad9da21a04fb77f86 --depth 1
 git checkout 78f2e7a221720625eb95271ad9da21a04fb77f86
 ```
 
-编译依赖 `libomp-dev`。诊断发布是编译期开关：
+构建依赖 `libomp-dev`。诊断发布使用 `-DGICP_DIAGNOSTICS=ON` 编译期开关。
 
-```bash
-colcon build --packages-up-to gicp_localization \
-  --cmake-args -DGICP_DIAGNOSTICS=ON
-```
+## 正式运行与配置
 
-## 正式运行
+准备 `~/result/GlobalMap.pcd`，把 `bringup.yaml` 设为 `mode: navigation` 并选择 platform，然后通过正式入口启动。manifest 提供 `fast_lio.generated.yaml` 和 `gicp.generated.yaml`；`map_artifacts.prior_pcd` 提供本次先验地图覆盖。
 
-准备 `~/result/GlobalMap.pcd`，把 `bringup.yaml` 设置为 `mode: navigation`，并选择
-`platform: sim|real`：
+RViz 提前显示 prior map 与注册点云。初值错误时使用 “2D Pose Estimate” 发布 `/initialpose`；确认 GICP accepted 且点云贴合后再下发 Nav2 goal。
 
-```bash
-cd core
-source /opt/ros/humble/setup.bash
-source ~/res2_ws/install/setup.bash
-source install/setup.bash
-ros2 launch system_bringup bringup.launch.py
-```
+Vanjee `timestamp_unit: 0` 表示逐点 `time` 使用秒。更换固件或驱动后应复核一帧约覆盖 0–0.1 s；范围异常时先修正驱动时间语义，不得用扫描频率掩盖。
 
-shared sensor gate 通过后启动 FAST-LIO；navigation RViz 提前显示 GICP prior map 与实时注册点云。
-GICP 首次 accepted 并开始发布 `/localization` 后，才由底盘里程计 gate 放行 Nav2。
-formal bringup 从 manifest 传入 `fast_lio.generated.yaml` 的绝对路径；`slam_stack` 将其拆为
-上游 FAST-LIO 的 `config_path`/`config_file`，并永久发布 `body -> base_footprint` bridge。
-`gicp.generated.yaml` 拥有算法参数；`map_artifacts.prior_pcd` 提供运行时先验地图覆盖。
-
-## Vanjee 逐点时间检查
-
-Vanjee 配置中的 `timestamp_unit: 0` 表示每点 `time` 以秒为单位。已验证的一帧应约覆盖
-0–0.1 s；更换固件或驱动后应重新检查。若范围不符，先停下定位验收并修正驱动时间语义，
-不要通过修改扫描频率掩盖。
-
-## 独立诊断
-
-以下命令只用于分离 FAST-LIO/GICP 问题，不替代正式 bringup：
-
-```bash
-runtime_dir="$(mktemp -d /tmp/system_bringup-runtime-XXXXXX)"
-ros2 run system_bringup compile_runtime_configs \
-  --bringup-config "$PWD/bringup/system_bringup/config/bringup.yaml" \
-  --output-dir "$runtime_dir"
-ros2 launch fast_lio mapping.launch.py \
-  config_path:="$runtime_dir" config_file:=fast_lio.generated.yaml use_sim_time:=true
-ros2 launch gicp_localization localization.launch.py \
-  config_file:="$runtime_dir/gicp.generated.yaml" \
-  prior_map_path:="$HOME/result/GlobalMap.pcd"
-```
-
-```bash
-ros2 topic hz /Odometry
-ros2 topic hz /cloud_registered_body
-ros2 topic hz /localization
-ros2 run tf2_ros tf2_echo map camera_init
-ros2 run tf2_ros tf2_echo camera_init body
-```
-
-## 验收
+## 验收与诊断
 
 - `/Odometry`、`/cloud_registered_body` 持续发布，注册点云结构稳定。
-- GICP 成功加载 `GlobalMap.pcd`，`~/prior_map` 可显示。
-- `map -> camera_init -> body -> base_footprint` 连通；最后一段由 `slam_stack` permanent bridge 发布。
-- 实时注册点云与先验图贴合，错误 90° 假解被当前 fitness 阈值拒绝。
+- GICP 成功加载 prior PCD，`map -> camera_init -> body -> base_footprint` 连通且各边所有权唯一。
+- 实时注册点云与先验图贴合，错误对称假解被 fitness 阈值拒绝。
 - `/initialpose` 能在合理初值范围内重新引导配准。
+
+包级独立 launch 只用于分离 FAST-LIO/GICP 问题；必须先通过 runtime compiler 生成本次参数目录。常用观察为 `/Odometry`、`/cloud_registered_body`、`/localization`、`map -> camera_init` 和 `camera_init -> body`。
 
 ## 已知边界
 
 - GICP 是局部配准，不能从任意大偏差自动恢复。
-- `/initialpose` 的机器人基准帧与 GICP `body` 初值换算仍需最终统一。
-- bringup 当前等待 GICP 图接口和底盘里程计，不等价于“首次有效配准已完成”。下发导航目标
-  前仍应确认点云与先验图贴合。
-- 仿真点云 `time` 是适配器合成方位时间；旋转拖影应先检查该假设，而不是盲目修改 FAST-LIO。
-
-## 排错
-
-- FAST-LIO 配置缺失：检查 runtime compiler 是否完成、manifest 的 `fast_lio_path`、
-  `fast_lio.generated.yaml` 是否存在，以及 source/install freshness；陈旧时重建相应包。
-- IMU QoS 异常：确认 `fast-lio2.patch` 已 apply，再使用 `--packages-up-to fast_lio` 构建依赖。
-- 没有里程计：检查 `/points_raw`、`/imu/data`、QoS、时钟和 frame。
-- small_gicp 找不到：确认 clone 路径、固定提交和 `libomp-dev`。
-- 先验图加载失败：确认 `~/result/GlobalMap.pcd` 存在且当前用户可读。
-- fitness 持续偏低：检查初值、外参、点云时间、地图坐标和 90° 对称假解。
+- `/initialpose` 的机器人基准帧与 GICP `body` 初值换算仍需统一。
+- 下发目标前仍需确认首次有效配准；进程和 topic 存在不等价于地图贴合。
+- 仿真点云 `time` 是 adapter 合成的方位时间，旋转拖影应先检查该假设。

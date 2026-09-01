@@ -2,144 +2,41 @@
 
 Repository guidance for coding agents and maintainers.
 
-## Current execution environment
+## Authoritative documentation
 
-- The authoritative Git checkout is edited on Windows. The WSL2 Ubuntu 22.04 distribution named
-  `slam` is a CPU-only build/test executor; do not install or launch Gazebo there and do not treat it
-  as a full runtime-verification host.
-- `/home/lxx/xxsim` is a Git checkout whose local `windows` remote points to the Windows repository.
-  Before accepting WSL evidence, require a clean WSL worktree, fetch `windows`, fast-forward the
-  current branch, and verify that both checkouts resolve to the same commit.
-- ROS 2 Humble is installed under `/opt/ros/humble`; source it explicitly in non-interactive shells.
-- The colcon workspace root is `core/`, not the repository root and not a nested `src/` directory.
-- Python is the system `/usr/bin/python3` (3.10). Do not introduce a repository `.venv` or make CMake
-  cache a virtual-environment interpreter.
+- [`docs/architecture.md`](docs/architecture.md) owns current composition, runtime flow, module boundaries, and extension points.
+- [`docs/development.md`](docs/development.md) owns contributor setup, build workflow, configuration edits, and documentation checks.
+- [`docs/testing.md`](docs/testing.md) owns test tiers, commands, selection rules, and acceptance evidence.
+- Module READMEs own package-level contracts, diagnostics, limitations, and visible effects.
+- `docs/agent-notes/` owns durable rationale, alternatives, consequences, and active proposals.
 
-Typical WSL command prefix:
+Update the owning document with every changed fact. Do not restate current project facts or command catalogs in this file.
 
-```bash
-cd /home/lxx/xxsim
-git status --short                 # must be empty
-git fetch windows
-git merge --ff-only '@{u}'
+## Environment constraints
 
-cd /home/lxx/xxsim/core
-source /opt/ros/humble/setup.bash
-source install/setup.bash
-```
+- Windows is the authoritative Git checkout. The WSL2 Ubuntu 22.04 distribution `slam` is a CPU-only build/test executor, not a Gazebo or full-runtime host.
+- Before accepting WSL evidence, require a clean WSL worktree, fetch its local `windows` remote, fast-forward the branch, and verify both checkouts resolve to the same commit.
+- The colcon workspace root is `core/`; ROS 2 Humble is under `/opt/ros/humble`; system Python is `/usr/bin/python3` 3.10. Do not create a repository `.venv`.
+- Keep the existing copy-install build mode. Do not mix it with `--symlink-install` without deliberately recreating `core/build/` and `core/install/`.
 
-## Build and test
+## Repository constraints
 
-```bash
-cd core
-source /opt/ros/humble/setup.bash
-colcon build
-source install/setup.bash
-colcon test
-colcon test-result --all --verbose
-```
+- The formal runtime entry is `ros2 launch system_bringup bringup.launch.py`. Direct module launches are diagnostic paths and must not be described as equivalent full-stack entries.
+- Upstream FAST-LIO, LIO-SAM, and small_gicp clones remain ignored and pinned by their module READMEs. Project changes to those sources use tracked patch files.
+- Vendor documentation and SDK changelogs are upstream records. Do not rewrite them as project documentation.
+- Generated runtime YAML, effective reports, maps, bags, logs, build products, and Superpowers artifacts never enter Git.
+- One-time plans, migration logs, acceptance scripts, reports, and implementation progress do not enter the maintained documentation corpus. Keep reusable current commands in `docs/development.md`, `docs/testing.md`, or the owning module README; keep run evidence outside the repository.
+- Every non-trivial change updates an owning Agent Note. Use the documentation authorities above for current facts and procedures.
 
-`colcon_defaults.yaml` skips vendor/upstream packages during the default test run. Test them
-explicitly only on a compatible platform; these package exclusions are not skipped test cases. Use
-the latest WSL acceptance report and require zero errors, failures, and unexpected skips.
+## Runtime and process safety
 
-The Web asset tests require a `node` executable. This machine currently exposes Node 22.21.0 to WSL
-through `/home/lxx/.local/bin/node`, linked to the existing Windows Node installation. Verify
-`command -v node` and `node --version` before accepting a run; missing Node is an environment failure,
-not an allowed reason to skip those tests.
+- Run only one full stack at a time. Gazebo, SLAM, Nav2, RViz, and rendering can consume several gigabytes.
+- Terminate the whole launch process group; do not kill only the parent shell or use broad `pkill -f` patterns.
+- Before another run, verify Gazebo, controllers, bridges, adapters, SLAM, and Nav2 processes are gone and memory is reclaimed.
+- Web stop and command timeouts do not disable hardware and never replace a physical emergency stop or power cutoff.
 
-This workspace uses the existing copy-install build tree. Do not switch it to `--symlink-install`
-without deliberately recreating the build/install trees; mixing modes leaves incompatible
-`ament_cmake_python` directories and symlinks.
+## Git safety
 
-`xacro` is a runtime/test dependency. A successful build does not prove it is installed; verify
-`command -v xacro` when robot description or launch tests fail before inspecting source code.
-
-WSL may log `Could not enable FIFO RT scheduling policy: Operation not permitted`. This is an
-expected warning in the current test environment, not a repository defect, when controllers and
-tests otherwise pass.
-
-## Runtime entry and configuration ownership
-
-The following describes a deployment or GPU-capable runtime host. It is not an instruction to launch
-the full stack in the current CPU-only WSL build/test environment.
-
-The formal entry is:
-
-```bash
-ros2 launch system_bringup bringup.launch.py
-```
-
-`core/bringup/system_bringup/config/bringup.yaml` selects `platform: sim|real` and
-`mode: mapping|navigation`. The runtime compiler combines the selected Profile, shared native
-templates, and runtime-only inputs; it writes generated YAML to a unique
-`/tmp/system_bringup-runtime-*` directory and records their absolute paths in a manifest.
-
-- `bringup.yaml`: run selection and resource paths.
-- `config/profiles/{sim,real}.yaml`: platform facts, geometry, sensors, backends, and shared limits.
-- `config/templates/*.yaml`: complete native configs owned by system_bringup, including controllers,
-  Web UI, Nav2, FAST-LIO, GICP, LIO-SAM, sensor gate, and the selected sensor backend.
-- FAST-LIO, GICP, LIO-SAM, Nav2, controllers, Web UI, sensor gate, and the selected sensor backend
-  consume manifest-referenced generated YAML.
-- Untracked upstream source defaults are not rewritten; generated configuration overrides them at
-  runtime.
-- Generated `/tmp` files and effective reports are never source files and never enter Git.
-
-The source config tree selected by `bringup.yaml` is the only active template source. Installed
-templates are packaging/static-acceptance evidence only. Production runtime consistency checks
-source/install byte freshness only for the launch/Python runtime files ROS actually loads.
-
-Do not pass ad-hoc overrides around the compiler. Direct module launches are diagnostic paths and
-must not be documented as equivalent to the formal full-stack entry.
-
-## Repository structure
-
-Six modules live under `core/`:
-
-- `robot`: URDF, ros2_control, command gate, 8030D and Vanjee drivers.
-- `simulation`: Gazebo Harmonic world, bridge, and lidar point-cloud adapter.
-- `mapping`: LIO-SAM clone plus tracked patch and map-save helper.
-- `localization`: FAST-LIO clone plus tracked patch, small_gicp, and in-repo GICP localization.
-- `navigation`: PCD projection, Nav2 launch/config, and Twist conversion.
-- `bringup`: runtime compiler, consistency/sensor gates, Web UI, and full-stack orchestration.
-
-Upstream FAST-LIO, LIO-SAM, and small_gicp clones are gitignored and pinned by their module docs.
-Local upstream changes belong in tracked patch files. Vendor documentation and SDK changelogs are
-upstream records; do not rewrite them as project documentation.
-
-## Runtime contracts
-
-- Sensor topics: `/points_raw`, `/imu/data`; frames: `velodyne`, `imu_link`.
-- Point fields: `x/y/z/intensity/ring/time`.
-- Localization TF: `map -> camera_init -> body -> base_footprint -> base_link`.
-- Wheel odometry topic: `/base_controller/odom`; wheel odom TF is disabled.
-- Full bringup control: Nav2 `/cmd_vel_auto`, Web `/cmd_vel_manual`, `cmd_vel_gate` as the only
-  `/cmd_vel` publisher.
-- Sim uses generated lidar-adapter config; real uses generated Vanjee config. Both pass through the
-  shared sensor contract gate before SLAM starts.
-
-## Process and memory safety
-
-Gazebo, FAST-LIO, GICP, Nav2, RViz, and rendering can consume several gigabytes. Run only one full
-stack at a time and check memory before launch.
-
-- Do not orphan `ros2 launch` children by killing only the parent shell.
-- Prefer a dedicated process group and terminate the whole group.
-- Do not use broad `pkill -f` patterns; they can match the cleanup shell and leave children behind.
-- Before another run, verify Gazebo, controller manager, bridge, adapter, SLAM, and Nav2 processes are
-  gone and memory has been reclaimed.
-
-## Git and concurrent-session safety
-
-- Never push, create/merge a PR, or otherwise change a remote without explicit human approval.
-- Before broad edits, capture HEAD and check `git status`. If another session moves HEAD or changes an
-  overlapping file, stop and reassess instead of overwriting it.
-- Preserve unrelated user changes. Do not switch branches in a shared working directory.
-- Keep Superpowers specs, plans, caches, and logs out of Git.
-
-## Documentation ownership
-
-- Root `README.md`: setup, architecture, build/test, supported full-stack workflow, module status,
-  unfinished product direction, and milestones.
-- Module README: module-specific integration, diagnostics, acceptance, and troubleshooting.
-- `PROGRESS.md`: active profile-migration record; do not use it as a general runbook.
+- Never push, create or merge a PR, or otherwise change a remote without explicit human approval in the current conversation.
+- Before broad edits, record HEAD and inspect `git status`. Stop if another session changes HEAD or an overlapping file.
+- Preserve unrelated user changes and do not switch branches in a shared working directory.

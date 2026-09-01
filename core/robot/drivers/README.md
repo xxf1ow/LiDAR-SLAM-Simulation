@@ -1,7 +1,6 @@
 # 真实设备驱动
 
-本目录存放机器人实机使用的厂商 ROS 驱动和薄适配包。每种设备用一个目录
-聚合，避免测试工具或厂商包散落在仓库根目录：
+本目录按设备聚合厂商 ROS 驱动和薄项目适配：
 
 ```text
 drivers/
@@ -9,16 +8,11 @@ drivers/
 │   └── can_driver_8030D_sdk/
 └── lidar_<model>/
     ├── <vendor_driver_package>/
-    └── <project_adapter_package>/   # 仅在确有需要时添加
+    └── <project_adapter_package>/
 ```
 
-约定：
-
-- 厂商包尽量保持原样；项目修改放在独立适配包或明确记录的补丁中。
-- 原始 tar/zip 仅本地归档，不与解压目录重复提交。
-- 正式网页控制位于 `core/bringup/robot_web_ui/`，通过 `cmd_vel_gate` 走统一
-  `/cmd_vel` 控制器路径，不放在厂商驱动目录。
-- 正式运行时，同一个串口、CAN 或 USB 设备只能有一个进程独占。
-- [Vanjee 722 ROS 2 驱动](lidar_vanjee_722/vanjee_lidar_ros/README.md)
-  向上层提供 `/points_raw` 和 `/imu/data` 标准消息契约。正式运行参数由
-  `system_bringup` 根据所选 Profile 生成，不在驱动目录维护第二份平台事实。
+- 厂商包尽量保持原样；项目修改使用独立适配包或跟踪 patch。
+- 原始 tar/zip 只保存在本地忽略目录，不与解压内容重复提交。
+- 正式 Web 控制位于 `core/bringup/robot_web_ui/`，经 `cmd_vel_gate` 使用统一 `/cmd_vel` 路径。
+- 一个串口、CAN 或 USB 设备在运行时只能由一个进程独占。
+- [Vanjee 722 适配](lidar_vanjee_722/vanjee_lidar_ros/README.md)提供 `/points_raw` 和 `/imu/data`；正式参数由 `system_bringup` 生成，不在驱动目录复制平台事实。
