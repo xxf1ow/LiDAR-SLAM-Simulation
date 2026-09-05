@@ -20,7 +20,7 @@ GET /api/assistant-state
 ```
 
 - `mode`：`automatic`、`manual` 或 `unknown`。
-- `navigation`：`idle`、`sending`、`navigating`、`planning`、`following`、`canceling`、`succeeded`、`canceled`、`failed`，或恢复阶段 `clearing_global_plan`、`clearing_local_control`、`clearing_global_recovery`、`clearing_local_recovery`、`spinning`、`waiting`、`backing_up`。
+- `navigation`：`idle`、`sending`、`navigating`、`planning`、`following`、`recovering`、`canceling`、`succeeded`、`canceled` 或 `failed`。执行任一导航恢复行为时统一返回 `recovering`，客户端不需要识别具体的行为树节点。
 - `distance_m`：剩余距离（米），不可用时为 `null`。
 - `issue`：最重要的当前异常或 `null`；优先级依次为 `feedback_unavailable`、`map_unavailable`、`localization_unavailable`、`navigation_unavailable`。
 

@@ -1069,11 +1069,7 @@ def test_assistant_state_compacts_navigation_and_prioritizes_issues(
         "issue": None,
     }
 
-    state["navigation"].update(
-        phase="clearing_local_recovery",
-        distance_remaining=float("nan"),
-    )
-    assert node.assistant_state()["navigation"] == "clearing_local_recovery"
+    state["navigation"]["distance_remaining"] = float("nan")
     assert node.assistant_state()["distance_m"] is None
 
     state["motion"]["feedback_fresh"] = False
@@ -1096,6 +1092,37 @@ def test_assistant_state_compacts_navigation_and_prioritizes_issues(
     compact = node.assistant_state()
     assert compact["mode"] == "unknown"
     assert compact["navigation"] == "failed"
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "clearing_global_plan",
+        "clearing_local_control",
+        "clearing_global_recovery",
+        "clearing_local_recovery",
+        "spinning",
+        "waiting",
+        "backing_up",
+    ],
+)
+def test_assistant_state_aggregates_recovery_phases(node_module, phase):
+    node = bare_node(node_module)
+    node.navigation_state = lambda: {
+        "gate_mode": "automatic",
+        "localized": True,
+        "localization_error": None,
+        "motion": {"feedback_fresh": True},
+        "navigation": {
+            "action_server_ready": True,
+            "goal_status": "navigating",
+            "phase": phase,
+            "distance_remaining": 3.8,
+        },
+        "layers": {"static": {}},
+    }
+
+    assert node.assistant_state()["navigation"] == "recovering"
 
 
 def test_local_costmap_state_reads_one_atomic_layer_projection(node_module):

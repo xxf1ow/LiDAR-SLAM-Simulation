@@ -1,12 +1,11 @@
 /.*/
-*superpowers*
 *__pycache__*
 **/build/
 **/install/
 **/log/
 
-/models/*
-/results/*
+/models/
+/results/
 /core/mapping/LIO-SAM/
 /core/localization/FAST_LIO/
 /core/localization/small_gicp/

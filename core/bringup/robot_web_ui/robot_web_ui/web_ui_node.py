@@ -71,6 +71,9 @@ _RECOVERY_PHASE_NODES = (
     "Wait",
     "BackUp",
 )
+_RECOVERY_PHASES = frozenset(
+    _BT_PHASES[name] for name in _RECOVERY_PHASE_NODES
+)
 
 
 class WebUiNode(Node):
@@ -854,11 +857,12 @@ class WebUiNode(Node):
         navigation_state = state["navigation"]
         goal_status = navigation_state["goal_status"]
         phase = navigation_state["phase"]
-        navigation = (
-            phase
-            if goal_status == "navigating" and isinstance(phase, str)
-            else goal_status
-        )
+        if goal_status == "navigating" and isinstance(phase, str):
+            navigation = (
+                "recovering" if phase in _RECOVERY_PHASES else phase
+            )
+        else:
+            navigation = goal_status
         mode = state["gate_mode"]
         if mode not in {"automatic", "manual"}:
             mode = "unknown"
