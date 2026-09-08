@@ -710,6 +710,49 @@ def _run_browser_scenario(scenario):
             return;
           }}
 
+          if (scenario === "automatic-command-response-is-rate-limited") {{
+            await resolveNext({{payload: {{
+              ok: true,
+              session_id: "session-a",
+              mode: "automatic"
+            }}}});
+            assert.strictEqual(currentMode, "automatic");
+            const firstCommandIndex = pending.findIndex(
+              (request) => request.path === "/api/manual-command"
+            );
+            const firstCommand = pending.splice(firstCommandIndex, 1)[0];
+            assert(firstCommand);
+            assert.strictEqual(
+              requests.filter(
+                (request) => request.path === "/api/manual-command"
+              ).length,
+              1
+            );
+
+            firstCommand.resolve({{payload: {{
+              ok: true,
+              accepted: true,
+              sequence: 1,
+              last_sequence: 1,
+              mode: "automatic"
+            }}}});
+            await flush();
+            assert.strictEqual(
+              requests.filter(
+                (request) => request.path === "/api/manual-command"
+              ).length,
+              1
+            );
+
+            await tick();
+            const commands = requests.filter(
+              (request) => request.path === "/api/manual-command"
+            );
+            assert.strictEqual(commands.length, 2);
+            assert.strictEqual(commands[1].body.sequence, 2);
+            return;
+          }}
+
           await resolveNext({{
             payload: {{
               ok: true,
@@ -1384,6 +1427,7 @@ def _run_browser_scenario(scenario):
         "contextual-layout",
         "initial-and-authoritative-interlock",
         "motion-feedback",
+        "automatic-command-response-is-rate-limited",
         "sequenced-command-stream",
         "all-stop-paths",
         "stale-button-events",

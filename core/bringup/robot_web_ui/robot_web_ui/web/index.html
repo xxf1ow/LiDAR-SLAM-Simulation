@@ -612,7 +612,11 @@
       modeSwitchPending = false;
       modeSwitchTarget = null;
     }
-    if (currentMode !== "manual" && !skipStop) stopMotion();
+    if (
+      previousMode === "manual"
+      && currentMode !== "manual"
+      && !skipStop
+    ) stopMotion();
     if (currentMode !== "automatic") {
       closeSaveParkingForm();
       if (parkingDrawerOpen) {
