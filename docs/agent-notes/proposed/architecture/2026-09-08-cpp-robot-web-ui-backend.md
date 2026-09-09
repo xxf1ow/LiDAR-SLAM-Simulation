@@ -12,7 +12,7 @@ The Web server is a long-running control-plane process on the same board as SLAM
 
 ## Proposal
 
-Convert `robot_web_ui` from `ament_python` to `ament_cmake` and implement its complete backend in C++17. The package will install one executable containing one ROS node named `robot_web_ui` and one cpp-httplib HTTP server. HTML, JavaScript, HTTP URLs, JSON fields, status codes, and binary map formats will remain compatible.
+Convert `robot_web_ui` from `ament_python` to `ament_cmake` and implement its complete backend in C++17. The package will install one executable containing one ROS node named `robot_web_ui` and one cpp-httplib HTTP server. HTTP URLs, status codes, parking data, and binary map formats will remain compatible. The browser and JSON responses will drop measured linear/angular velocity feedback because the C++ node deliberately does not subscribe to odometry; all other fields remain compatible except for the navigation-phase simplification below.
 
 The C++ node will consume `/gicp_localization/localization_snapshot` and both costmaps directly. It will not introduce `robot_web_ui_bridge`, `UiTelemetry`, `UiGrid`, or `UiLocalGrid`, and it will not subscribe to `/tf`, `/tf_static`, `/base_controller/odom`, `/localization`, or `/behavior_tree_log`.
 
@@ -34,6 +34,8 @@ With `navigation_sources_enabled=true`, the node will subscribe to the GICP loca
 
 Action feedback will only validate the current goal identity and update `distance_remaining`. It will not generate JSON, UI text, compressed data, or another ROS message. Costmaps and `/plan` will rebuild binary data, gzip content, revision, and ETag only when metadata or content changes. `/plan` will be processed only while a goal submitted through this node is active. HTTP polling will serialize small current-state projections and reuse prebuilt binary snapshots.
 
+The navigation-state `motion` object and action-response `linear_x`, `angular_z`, and `feedback_fresh` fields will be absent. The assistant state will not report `feedback_unavailable`; map, localization, and navigation readiness remain its health inputs. The Web page will not show a measured-velocity row. Manual commands and the gate's command timeout remain unchanged.
+
 ## Navigation contract
 
 Navigation states remain `idle`, `sending`, `navigating`, `canceling`, `succeeded`, `canceled`, and `failed`. `POST /api/navigation-goal` will retain map revision, bounds, automatic-mode, localization, Action Server, and active-goal checks. A successful asynchronous submission will return HTTP 202 with `goal_status: sending`; this response means that submission started, not that Nav2 accepted the goal. Parking-point navigation will resolve the stored pose and use the same goal path.
@@ -48,7 +50,7 @@ The navigation-state `phase` field will remain present for JSON compatibility bu
 
 `web_ui_node.h/.cpp` will define the concrete root ROS capability and own subordinate resources. `http_server.h/.cpp` will own HTTP routing without exposing httplib types. `web_types.h` will contain ROS- and HTTP-independent value types. `map_snapshot.h/.cpp` will own map decoding, grid and path validation, binary encoding, change detection, gzip, and ETag generation. `parking_point_store.h/.cpp` will own parking-point validation and atomic sidecar replacement. Stateless one-use logic will remain translation-unit-local free functions rather than new manager or controller classes.
 
-Third-party implementation dependencies are `cpp-httplib`, `nlohmann/json`, `yaml-cpp`, and zlib. websocketpp, standalone Asio, OpenCV, and a lock-free queue library are not required. Third-party headers and types will not leak through the root node's public interface. The workspace-wide colcon defaults continue to select Release unless the caller explicitly supplies another `CMAKE_BUILD_TYPE`.
+Third-party implementation dependencies are `cpp-httplib`, `nlohmann/json`, `yaml-cpp`, zlib, OpenSSL libcrypto for the existing SHA-256 ETag contract, and `tl::expected` for explicit fallible C++ interfaces. websocketpp, standalone Asio, OpenCV, and a lock-free queue library are not required. Third-party headers and types will not leak through the root node's public interface. The workspace-wide colcon defaults continue to select Release unless the caller explicitly supplies another `CMAKE_BUILD_TYPE`.
 
 ## Errors and lifecycle
 
@@ -72,7 +74,7 @@ Startup must bind the HTTP port successfully before entering steady-state execut
 - The existing browser assets, HTTP paths, response fields, status codes, parking-point sidecar semantics, and binary map formats remain compatible except for the explicitly simplified navigation phase text.
 - Focused tests cover snapshot content changes, parking-point persistence, navigation generations and terminal transitions, representative HTTP success and failure paths, and package topology. The migration does not reproduce every Python edge-case test.
 - A full `sim + navigation` run through the formal bringup entry verifies localization, maps, path display, manual endpoints, and successful navigation while recording Web UI and total CPU for closed-page, open-idle, and active-navigation states.
-- Under the same simulation scenario, active navigation no longer produces the sustained approximately 25–30% Web UI CPU observed with the Python backend and shows a substantial reduction from the recorded baseline. If it still rises materially, the CPU problem remains unresolved regardless of build and unit-test results.
+- Under the same simulation scenario, active navigation does not produce the sustained approximately 25–30% Web UI CPU observed with the Python backend and shows a substantial reduction from the recorded baseline. If it still rises materially, the CPU problem remains unresolved regardless of build and unit-test results.
 - Every simulation run terminates its launch and leaves no ROS, Gazebo, Nav2, GICP, or Web UI process behind; available memory recovers after cleanup.
 
 ## Risks
