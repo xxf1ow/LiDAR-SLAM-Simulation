@@ -1,4 +1,5 @@
 #include "gicp_localization/gicp_localization_node.hpp"
+#include "gicp_localization/localization_snapshot.hpp"
 #include "gicp_localization/pose_math.hpp"
 #include "gicp_localization/prior_map.hpp"
 
@@ -99,6 +100,11 @@ GicpLocalizationNode::GicpLocalizationNode() : rclcpp::Node("gicp_localization")
   tf_timer_ = create_wall_timer(
       std::chrono::duration<double>(1.0 / tf_pub_freq),
       std::bind(&GicpLocalizationNode::tfTimerCb, this), fast_group_);
+  ui_snapshot_pub_ = create_publisher<tf2_msgs::msg::TFMessage>(
+      "~/localization_snapshot", rclcpp::QoS(1).reliable().durability_volatile());
+  ui_snapshot_timer_ = create_wall_timer(
+      std::chrono::milliseconds(200),
+      std::bind(&GicpLocalizationNode::ui_snapshot_timer_cb, this), fast_group_);
 }
 
 void GicpLocalizationNode::cloudCb(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
@@ -244,6 +250,26 @@ void GicpLocalizationNode::tfTimerCb() {
     o.pose.pose = tf2::toMsg(T_mb);
     localization_publisher->publish(o);
   }
+}
+
+void GicpLocalizationNode::ui_snapshot_timer_cb()
+{
+  Eigen::Isometry3d map_to_odom;
+  std::optional<Eigen::Isometry3d> odom_to_base;
+  bool localization_ready = false;
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    map_to_odom = T_map_odom_;
+    odom_to_base = latest_odom_;
+    localization_ready = static_cast<bool>(loc_pub_);
+  }
+  if (!odom_to_base || !localization_ready) {
+    return;
+  }
+
+  const builtin_interfaces::msg::Time stamp = now();
+  ui_snapshot_pub_->publish(make_localization_snapshot(
+      map_to_odom, *odom_to_base, stamp, map_frame_, odom_frame_, base_frame_));
 }
 
 }  // namespace gicp_localization

@@ -4,7 +4,7 @@ Status: proposed
 
 ## Problem
 
-The [Robot Web UI data bridge](../../implemented/architecture/2026-09-07-robot-web-ui-data-bridge.md) removes raw odometry, localization, and TF traffic from `rclpy`, reducing the server's idle CPU cost. Opening the page during an active navigation task still raises `robot_web_ui` from approximately 7–9% CPU to 25–30% on the Jetson.
+An experimental branch moved raw odometry, localization, and TF traffic out of `rclpy`, reducing the server's idle CPU cost. Opening the page during an active navigation task still raised `robot_web_ui` from approximately 7–9% CPU to 25–30% on the Jetson.
 
 Simulation isolates two remaining navigation-time inputs at approximately 50 Hz: `/behavior_tree_log` and NavigateToPose feedback. A Python ActionClient receives and deserializes feedback and wakes its executor even when application work is small; `/plan` can also make Python traverse and encode paths while navigation is active. Callback throttling after receipt cannot remove DDS take, Python message construction, or executor wake-up costs.
 
@@ -14,11 +14,11 @@ The Web server is a long-running control-plane process on the same board as SLAM
 
 Convert `robot_web_ui` from `ament_python` to `ament_cmake` and implement its complete backend in C++17. The package will install one executable containing one ROS node named `robot_web_ui` and one cpp-httplib HTTP server. HTML, JavaScript, HTTP URLs, JSON fields, status codes, and binary map formats will remain compatible.
 
-The C++ node will absorb `robot_web_ui_bridge`, and the repository will remove that package together with `UiTelemetry`, `UiGrid`, and `UiLocalGrid`. The node will consume the existing `/gicp_localization/localization_snapshot` `TFMessage` and both costmaps directly. It will not subscribe to `/tf`, `/tf_static`, `/base_controller/odom`, `/localization`, or `/behavior_tree_log`.
+The C++ node will consume `/gicp_localization/localization_snapshot` and both costmaps directly. It will not introduce `robot_web_ui_bridge`, `UiTelemetry`, `UiGrid`, or `UiLocalGrid`, and it will not subscribe to `/tf`, `/tf_static`, `/base_controller/odom`, `/localization`, or `/behavior_tree_log`.
 
 All backend features will move to C++: static-map loading, localization state, global and local costmaps, path display, NavigateToPose goal and cancellation, initial-pose publication, manual velocity control, mode switching, parking-point CRUD and navigation, JSON sidecar persistence, HTTP routing, and static asset serving. No Python runtime or Python ROS node will remain in this package.
 
-The current Bridge architecture remains the shipped authority while this proposal is unimplemented. Once the migration ships and its verification evidence is recorded, this Note will absorb the still-useful rationale and consequences from the Bridge Note before that fully superseded Note is removed or archived according to the Agent Note lifecycle rules.
+The experimental Bridge branch remains unmerged and serves only as a CPU baseline and implementation reference. This proposal starts from the common `master` baseline and replaces that experiment rather than depending on it.
 
 ## Runtime structure
 
@@ -68,7 +68,7 @@ Startup must bind the HTTP port successfully before entering steady-state execut
 
 ## Acceptance criteria
 
-- `robot_web_ui` builds as an `ament_cmake` C++17 package and installs one backend executable; its Python backend and the `robot_web_ui_bridge` package and messages are absent.
+- `robot_web_ui` builds as an `ament_cmake` C++17 package and installs one backend executable; its Python backend is absent, and no Bridge package or messages are introduced.
 - The existing browser assets, HTTP paths, response fields, status codes, parking-point sidecar semantics, and binary map formats remain compatible except for the explicitly simplified navigation phase text.
 - Focused tests cover snapshot content changes, parking-point persistence, navigation generations and terminal transitions, representative HTTP success and failure paths, and package topology. The migration does not reproduce every Python edge-case test.
 - A full `sim + navigation` run through the formal bringup entry verifies localization, maps, path display, manual endpoints, and successful navigation while recording Web UI and total CPU for closed-page, open-idle, and active-navigation states.
