@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 from pathlib import Path
+import subprocess
 import sys
 import types
 import xml.etree.ElementTree as ET
@@ -20,6 +21,7 @@ REAL_CHASSIS = ROOT / "core/robot/robot_bringup/launch/real_chassis.launch.py"
 SENSOR_GATE = ROOT / "core/bringup/system_bringup/system_bringup/sensor_gate_node.py"
 SETUP = ROOT / "core/bringup/system_bringup/setup.py"
 MANIFEST = ROOT / "core/bringup/system_bringup/package.xml"
+ROBOT_WEB_UI_PACKAGE = ROOT / "core/bringup/robot_web_ui"
 ROBOT_GEOMETRY_ARGUMENTS = {
     "base_length", "base_width", "base_height", "base_link_height",
     "wheel_radius", "wheel_width", "wheel_separation",
@@ -959,6 +961,52 @@ def test_generated_slam_configs_skip_package_config_preflight():
     function = _function(_tree(BRINGUP), "_bringup")
     assert not _calls(function, "require_runtime_config_file")
     assert not _calls(function, "_pkg_config")
+
+
+def test_colcon_discovers_one_cmake_web_ui_package_without_bridge():
+    result = subprocess.run(
+        ["colcon", "list"],
+        cwd=ROOT / "core",
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    packages = {
+        fields[0]: fields[1:]
+        for line in result.stdout.splitlines()
+        if (fields := line.split("\t"))
+    }
+
+    assert packages["robot_web_ui"] == [
+        "bringup/robot_web_ui", "(ros.ament_cmake)"
+    ]
+    assert "robot_web_ui_bridge" not in packages
+
+
+def test_python_web_ui_backend_modules_are_not_discoverable():
+    modules = (
+        "robot_web_ui.web_ui_node",
+        "robot_web_ui.http_server",
+        "robot_web_ui.parking_point_store",
+    )
+    script = (
+        "import importlib.util, sys; "
+        f"names = {modules!r}; "
+        "parent = importlib.util.find_spec('robot_web_ui'); "
+        "found = [] if parent is None else "
+        "[name for name in names if importlib.util.find_spec(name)]; "
+        "print(','.join(found)); sys.exit(bool(found))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=ROBOT_WEB_UI_PACKAGE,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout or result.stderr
 
 
 def test_bringup_constructs_one_shared_control_and_slam_layer_before_branching():

@@ -74,6 +74,8 @@ Web  ──> /cmd_vel_manual┘                               │
 
 `robot_web_ui` 可执行文件在一个进程中组合 C++ ROS 节点和 cpp-httplib HTTP 服务。HTTP 先绑定端口，主线程随后运行单线程 ROS executor；HTTP 工作者调用线程安全的节点操作，二进制响应持有不可变快照。退出时 HTTP 停止并 join 后才销毁节点，且不取消导航或切换控制模式。
 
+navigation 模式下，`robot_web_ui` 直接订阅 5 Hz `/gicp_localization/localization_snapshot`、全局与局部代价地图、该节点当前目标对应的 `/plan`，以及 `/cmd_vel_gate/mode`。它不订阅 `/tf`、`/tf_static`、`/base_controller/odom`、`/localization` 或 `/behavior_tree_log`。mapping 模式将生成参数 `navigation_sources_enabled` 设为 `false`，因此不创建导航数据订阅或 NavigateToPose client，但人工命令和 gate 模式切换仍可用。
+
 ## 时钟和启动边界
 
 功能等待使用节点自身的 ROS 时钟。仿真 graph discovery 可用墙钟限制必需 topic 始终未出现的情况；topic 出现后的 settling、传感器稳定窗口和功能 timeout 使用 ROS 时钟。仿真暂停、低 RTF 或 `/clock` 冻结时保持等待，时钟恢复后继续。

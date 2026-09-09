@@ -57,7 +57,6 @@
       text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
     }
     #statusStrip p { margin: 0 0 4px; }
-    #feedbackState::before { content: "· "; }
     #navigationStatus { color: #c2410c; }
     .notice { color: #b91c1c; }
     #controlDock {
@@ -184,11 +183,6 @@
 <main>
   <section id="statusStrip" class="overlay" aria-label="机器人状态">
     <p id="modeStatus">控制模式：状态同步中</p>
-    <p id="motionStatus">
-      线速度 <strong id="linearVelocity">--</strong>
-      · 角速度 <strong id="angularVelocity">--</strong>
-      <span id="feedbackState">底盘反馈中断</span>
-    </p>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
     <p id="navigationStatus" role="status" aria-live="polite"></p>
   </section>
@@ -247,9 +241,6 @@
   const modeStatus = document.getElementById("modeStatus");
   const notice = document.getElementById("notice");
   const modeToggle = document.getElementById("modeToggle");
-  const linearVelocity = document.getElementById("linearVelocity");
-  const angularVelocity = document.getElementById("angularVelocity");
-  const feedbackState = document.getElementById("feedbackState");
   const mapActions = document.getElementById("mapActions");
   const navigationActions = document.getElementById("navigationActions");
   const parkingActions = document.getElementById("parkingActions");
@@ -301,24 +292,6 @@
     signalCommandChange();
   }
 
-  function applyMotionFeedback(payload) {
-    if (
-      payload.feedback_fresh === true
-      && Number.isFinite(payload.linear_x)
-      && Number.isFinite(payload.angular_z)
-    ) {
-      linearVelocity.textContent = `${payload.linear_x.toFixed(2)} m/s`;
-      angularVelocity.textContent = `${payload.angular_z.toFixed(2)} rad/s`;
-      feedbackState.textContent = "";
-      feedbackState.hidden = true;
-      return;
-    }
-    linearVelocity.textContent = "--";
-    angularVelocity.textContent = "--";
-    feedbackState.textContent = "底盘反馈中断";
-    feedbackState.hidden = false;
-  }
-
   async function post(path, body, options = {}) {
     const requestOptions = {
       method: "POST",
@@ -328,7 +301,6 @@
     if (options.signal !== undefined) requestOptions.signal = options.signal;
     const response = await fetch(path, requestOptions);
     const payload = await response.json();
-    if (options.applyFeedback !== false) applyResponseFeedback(payload);
     if (!response.ok) {
       const error = new Error(
         payload.error || `HTTP ${response.status}`
@@ -337,16 +309,6 @@
       throw error;
     }
     return payload;
-  }
-
-  function applyResponseFeedback(payload) {
-    if (
-      Object.prototype.hasOwnProperty.call(payload, "linear_x")
-      && Object.prototype.hasOwnProperty.call(payload, "angular_z")
-      && Object.prototype.hasOwnProperty.call(payload, "feedback_fresh")
-    ) {
-      applyMotionFeedback(payload);
-    }
   }
 
   async function get(path) {
@@ -421,9 +383,7 @@
     confirmSaveParkingPoint.disabled = true;
     cancelSaveParkingPoint.disabled = true;
     try {
-      await post("/api/parking-points/save", {name: parkingName.value}, {
-        applyFeedback: false
-      });
+      await post("/api/parking-points/save", {name: parkingName.value});
       closeSaveParkingForm();
       clearParkingNotice();
       await refreshParkingPoints();
@@ -506,9 +466,7 @@
     if (action === "navigate") {
       closeParkingDrawer();
       try {
-        await post("/api/parking-points/navigate", {name}, {
-          applyFeedback: false
-        });
+        await post("/api/parking-points/navigate", {name});
       } catch (error) {
         if (mapView) mapView.showNavigationRequestFailure(error);
       }
@@ -526,9 +484,7 @@
     if (action !== "delete-confirm") return;
     target.disabled = true;
     try {
-      await post("/api/parking-points/delete", {name}, {
-        applyFeedback: false
-      });
+      await post("/api/parking-points/delete", {name});
       clearParkingNotice();
       await refreshParkingPoints();
     } catch (error) {
@@ -660,7 +616,6 @@
     if (payload.reason === "stale_sequence") return false;
     if (!modeSwitchInProgress()) {
       applyResponseMode(payload);
-      applyResponseFeedback(payload);
       if (noticeOwner === "motion") {
         noticeOwner = null;
         notice.textContent = "";
@@ -706,8 +661,7 @@
       direction: desiredDirection,
       speed_percent: Number(speed.value)
     }, {
-      signal: controller.signal,
-      applyFeedback: false
+      signal: controller.signal
     }).then(
       (payload) => handleManualResponse(payload, snapshot)
     ).catch(
@@ -843,11 +797,10 @@
     stopMotion();
     renderControls();
     try {
-      const payload = await post(path, {}, {applyFeedback: false});
+      const payload = await post(path, {});
       if (requestGeneration !== modeGeneration) return;
       modeGeneration += 1;
       settledGeneration = modeGeneration;
-      applyResponseFeedback(payload);
       applyResponseMode(payload, {skipStop: true});
       noticeOwner = "mode";
       notice.textContent = payload.pending
@@ -857,7 +810,6 @@
       if (requestGeneration !== modeGeneration) return;
       modeGeneration += 1;
       settledGeneration = modeGeneration;
-      if (error.payload) applyResponseFeedback(error.payload);
       if (error.payload) applyResponseMode(error.payload);
       modeSwitchPending = false;
       modeSwitchTarget = null;

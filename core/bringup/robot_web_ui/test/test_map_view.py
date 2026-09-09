@@ -7,7 +7,7 @@ import pytest
 
 
 ROOT = Path(__file__).parents[1]
-MAP_VIEW = ROOT / "robot_web_ui" / "web" / "map_view.js"
+MAP_VIEW = ROOT / "web" / "map_view.js"
 NODE = shutil.which("node")
 
 
@@ -781,18 +781,7 @@ def _run_map_scenario(scenario):
             }));
             return;
           }
-          if (scenario === "navigation-phase-labels") {
-            const phaseLabels = {
-              planning: "正在规划路径",
-              following: "正在跟踪路径",
-              clearing_global_plan: "路径规划受阻，正在清理全局代价地图",
-              clearing_local_control: "路径跟踪受阻，正在清理局部代价地图",
-              clearing_global_recovery: "导航恢复：正在清理全局代价地图",
-              clearing_local_recovery: "导航恢复：正在清理局部代价地图",
-              spinning: "导航恢复：正在原地旋转",
-              waiting: "导航恢复：正在等待障碍消退",
-              backing_up: "导航恢复：正在后退"
-            };
+          if (scenario === "navigation-lifecycle-labels") {
             const navigation = (overrides = {}) => ({
               initial_pose_ready: true,
               action_server_ready: true,
@@ -811,42 +800,28 @@ def _run_map_scenario(scenario):
               navigation: navigation(overrides)
             });
             responses.push(bytes([0, 0, 0, 0]));
-            for (const [phase, label] of Object.entries(phaseLabels)) {
-              await view.applyState(availableState({phase}));
-              assert.strictEqual(
-                navigationStatus.textContent,
-                `${label}，剩余 3.5 米`,
-                phase
-              );
-            }
             await view.applyState(availableState({phase: null}));
             assert.strictEqual(
               navigationStatus.textContent,
-              "导航中，剩余 3.5 米"
+              "导航中（剩余 3.5 米）"
             );
-            await view.applyState(availableState({phase: "unknown_phase"}));
-            assert.strictEqual(
-              navigationStatus.textContent,
-              "导航中，剩余 3.5 米"
-            );
-            await view.applyState(availableState({phase: "planning", distance_remaining: null}));
-            assert.strictEqual(navigationStatus.textContent, "正在规划路径");
+            await view.applyState(availableState({distance_remaining: null}));
+            assert.strictEqual(navigationStatus.textContent, "导航中");
 
             for (const [goalStatus, expected] of [
-              ["sending", "导航目标发送中"],
-              ["canceling", "导航取消中"],
-              ["succeeded", "导航已到达目标"],
-              ["canceled", "导航已取消"],
+              ["sending", "发送中"],
+              ["canceling", "取消中"],
+              ["succeeded", "已到达"],
+              ["canceled", "已取消"],
               ["failed", "导航失败"]
             ]) {
               await view.applyState(availableState({
                 goal_status: goalStatus,
-                phase: "planning",
-                distance_remaining: 3.5
+                phase: null,
+                distance_remaining: 3.5,
+                message: "backend detail"
               }));
-              assert(navigationStatus.textContent.startsWith(expected));
-              assert(!navigationStatus.textContent.includes("正在规划路径"));
-              assert(!navigationStatus.textContent.includes("剩余"));
+              assert.strictEqual(navigationStatus.textContent, expected);
             }
             return;
           }
@@ -1031,14 +1006,16 @@ def _run_map_scenario(scenario):
             assert.strictEqual(navigationButtons.initialPose.disabled, true);
             assert.strictEqual(navigationButtons.navigationAction.disabled, false);
             assert.strictEqual(navigationButtons.navigationAction.textContent, "取消导航");
-            assert(navigationStatus.textContent.includes("3.5"));
+            assert.strictEqual(
+              navigationStatus.textContent, "导航中（剩余 3.5 米）"
+            );
             assert(!navigationStatus.textContent.includes("navigating"));
             assert(!/%%|ETA|预计/.test(navigationStatus.textContent));
 
             for (const [goalStatus, expected] of [
-              ["sending", "发送"], ["canceling", "取消"],
-              ["succeeded", "到达"], ["canceled", "已取消"],
-              ["failed", "失败"]
+              ["sending", "发送中"], ["canceling", "取消中"],
+              ["succeeded", "已到达"], ["canceled", "已取消"],
+              ["failed", "导航失败"]
             ]) {
               await view.applyState(availableState({
                 navigation: navigation({
@@ -1052,11 +1029,11 @@ def _run_map_scenario(scenario):
                 ["sending", "navigating", "canceling"].includes(goalStatus),
                 goalStatus
               );
-              assert(navigationStatus.textContent.includes(expected), goalStatus);
+              assert.strictEqual(navigationStatus.textContent, expected);
               assert(!navigationStatus.textContent.includes(goalStatus), goalStatus);
               assert(!/%%|ETA|预计/.test(navigationStatus.textContent), goalStatus);
             }
-            assert(navigationStatus.textContent.includes("planner stopped"));
+            assert(!navigationStatus.textContent.includes("planner stopped"));
 
             await view.applyState(availableState({
               map_error: "map offline",
@@ -1465,8 +1442,8 @@ def test_navigation_action_availability_and_human_status_labels():
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")
-def test_navigation_phase_labels_copy_and_distance_composition():
-    _run_map_scenario("navigation-phase-labels")
+def test_navigation_lifecycle_copy_and_distance_composition():
+    _run_map_scenario("navigation-lifecycle-labels")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")

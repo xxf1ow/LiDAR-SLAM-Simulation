@@ -1,7 +1,10 @@
 import ast
 import builtins
+import importlib.util
 import shutil
+import sys
 import tempfile
+import types
 from pathlib import Path
 
 import pytest
@@ -29,7 +32,8 @@ ACTIVE_RUNTIME_FILES = {
         "vanjee_lidar.launch.py"
     ),
     "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
-    "web_ui": "core/bringup/robot_web_ui/robot_web_ui/web_ui_node.py",
+    "web_ui_index": "core/bringup/robot_web_ui/web/index.html",
+    "web_ui_script": "core/bringup/robot_web_ui/web/map_view.js",
     "lidar_adapter": (
         "core/simulation/lidar_pointcloud_adapter/"
         "lidar_pointcloud_adapter/adapter_node.py"
@@ -169,6 +173,7 @@ def runtime_factory(tmp_path, monkeypatch):
             label: path
             for label, path in active_paths.items()
             if label in cc._ACTIVE_RUNTIME_FILES
+            or label in cc._INSTALLED_RUNTIME_EXECUTABLES
         },
         raising=False,
     )
@@ -185,6 +190,9 @@ def runtime_factory(tmp_path, monkeypatch):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
             active_paths[label] = destination
+        active_paths["web_ui"] = (
+            repo_root / "install/robot_web_ui/lib/robot_web_ui/robot_web_ui"
+        )
         config_path = config_dir / "bringup.yaml"
         config = _load_yaml(config_path)
         config["platform"] = platform
@@ -931,6 +939,9 @@ def test_installed_freshness_rejects_source_install_mismatch(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
         installed_paths[label] = destination
+    installed_paths["web_ui"] = (
+        installed_root / "lib/robot_web_ui/robot_web_ui"
+    )
     installed_paths[stale_label].write_text(
         installed_paths[stale_label].read_text(encoding="utf-8")
         + "\nSTALE_INSTALLED_COPY = True\n",
@@ -943,6 +954,7 @@ def test_installed_freshness_rejects_source_install_mismatch(
             label: path
             for label, path in installed_paths.items()
             if label in cc._ACTIVE_RUNTIME_FILES
+            or label in cc._INSTALLED_RUNTIME_EXECUTABLES
         },
         raising=False,
     )
@@ -970,6 +982,9 @@ def test_installed_freshness_comparison_is_byte_exact(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
         installed_paths[label] = destination
+    installed_paths["web_ui"] = (
+        installed_root / "lib/robot_web_ui/robot_web_ui"
+    )
     formal = installed_paths["formal"]
     formal.write_bytes(formal.read_bytes().replace(b"\n", b"\r\n"))
     monkeypatch.setattr(
@@ -1004,7 +1019,7 @@ def test_runtime_consistency_does_not_parse_topology(
     assert cc.run_runtime_consistency(repo_root, manifest) == []
 
 
-def test_installed_resolver_no_ros_diagnostic_names_all_node_modules(
+def test_installed_resolver_no_ros_diagnostic_names_runtime_authorities(
     monkeypatch,
 ):
     real_import = builtins.__import__
@@ -1020,10 +1035,59 @@ def test_installed_resolver_no_ros_diagnostic_names_all_node_modules(
     assert cc._resolve_installed_runtime_paths(failures) == {}
     assert any(
         "cmd_vel_gate.gate_node" in failure
-        and "robot_web_ui.web_ui_node" in failure
+        and "robot_web_ui executable" in failure
         and "lidar_pointcloud_adapter.adapter_node" in failure
         for failure in failures
     )
+
+
+def test_installed_resolver_uses_web_ui_executable_and_share_assets(
+    monkeypatch, tmp_path
+):
+    prefix = tmp_path / "install"
+    executable = prefix / "lib/robot_web_ui/robot_web_ui"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"executable")
+    executable.chmod(0o755)
+
+    class PackageNotFoundError(Exception):
+        pass
+
+    def package_share(package):
+        return str(prefix / "share" / package)
+
+    packages = types.ModuleType("ament_index_python.packages")
+    packages.PackageNotFoundError = PackageNotFoundError
+    packages.get_package_share_directory = package_share
+    ament_index = types.ModuleType("ament_index_python")
+    ament_index.packages = packages
+    monkeypatch.setitem(sys.modules, "ament_index_python", ament_index)
+    monkeypatch.setitem(
+        sys.modules, "ament_index_python.packages", packages
+    )
+
+    def module_spec(module_name):
+        return types.SimpleNamespace(
+            origin=str(
+                prefix
+                / "lib/python3.10/site-packages"
+                / (module_name.replace(".", "/") + ".py")
+            )
+        )
+
+    monkeypatch.setattr(importlib.util, "find_spec", module_spec)
+    failures = []
+
+    paths = cc._resolve_installed_runtime_paths(failures)
+
+    assert failures == []
+    assert paths["web_ui"] == executable.resolve()
+    assert paths["web_ui_index"] == (
+        prefix / "share/robot_web_ui/web/index.html"
+    ).resolve()
+    assert paths["web_ui_script"] == (
+        prefix / "share/robot_web_ui/web/map_view.js"
+    ).resolve()
 
 
 def test_installed_freshness_covers_all_active_sensor_and_localization_code():

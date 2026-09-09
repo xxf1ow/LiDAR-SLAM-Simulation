@@ -42,7 +42,7 @@ colcon build
 source install/setup.bash
 ```
 
-`core/colcon_defaults.yaml` 使所有 CMake 包默认以 `Release` 构建；Python 包不受该设置影响。需要断言和调试符号时显式覆盖构建类型：
+`core/colcon_defaults.yaml` 使所有 CMake 包默认以 `Release` 构建；Python 包不受该设置影响。`robot_web_ui` 是 CMake 包，其可执行文件和浏览器资产均由 colcon 安装。需要断言和调试符号时显式覆盖构建类型：
 
 ```bash
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Debug
@@ -65,7 +65,7 @@ source install/setup.bash
 - `core/bringup/system_bringup/config/profiles/{sim,real}.yaml`：平台几何、传感器、后端和跨模块限制。
 - `core/bringup/system_bringup/config/templates/*.yaml`：controller、Web UI、Nav2、SLAM、定位和传感器后端的完整原生配置。
 
-Profile、`bringup.yaml` 和 source templates 由 runtime compiler 从源码读取，修改后不需要重建即可生成本次配置；template 变化仍需在 packaging/static acceptance 前重建安装副本。ROS 实际从 install 加载的 launch 或 Python runtime 变化后必须重建对应包。不得通过临时 launch 参数或分散配置复制绕过运行时编译器。
+Profile、`bringup.yaml` 和 source templates 由 runtime compiler 从源码读取，修改后不需要重建即可生成本次配置；template 变化仍需在 packaging/static acceptance 前重建安装副本。ROS 实际从 install 加载的 launch、Python runtime、C++ 可执行文件或浏览器资产变化后必须重建对应包。不得通过临时 launch 参数或分散配置复制绕过运行时编译器。
 
 ## 文档工作流
 

@@ -31,18 +31,6 @@
   const PLACEMENT_ARROW_LENGTH = 36;
   const PLACEMENT_TIP_HIT_RADIUS = 22;
   const ACTIVE_GOAL_STATUSES = new Set(["sending", "navigating", "canceling"]);
-  const NAVIGATION_PHASE_LABELS = Object.freeze({
-    planning: "正在规划路径",
-    following: "正在跟踪路径",
-    clearing_global_plan: "路径规划受阻，正在清理全局代价地图",
-    clearing_local_control: "路径跟踪受阻，正在清理局部代价地图",
-    clearing_global_recovery: "导航恢复：正在清理全局代价地图",
-    clearing_local_recovery: "导航恢复：正在清理局部代价地图",
-    spinning: "导航恢复：正在原地旋转",
-    waiting: "导航恢复：正在等待障碍消退",
-    backing_up: "导航恢复：正在后退"
-  });
-
   function gridToWorld(info, column, row) {
     const localX = (column + 0.5) * info.resolution;
     const localY = (row + 0.5) * info.resolution;
@@ -421,28 +409,18 @@
 
     function navigationStateMessage() {
       const navigation = latestState.navigation || {};
-      const message = typeof navigation.message === "string"
-        ? navigation.message
-        : "";
       let status = "";
-      if (navigation.goal_status === "sending") status = "导航目标发送中";
+      if (navigation.goal_status === "sending") status = "发送中";
       if (navigation.goal_status === "navigating") {
-        status = Object.prototype.hasOwnProperty.call(
-          NAVIGATION_PHASE_LABELS, navigation.phase
-        )
-          ? NAVIGATION_PHASE_LABELS[navigation.phase]
-          : "导航中";
+        status = "导航中";
         if (Number.isFinite(navigation.distance_remaining)) {
-          status += `，剩余 ${navigation.distance_remaining.toFixed(1)} 米`;
+          status += `（剩余 ${navigation.distance_remaining.toFixed(1)} 米）`;
         }
       }
-      if (navigation.goal_status === "canceling") status = "导航取消中";
-      if (navigation.goal_status === "succeeded") status = "导航已到达目标";
-      if (navigation.goal_status === "canceled") status = "导航已取消";
+      if (navigation.goal_status === "canceling") status = "取消中";
+      if (navigation.goal_status === "succeeded") status = "已到达";
+      if (navigation.goal_status === "canceled") status = "已取消";
       if (navigation.goal_status === "failed") status = "导航失败";
-      if (message && navigation.goal_status !== "idle") {
-        status += `${status ? "：" : ""}${message}`;
-      }
       return status;
     }
 
