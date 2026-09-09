@@ -735,14 +735,22 @@ def test_gicp_launch_requires_config_and_map_without_clock_override():
     assert "use_sim_time" not in GICP_LAUNCH.read_text(encoding="utf-8")
 
 
-def test_slam_stack_waits_for_localization_and_base_controller_odom_before_nav2():
+def test_slam_stack_starts_gicp_and_nav2_after_fast_lio_without_localization_gate():
     function = _function(_tree(SLAM_STACK), "_stack")
-    assert any(
-        isinstance(call.args[0], ast.List)
-        and {_string(item) for item in call.args[0].elts}
-        == {"/localization", "/base_controller/odom"}
-        for call in _calls(function, "ready_gate")
-    )
+    gates = _calls(function, "ready_gate")
+    assert len(gates) == 1
+    then_actions = gates[0].args[3]
+    assert isinstance(then_actions, ast.List)
+    assert isinstance(then_actions.elts[0], ast.Name)
+    assert then_actions.elts[0].id == "gicp"
+
+    timer = then_actions.elts[1]
+    assert isinstance(timer, ast.Call)
+    assert isinstance(timer.func, ast.Name) and timer.func.id == "TimerAction"
+    assert _keyword(timer, "period").value == 12.0
+    actions = _keyword(timer, "actions")
+    assert isinstance(actions, ast.List)
+    assert [item.id for item in actions.elts] == ["nav2"]
 
 
 def test_slam_stack_waits_for_fast_lio_body_cloud_before_gicp():
@@ -758,7 +766,7 @@ def test_slam_stack_waits_for_fast_lio_body_cloud_before_gicp():
 def test_slam_ready_gates_receive_the_existing_single_clock_value():
     stack = _function(_tree(SLAM_STACK), "_stack")
     gates = _calls(stack, "ready_gate")
-    assert len(gates) == 2
+    assert len(gates) == 1
     for gate in gates:
         value = _keyword(gate, "use_sim_time")
         assert isinstance(value, ast.Name)

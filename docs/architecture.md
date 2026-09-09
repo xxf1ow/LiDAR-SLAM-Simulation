@@ -48,7 +48,7 @@ navigation 坐标链为：
 map ── GICP ──> camera_init ── FAST-LIO ──> body ── slam_stack ──> base_footprint ── URDF ──> base_link
 ```
 
-GICP 首次接受配准后才发布 `/localization`，随后启动 Nav2。FAST-LIO 提供连续局部坐标，GICP 提供 `map -> camera_init` 校正，`slam_stack` 永久拥有 `body -> base_footprint` bridge。
+FAST-LIO 数据就绪后启动 GICP，并在 12 秒固定错峰后启动 Nav2；Nav2 进程创建不等待首次定位。GICP 首次接受配准后才发布 `/localization`，FAST-LIO 提供连续局部坐标，GICP 提供 `map -> camera_init` 校正，`slam_stack` 永久拥有 `body -> base_footprint` bridge。
 
 mapping 坐标链为：
 
