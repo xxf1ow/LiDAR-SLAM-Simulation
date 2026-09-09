@@ -129,6 +129,31 @@ ApiReply parking_error(const std::error_code &error)
     return error_reply(status, error.message());
 }
 
+/** Construct while holding the borrowed mutex and with an unreserved flag; release on every exit. */
+class InitialPoseReservation {
+public:
+    InitialPoseReservation(std::mutex &mutex, bool &in_flight);
+    ~InitialPoseReservation();
+    InitialPoseReservation(const InitialPoseReservation &) = delete;
+    InitialPoseReservation &operator=(const InitialPoseReservation &) = delete;
+
+private:
+    std::mutex &mutex_;
+    bool &in_flight_;
+};
+
+InitialPoseReservation::InitialPoseReservation(std::mutex &mutex, bool &in_flight)
+    : mutex_(mutex), in_flight_(in_flight)
+{
+    in_flight_ = true;
+}
+
+InitialPoseReservation::~InitialPoseReservation()
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    in_flight_ = false;
+}
+
 struct LocalLayer {
     GridSnapshotPtr grid;
     std::optional<Pose> affine;
@@ -179,8 +204,9 @@ struct WebUiNode::Impl final : HttpActions {
     std::unique_ptr<ParkingPointStore> parking;
     std::optional<std::string> parking_error_message;
     std::atomic_flag parking_busy = ATOMIC_FLAG_INIT;
-    // This mutex also excludes initial-pose publication from goal reservation.
+    // In-flight initial-pose publication excludes goal reservation without holding this mutex.
     mutable std::mutex mutex;
+    bool initial_pose_in_flight = false;
     std::optional<std::string> gate_mode;
     std::optional<Pose> localization;
     std::optional<std::string> localization_error;
@@ -416,15 +442,19 @@ ApiReply WebUiNode::Impl::manual_command(const std::string &direction, double sp
     message.header.stamp = node.now();
     message.twist.linear.x = values->linear_x;
     message.twist.angular.z = values->angular_z;
-    std::lock_guard<std::mutex> lock(mutex);
-    if ((values->linear_x != 0 || values->angular_z != 0) && gate_mode != "manual")
-        return conflict("manual control is not active");
+    std::optional<std::string> mode;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if ((values->linear_x != 0 || values->angular_z != 0) && gate_mode != "manual")
+            return conflict("manual control is not active");
+        mode = gate_mode;
+    }
     try {
         manual_publisher->publish(message);
     } catch (const rclcpp::exceptions::RCLError &error) {
         return error_reply(503, error.what());
     }
-    return {200, {{"ok", true}, {"mode", optional_string(gate_mode)}}};
+    return {200, {{"ok", true}, {"mode", optional_string(mode)}}};
 }
 
 ApiReply WebUiNode::Impl::call_mode_service(const rclcpp::Client<Trigger>::SharedPtr &client,
@@ -465,17 +495,22 @@ ApiReply WebUiNode::Impl::publish_initial_pose(const Json &payload)
 {
     if (!navigation_enabled) return error_reply(503, "navigation sources unavailable");
     if (!static_map) return error_reply(503, "static map unavailable");
-    std::lock_guard<std::mutex> lock(mutex);
     const auto pose = parse_navigation_pose(payload, static_map->info, static_map->binary->revision);
     if (!pose)
         return error_reply(pose.error().kind == PoseErrorKind::map_revision_conflict ? 409 : 400, pose.error().message);
     if (initial_publisher->get_subscription_count() == 0)
         return error_reply(503, "initial pose subscriber unavailable");
-    if (!tracker.initial_pose_allowed()) return conflict("navigation goal is active");
     const auto stamped = pose_message(*pose, node.now());
     geometry_msgs::msg::PoseWithCovarianceStamped message;
     message.header = stamped.header;
     message.pose.pose = stamped.pose;
+    std::optional<InitialPoseReservation> reservation;
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!tracker.initial_pose_allowed()) return conflict("navigation goal is active");
+        if (initial_pose_in_flight) return conflict("initial pose publication is in progress");
+        reservation.emplace(mutex, initial_pose_in_flight);
+    }
     try {
         initial_publisher->publish(message);
     } catch (const rclcpp::exceptions::RCLError &error) {
@@ -500,6 +535,7 @@ ApiReply WebUiNode::Impl::send_navigation_goal(const Json &payload)
         if (gate_mode != "automatic") return conflict("automatic control is not active");
         if (!localization) return conflict("robot is not localized");
         if (!tracker.initial_pose_allowed()) return conflict("navigation goal is active");
+        if (initial_pose_in_flight) return conflict("initial pose publication is in progress");
         owner = generation = tracker.reserve_goal();
         goal_handle.reset();
         path_error.reset();

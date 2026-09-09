@@ -14,7 +14,8 @@ struct ApiReply {
 };
 
 /** Internal HTTP substitution interface, borrowed from WebUiNode and never installed.
- * Calls are thread-safe. Mode calls wait at most one second; other ROS calls only submit work.
+ * Calls are thread-safe. Mode calls wait at most one second for service confirmation.
+ * ROS publication may block in the transport, without holding the node's shared-state mutex.
  * Parking calls perform synchronous I/O and return 503 when another parking operation is active.
  * Binary snapshots retain immutable ownership independently of the node. Stop all callers before
  * destroying the node; asynchronous ROS callbacks run on its single-threaded executor.
@@ -26,13 +27,17 @@ public:
     [[nodiscard]] virtual nlohmann::json assistant_state() const = 0;
     /** Returns shared immutable bytes, or null for an unknown or unavailable layer. */
     [[nodiscard]] virtual BinarySnapshotPtr navigation_asset(const std::string &name) const = 0;
-    /** Publishes a direction at 0–100 percent; nonzero commands require manual mode. */
+    /** Publishes a direction at 0–100 percent; nonzero commands require manual mode.
+     * Checks and returns mode as observed before publication.
+     */
     [[nodiscard]] virtual ApiReply manual_command(const std::string &direction, double speed_percent) = 0;
     /** Returns 200 on confirmation, 202 while unconfirmed, or 503 on service unavailability/rejection. */
     [[nodiscard]] virtual ApiReply takeover_manual() = 0;
     /** Uses the same confirmation and timeout rules as takeover_manual. */
     [[nodiscard]] virtual ApiReply resume_automatic() = 0;
-    /** Validates map pose/revision and publishes only when no goal is active; errors are 400/409/503. */
+    /** Validates map pose/revision and reserves publication against active goals and other initial poses.
+     * The reservation remains active through transport completion or failure; errors are 400/409/503.
+     */
     [[nodiscard]] virtual ApiReply publish_initial_pose(const nlohmann::json &payload) = 0;
     /** Returns 202 after reserving and submitting a goal; acceptance and result arrive asynchronously. */
     [[nodiscard]] virtual ApiReply send_navigation_goal(const nlohmann::json &payload) = 0;

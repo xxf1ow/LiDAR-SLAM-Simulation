@@ -11,11 +11,14 @@
 #include <nav_msgs/msg/path.hpp>
 #include <rclcpp_action/rclcpp_action.hpp>
 #include <rclcpp/executors/single_threaded_executor.hpp>
+#include <rcl/error_handling.h>
+#include <rcl/publisher.h>
 #include <std_msgs/msg/string.hpp>
 #include <std_srvs/srv/trigger.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
 
 #include <chrono>
+#include <atomic>
 #include <cmath>
 #include <filesystem>
 #include <fstream>
@@ -24,6 +27,44 @@
 #include <limits>
 #include <optional>
 #include <thread>
+
+namespace
+{
+// A linker wrapper pauses the real ROS call without depending on DDS queue saturation.
+struct PublishPause {
+    explicit PublishPause(std::string selected_topic, bool return_error = false);
+
+    std::string topic;
+    bool fail;
+    std::atomic<bool> intercepted{false};
+    std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released;
+};
+
+PublishPause::PublishPause(std::string selected_topic, bool return_error)
+    : topic(std::move(selected_topic)), fail(return_error), released(release.get_future().share()) {}
+
+std::shared_ptr<PublishPause> publish_pause;
+} // namespace
+
+extern "C" rcl_ret_t __real_rcl_publish(
+    const rcl_publisher_t *publisher, const void *message, rmw_publisher_allocation_t *allocation);
+
+extern "C" rcl_ret_t __wrap_rcl_publish(
+    const rcl_publisher_t *publisher, const void *message, rmw_publisher_allocation_t *allocation)
+{
+    const auto pause = std::atomic_load(&publish_pause);
+    if (pause && pause->topic == rcl_publisher_get_topic_name(publisher) && !pause->intercepted.exchange(true)) {
+        pause->entered.set_value();
+        pause->released.wait();
+        if (pause->fail) {
+            RCL_SET_ERROR_MSG("injected publication failure");
+            return RCL_RET_ERROR;
+        }
+    }
+    return __real_rcl_publish(publisher, message, allocation);
+}
 
 namespace robot_web_ui
 {
@@ -465,6 +506,83 @@ TEST_F(WebUiNodeTest, ModeServiceSuccessAndRejectionReturnTypedReplies)
     request = std::async(std::launch::async, [&] { return node->http_actions().resume_automatic(); });
     ASSERT_TRUE(until([&] { return request.wait_for(0ms) == std::future_status::ready; }));
     EXPECT_EQ(request.get().status, 503);
+}
+
+TEST_F(WebUiNodeTest, ManualPublishLeavesStateAndOtherManualCallsAvailable)
+{
+    start(false);
+    publish_mode("manual");
+    const auto pause = std::make_shared<PublishPause>("/cmd_vel_manual");
+    std::atomic_store(&publish_pause, pause);
+    auto publication = std::async(std::launch::async, [&] { return node->http_actions().manual_command("forward", 50); });
+    EXPECT_EQ(pause->entered.get_future().wait_for(3s), std::future_status::ready);
+    auto state = std::async(std::launch::async, [&] { return node->http_actions().navigation_state(); });
+    auto stop = std::async(std::launch::async, [&] { return node->http_actions().manual_command("stop", 0); });
+    EXPECT_EQ(state.wait_for(200ms), std::future_status::ready);
+    EXPECT_EQ(stop.wait_for(200ms), std::future_status::ready);
+    pause->release.set_value();
+    EXPECT_EQ(publication.get().status, 200);
+    EXPECT_EQ(stop.get().status, 200);
+    EXPECT_EQ(state.get()["gate_mode"], "manual");
+    std::atomic_store(&publish_pause, std::shared_ptr<PublishPause>());
+}
+
+TEST_F(WebUiNodeTest, InitialPosePublishReservesGoalWithoutHoldingStateMutex)
+{
+    start();
+    auto server = rclcpp_action::create_server<Navigate>(
+        peer, "/navigate_to_pose",
+        [](const auto &, auto) { return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE; },
+        [](auto) { return rclcpp_action::CancelResponse::ACCEPT; }, [](auto) {});
+    auto initial_sub = peer->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        "/initialpose", 1, [](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr) {});
+    publish_localization();
+    publish_mode("automatic");
+    ASSERT_TRUE(until([&] { return node->http_actions().navigation_state()["navigation"]["action_server_ready"] == true; }));
+    const nlohmann::json pose{{"x", 1}, {"y", 1}, {"yaw", 0}, {"map_revision", 1}};
+    const auto pause = std::make_shared<PublishPause>("/initialpose");
+    std::atomic_store(&publish_pause, pause);
+    auto publication = std::async(std::launch::async, [&] { return node->http_actions().publish_initial_pose(pose); });
+    EXPECT_EQ(pause->entered.get_future().wait_for(3s), std::future_status::ready);
+    auto state = std::async(std::launch::async, [&] { return node->http_actions().navigation_state(); });
+    auto stop = std::async(std::launch::async, [&] { return node->http_actions().manual_command("stop", 0); });
+    auto goal = std::async(std::launch::async, [&] { return node->http_actions().send_navigation_goal(pose); });
+    auto another_initial = std::async(std::launch::async, [&] { return node->http_actions().publish_initial_pose(pose); });
+    EXPECT_EQ(state.wait_for(200ms), std::future_status::ready);
+    EXPECT_EQ(stop.wait_for(200ms), std::future_status::ready);
+    EXPECT_EQ(goal.wait_for(200ms), std::future_status::ready);
+    EXPECT_EQ(another_initial.wait_for(200ms), std::future_status::ready);
+    pause->release.set_value();
+    EXPECT_EQ(publication.get().status, 200);
+    EXPECT_EQ(stop.get().status, 200);
+    EXPECT_EQ(another_initial.get().status, 409);
+    const auto conflicting_goal = goal.get();
+    EXPECT_EQ(conflicting_goal.status, 409);
+    (void)state.get();
+    std::atomic_store(&publish_pause, std::shared_ptr<PublishPause>());
+    if (conflicting_goal.status == 409)
+        EXPECT_EQ(node->http_actions().send_navigation_goal(pose).status, 202);
+}
+
+TEST_F(WebUiNodeTest, FailedInitialPosePublishReleasesGoalReservation)
+{
+    start();
+    auto server = rclcpp_action::create_server<Navigate>(
+        peer, "/navigate_to_pose",
+        [](const auto &, auto) { return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE; },
+        [](auto) { return rclcpp_action::CancelResponse::ACCEPT; }, [](auto) {});
+    auto initial_sub = peer->create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+        "/initialpose", 1, [](geometry_msgs::msg::PoseWithCovarianceStamped::ConstSharedPtr) {});
+    publish_localization();
+    publish_mode("automatic");
+    ASSERT_TRUE(until([&] { return node->http_actions().navigation_state()["navigation"]["action_server_ready"] == true; }));
+    const nlohmann::json pose{{"x", 1}, {"y", 1}, {"yaw", 0}, {"map_revision", 1}};
+    const auto pause = std::make_shared<PublishPause>("/initialpose", true);
+    pause->release.set_value();
+    std::atomic_store(&publish_pause, pause);
+    EXPECT_EQ(node->http_actions().publish_initial_pose(pose).status, 503);
+    std::atomic_store(&publish_pause, std::shared_ptr<PublishPause>());
+    EXPECT_EQ(node->http_actions().send_navigation_goal(pose).status, 202);
 }
 } // namespace
 } // namespace robot_web_ui
