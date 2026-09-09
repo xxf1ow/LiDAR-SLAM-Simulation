@@ -72,6 +72,8 @@ Web  ──> /cmd_vel_manual┘                               │
 
 完整 bringup 中 `cmd_vel_gate` 是唯一的 `/cmd_vel` 发布者。Web 人工接管只改变 gate 接受的速度源，不取消现有 Nav2 goal。manual 命令超时会输出零速，但不会使硬件失能。
 
+`robot_web_ui` 可执行文件在一个进程中组合 C++ ROS 节点和 cpp-httplib HTTP 服务。HTTP 先绑定端口，主线程随后运行单线程 ROS executor；HTTP 工作者调用线程安全的节点操作，二进制响应持有不可变快照。退出时 HTTP 停止并 join 后才销毁节点，且不取消导航或切换控制模式。
+
 ## 时钟和启动边界
 
 功能等待使用节点自身的 ROS 时钟。仿真 graph discovery 可用墙钟限制必需 topic 始终未出现的情况；topic 出现后的 settling、传感器稳定窗口和功能 timeout 使用 ROS 时钟。仿真暂停、低 RTF 或 `/clock` 冻结时保持等待，时钟恢复后继续。

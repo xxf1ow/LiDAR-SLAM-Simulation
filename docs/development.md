@@ -29,6 +29,8 @@ FAST-LIO、LIO-SAM 和 small_gicp 不是仓库内容。按 [Localization](../cor
 
 Web 资产测试要求可执行的 `node`。当前 WSL 通过 `/home/lxx/.local/bin/node` 使用既有 Windows Node；运行相关测试前执行 `command -v node` 和 `node --version`。缺少 Node 是环境失败，不是允许的 skip。
 
+`robot_web_ui` 的 C++ HTTP 服务依赖系统 `libcpp-httplib-dev`、配套运行库与 `pkg-config`；CMake 通过 pkg-config 查找，不下载或内置该库。
+
 ## 构建工作区
 
 从 `core/` 执行默认 copy-install 构建：
