@@ -33,7 +33,7 @@
   <exec_depend>tl_expected</exec_depend>
   <exec_depend>yaml-cpp</exec_depend>
   <exec_depend>zlib</exec_depend>
-  <exec_depend>libcpp-httplib0.10</exec_depend>
+  <exec_depend>libcpp-httplib-dev</exec_depend>
 
   <test_depend>ament_cmake_gtest</test_depend>
 
