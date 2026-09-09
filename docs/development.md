@@ -42,6 +42,19 @@ colcon build
 source install/setup.bash
 ```
 
+已构建 Python 版 `robot_web_ui` 的工作区升级到 C++ 包时，增量安装不会删除旧模块和环境 hook。首次构建前必须在 `core/` 清理该包的生成目录，再重建并验证：
+
+```bash
+rm -rf build/robot_web_ui install/robot_web_ui
+colcon build --packages-select robot_web_ui
+test -x install/robot_web_ui/lib/robot_web_ui/robot_web_ui
+test -f install/robot_web_ui/share/robot_web_ui/web/index.html
+test -f install/robot_web_ui/share/robot_web_ui/web/map_view.js
+test -z "$(find install/robot_web_ui \
+  -name '*.py*' \
+  -print -quit)"
+```
+
 `core/colcon_defaults.yaml` 使所有 CMake 包默认以 `Release` 构建；Python 包不受该设置影响。`robot_web_ui` 是 CMake 包，其可执行文件和浏览器资产均由 colcon 安装。需要断言和调试符号时显式覆盖构建类型：
 
 ```bash

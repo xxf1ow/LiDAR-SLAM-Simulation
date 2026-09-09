@@ -1,6 +1,7 @@
 import ast
 import builtins
 import importlib.util
+import os
 import shutil
 import sys
 import tempfile
@@ -1088,6 +1089,20 @@ def test_installed_resolver_uses_web_ui_executable_and_share_assets(
     assert paths["web_ui_script"] == (
         prefix / "share/robot_web_ui/web/map_view.js"
     ).resolve()
+
+
+def test_actual_install_contains_web_ui_executable_and_assets():
+    package_root = SOURCE_REPO_ROOT / "core/bringup/robot_web_ui"
+    install_prefix = SOURCE_REPO_ROOT / "core/install/robot_web_ui"
+    executable = install_prefix / "lib/robot_web_ui/robot_web_ui"
+
+    assert executable.is_file()
+    assert os.access(executable, os.X_OK)
+    for relative_path in ("web/index.html", "web/map_view.js"):
+        installed = install_prefix / "share/robot_web_ui" / relative_path
+        source = package_root / relative_path
+        assert installed.is_file()
+        assert installed.read_bytes() == source.read_bytes()
 
 
 def test_installed_freshness_covers_all_active_sensor_and_localization_code():

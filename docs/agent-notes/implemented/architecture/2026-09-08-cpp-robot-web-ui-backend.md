@@ -86,7 +86,7 @@ Startup must bind the HTTP port successfully before entering steady-state execut
 
 ## Verification
 
-Focused C++ tests cover snapshot content changes, parking-point persistence, navigation generations and terminal transitions, representative HTTP success and failure paths, ROS interface selection, and package topology. The independent Node harness covers browser assets, including the 100 ms manual scheduler and automatic acknowledgement loop. The migration intentionally does not reproduce every Python edge-case test.
+Focused C++ tests cover snapshot content changes, parking-point persistence, navigation generations and terminal transitions, representative HTTP success and failure paths, ROS interface selection, and package topology. A post-build test requires the installed backend to be executable and both installed browser assets to match their source bytes. The independent Node harness covers browser assets, including the 100 ms manual scheduler and automatic acknowledgement loop. The migration intentionally does not reproduce every Python edge-case test.
 
 A full `sim + navigation` run through the formal bringup entry remains the dynamic acceptance gap. It must verify localization, maps, path display, manual endpoints, and successful navigation while recording Web UI and total CPU for closed-page, open-idle, and active-navigation states. Active navigation must show a substantial reduction from the sustained approximately 25–30% Python baseline, and cleanup must leave no ROS, Gazebo, Nav2, GICP, or Web UI process behind.
 
