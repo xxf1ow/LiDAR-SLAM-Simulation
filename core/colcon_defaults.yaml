@@ -5,7 +5,11 @@
 #     不符合 ament lint 规范,跑 lint 只产生噪音,不代表本项目代码质量。
 #   - can_driver(ZL-8030D 厂商 SDK,aarch64-only): x86 开发机无法链接 libcontrolcan.so,
 #     且为厂商代码。真机(aarch64)上需显式 `colcon test --packages-select can_driver` 单独测试。
-# 仅作用于 test verb;build 行为不变(仍按 CLAUDE.md 的 --packages-select 分组构建)。
+# CMake 包默认按 Release 构建；调用者可用 --cmake-args 显式覆盖构建类型。
+build:
+  cmake-args:
+    - -DCMAKE_BUILD_TYPE=Release
+
 test:
   packages-skip:
     - can_driver

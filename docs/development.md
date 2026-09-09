@@ -40,6 +40,12 @@ colcon build
 source install/setup.bash
 ```
 
+`core/colcon_defaults.yaml` 使所有 CMake 包默认以 `Release` 构建；Python 包不受该设置影响。需要断言和调试符号时显式覆盖构建类型：
+
+```bash
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Debug
+```
+
 不要在现有 `build/` 与 `install/` 上切换为 `--symlink-install`。确需改变安装模式时，必须先有意重建两个目录，避免 `ament_cmake_python` 目录和符号链接混用。
 
 日常窄构建使用包边界，例如：
