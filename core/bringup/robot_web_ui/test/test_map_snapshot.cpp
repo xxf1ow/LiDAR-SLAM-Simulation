@@ -86,6 +86,27 @@ TEST(LoadNav2Pgm, RejectsInvalidPgm)
     std::filesystem::remove_all(yaml_path.parent_path());
 }
 
+TEST(LoadNav2Pgm, RejectsNonDecimalAndUnrepresentableDimensions)
+{
+    const std::vector<uint8_t> pixels{0x00, 0xfe, 0xcd, 0xfe};
+    const std::string yaml =
+        "image: map.pgm\nresolution: 0.2\norigin: [1.5, -2.0, 0.25]\nnegate: 0\n"
+        "occupied_thresh: 0.65\nfree_thresh: 0.25\nmode: trinary\n";
+    const std::string dimensions[] = {"2junk 2", "4294967298 2"};
+
+    for (const std::string &dimension : dimensions) {
+        const auto yaml_path = write_map_fixture(pixels, yaml);
+        {
+            std::ofstream pgm(yaml_path.parent_path() / "map.pgm", std::ios::binary | std::ios::trunc);
+            pgm << "P5\n" << dimension << "\n255\n";
+            pgm.write(reinterpret_cast<const char *>(pixels.data()), static_cast<std::streamsize>(pixels.size()));
+        }
+
+        EXPECT_FALSE(load_nav2_pgm(yaml_path)) << dimension;
+        std::filesystem::remove_all(yaml_path.parent_path());
+    }
+}
+
 TEST(GridSnapshot, ReusesEqualContentAndHashesChangedContent)
 {
     const GridInfo info{2, 2, 0.2, 1.5, -2.0, 0.25, "map"};

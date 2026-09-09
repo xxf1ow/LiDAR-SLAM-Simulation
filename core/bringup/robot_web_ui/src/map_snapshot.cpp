@@ -12,6 +12,7 @@
 #include <fstream>
 #include <iomanip>
 #include <iterator>
+#include <limits>
 #include <sstream>
 #include <tuple>
 #include <utility>
@@ -114,6 +115,23 @@ bool read_pgm_token(const std::vector<uint8_t> &raw, size_t *index, std::string 
     return true;
 }
 
+bool parse_pgm_uint32(const std::string &token, uint32_t *value)
+{
+    if (token.empty())
+        return false;
+    uint32_t parsed = 0;
+    for (const unsigned char character : token) {
+        if (character < '0' || character > '9')
+            return false;
+        const uint32_t digit = character - '0';
+        if (parsed > (std::numeric_limits<uint32_t>::max() - digit) / 10)
+            return false;
+        parsed = parsed * 10 + digit;
+    }
+    *value = parsed;
+    return true;
+}
+
 tl::expected<std::tuple<uint32_t, uint32_t, std::vector<uint8_t>>, std::string> read_pgm(
     const std::filesystem::path &path)
 {
@@ -137,11 +155,8 @@ tl::expected<std::tuple<uint32_t, uint32_t, std::vector<uint8_t>>, std::string> 
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t max_value = 0;
-    try {
-        width = static_cast<uint32_t>(std::stoul(width_token));
-        height = static_cast<uint32_t>(std::stoul(height_token));
-        max_value = static_cast<uint32_t>(std::stoul(max_value_token));
-    } catch (const std::exception &) {
+    if (!parse_pgm_uint32(width_token, &width) || !parse_pgm_uint32(height_token, &height) ||
+        !parse_pgm_uint32(max_value_token, &max_value)) {
         return tl::make_unexpected("invalid PGM header dimensions or max value");
     }
     if (width == 0 || height == 0 || max_value != 255)
@@ -153,6 +168,8 @@ tl::expected<std::tuple<uint32_t, uint32_t, std::vector<uint8_t>>, std::string> 
     else
         ++index;
 
+    if (static_cast<size_t>(height) > std::numeric_limits<size_t>::max() / width)
+        return tl::make_unexpected("invalid PGM dimensions");
     const size_t expected = static_cast<size_t>(width) * height;
     if (raw.size() - index != expected)
         return tl::make_unexpected("invalid PGM pixel count");
