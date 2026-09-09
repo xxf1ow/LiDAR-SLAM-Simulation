@@ -70,7 +70,7 @@ Parking operations acquire a non-waiting atomic lease. A concurrent operation re
 
 ## Errors and lifecycle
 
-HTTP errors retain the current 400 validation, 404 missing resource, 409 state conflict, 500 internal response failure, and 503 unavailable dependency semantics. A static-map or parking-sidecar error disables only dependent operations and remains visible in state; it does not terminate unrelated manual control or HTTP service. Invalid ROS input preserves the last valid snapshot and reports the associated layer error.
+HTTP errors retain the current 400 validation, 404 missing resource, 409 state conflict, 500 internal response failure, and 503 unavailable dependency semantics. A static-map load error appears as `map_error` in navigation state; invalid localization and path messages preserve their last valid values and set `localization_error` or `path_error`. Malformed grids preserve their last valid snapshots without a grid-specific state diagnostic. Parking-sidecar and mutation failures are returned by the affected parking operations. These failures do not terminate unrelated manual control or HTTP service.
 
 Startup must bind the HTTP port successfully before entering steady-state execution. Ordinary destruction uses RAII to stop the HTTP server, join its listener thread, and release the ROS node. The implementation has no runtime recovery orchestration, request-draining state machine, watchdog, extensive shutdown test matrix, automatic navigation cancellation, or control-mode transition during exit.
 

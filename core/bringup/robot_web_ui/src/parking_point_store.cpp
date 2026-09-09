@@ -15,6 +15,11 @@
 
 namespace robot_web_ui
 {
+/*******************************************************************************************************
+ *
+ * @brief error code
+ *
+ *******************************************************************************************************/
 namespace
 {
 class ParkingPointStoreErrorCategory final : public std::error_category {
@@ -60,7 +65,15 @@ tl::unexpected<std::error_code> failure(ParkingPointStore::Errc error) noexcept
 {
     return tl::make_unexpected(ParkingPointStore::make_error_code(error));
 }
+} // namespace
 
+/*******************************************************************************************************
+ *
+ * @brief sidecar path and parking-point validation
+ *
+ *******************************************************************************************************/
+namespace
+{
 std::filesystem::path parking_sidecar_path(const std::filesystem::path &map_path)
 {
     return map_path.parent_path() / (map_path.stem().string() + ".parking_points.json");
@@ -169,7 +182,15 @@ std::optional<ParkingPoint> validate_point(ParkingPoint point)
     point.name = *name;
     return point;
 }
+} // namespace
 
+/*******************************************************************************************************
+ *
+ * @brief atomic sidecar writing
+ *
+ *******************************************************************************************************/
+namespace
+{
 bool write_all(int descriptor, const std::string &contents, std::error_code *error)
 {
     size_t offset = 0;
@@ -191,6 +212,11 @@ bool write_all(int descriptor, const std::string &contents, std::error_code *err
 }
 } // namespace
 
+/*******************************************************************************************************
+ *
+ * @brief parking-point store
+ *
+ *******************************************************************************************************/
 bool operator==(const ParkingPoint &left, const ParkingPoint &right)
 {
     return left.name == right.name && left.x == right.x && left.y == right.y && left.yaw == right.yaw;

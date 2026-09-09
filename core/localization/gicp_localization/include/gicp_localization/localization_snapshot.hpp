@@ -1,5 +1,5 @@
-#ifndef GICP_LOCALIZATION_LOCALIZATION_SNAPSHOT_HPP_
-#define GICP_LOCALIZATION_LOCALIZATION_SNAPSHOT_HPP_
+#ifndef XX_LOCALIZATION_SNAPSHOT_H_
+#define XX_LOCALIZATION_SNAPSHOT_H_
 
 #include <string>
 
@@ -9,6 +9,11 @@
 
 namespace gicp_localization {
 
+/**
+ * Returns exactly two transforms with `stamp`: `map_frame` to `odom_frame`
+ * from `map_to_odom`, followed by `map_frame` to `base_frame` composed from
+ * `map_to_odom * odom_to_base`.
+ */
 tf2_msgs::msg::TFMessage make_localization_snapshot(
     const Eigen::Isometry3d &map_to_odom,
     const Eigen::Isometry3d &odom_to_base,
@@ -19,4 +24,4 @@ tf2_msgs::msg::TFMessage make_localization_snapshot(
 
 }  // namespace gicp_localization
 
-#endif  // GICP_LOCALIZATION_LOCALIZATION_SNAPSHOT_HPP_
+#endif  // XX_LOCALIZATION_SNAPSHOT_H_

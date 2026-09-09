@@ -8,7 +8,6 @@
 #include <cctype>
 #include <cmath>
 #include <cstring>
-#include <exception>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
@@ -21,9 +20,14 @@
 
 namespace robot_web_ui
 {
+/*******************************************************************************************************
+ *
+ * @brief binary snapshot encoding
+ *
+ *******************************************************************************************************/
 namespace
 {
-constexpr char kMediaType[] = "application/octet-stream";
+constexpr char k_media_type[] = "application/octet-stream";
 
 bool same_grid_info(const GridInfo &left, const GridInfo &right)
 {
@@ -74,8 +78,8 @@ BinarySnapshotPtr make_binary(uint64_t revision, const nlohmann::json &metadata,
 {
     const std::string metadata_bytes = metadata.dump();
     std::vector<uint8_t> hash_input;
-    hash_input.reserve(sizeof(kMediaType) - 1 + metadata_bytes.size() + data.size());
-    hash_input.insert(hash_input.end(), kMediaType, kMediaType + sizeof(kMediaType) - 1);
+    hash_input.reserve(sizeof(k_media_type) - 1 + metadata_bytes.size() + data.size());
+    hash_input.insert(hash_input.end(), k_media_type, k_media_type + sizeof(k_media_type) - 1);
     hash_input.insert(hash_input.end(), metadata_bytes.begin(), metadata_bytes.end());
     hash_input.insert(hash_input.end(), data.begin(), data.end());
 
@@ -88,9 +92,17 @@ BinarySnapshotPtr make_binary(uint64_t revision, const nlohmann::json &metadata,
     etag << '\"';
 
     return std::make_shared<const BinarySnapshot>(
-        BinarySnapshot{revision, etag.str(), kMediaType, data, gzip_data(data)});
+        BinarySnapshot{revision, etag.str(), k_media_type, data, gzip_data(data)});
 }
+} // namespace
 
+/*******************************************************************************************************
+ *
+ * @brief Nav2 PGM decoding
+ *
+ *******************************************************************************************************/
+namespace
+{
 bool read_pgm_token(const std::vector<uint8_t> &raw, size_t *index, std::string *token)
 {
     while (*index < raw.size()) {
@@ -138,7 +150,12 @@ tl::expected<std::tuple<uint32_t, uint32_t, std::vector<uint8_t>>, std::string> 
     std::ifstream file(path, std::ios::binary);
     if (!file)
         return tl::make_unexpected("invalid image: cannot read " + path.string());
-    const std::vector<uint8_t> raw((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    std::vector<uint8_t> raw;
+    try {
+        raw.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    } catch (const std::ios_base::failure &) {
+        return tl::make_unexpected("invalid image: cannot read " + path.string());
+    }
 
     size_t index = 0;
     std::string magic;
@@ -192,6 +209,11 @@ tl::expected<double, std::string> yaml_number(const YAML::Node &root, const char
 }
 } // namespace
 
+/*******************************************************************************************************
+ *
+ * @brief static map loading
+ *
+ *******************************************************************************************************/
 tl::expected<GridSnapshotPtr, std::string> load_nav2_pgm(const std::filesystem::path &yaml_path)
 {
     YAML::Node root;
@@ -276,6 +298,11 @@ tl::expected<GridSnapshotPtr, std::string> load_nav2_pgm(const std::filesystem::
                                 data);
 }
 
+/*******************************************************************************************************
+ *
+ * @brief occupancy-grid snapshots
+ *
+ *******************************************************************************************************/
 GridSnapshotPtr update_grid_snapshot(
     GridSnapshotPtr current, const GridInfo &info, const std::vector<uint8_t> &data)
 {
@@ -297,6 +324,11 @@ GridSnapshotPtr update_grid_snapshot(
     return update_grid_snapshot(std::move(current), info, converted);
 }
 
+/*******************************************************************************************************
+ *
+ * @brief path snapshots
+ *
+ *******************************************************************************************************/
 PathSnapshotPtr update_path_snapshot(
     PathSnapshotPtr current, const std::string &frame_id, const std::vector<std::pair<double, double>> &points)
 {

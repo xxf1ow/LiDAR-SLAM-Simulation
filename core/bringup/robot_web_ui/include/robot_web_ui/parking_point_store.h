@@ -1,5 +1,5 @@
-#ifndef ROBOT_WEB_UI_PARKING_POINT_STORE_H_
-#define ROBOT_WEB_UI_PARKING_POINT_STORE_H_
+#ifndef XX_PARKING_POINT_STORE_H_
+#define XX_PARKING_POINT_STORE_H_
 
 #include <filesystem>
 #include <memory>
@@ -11,7 +11,7 @@
 
 namespace robot_web_ui
 {
-/** A named pose persisted in a map's parking-point sidecar. */
+/** A named map-frame pose with x/y in meters and yaw in radians. */
 struct ParkingPoint {
     std::string name;
     double x;
@@ -21,7 +21,12 @@ struct ParkingPoint {
 
 bool operator==(const ParkingPoint &left, const ParkingPoint &right);
 
-/** Serial persistent storage for ordered parking points. Callers synchronize access. */
+/**
+ * Serial persistent storage for ordered parking points. Callers synchronize
+ * access. Names are valid UTF-8, trimmed of leading and trailing Unicode
+ * whitespace, and contain 1 through 40 Unicode code points after trimming;
+ * matching and duplicate detection use the resulting exact string.
+ */
 class ParkingPointStore {
 public:
     template <typename T>
@@ -39,19 +44,34 @@ public:
     ParkingPointStore(ParkingPointStore &&) = delete;
     ParkingPointStore &operator=(ParkingPointStore &&) = delete;
 
-    /** Opens the map's sidecar, returning an I/O or corruption error without changing corrupt input. */
+    /**
+     * Reads `<map-stem>.parking_points.json` beside `map_path` once at startup.
+     * A missing sidecar creates an empty store. I/O returns its dependency error;
+     * invalid content returns `corrupt_sidecar` without rewriting the file.
+     * Later external changes are not reloaded.
+     */
     [[nodiscard]] static Result<std::unique_ptr<ParkingPointStore>> create(const std::filesystem::path &map_path);
 
     /** Returns the current points in their persisted order. */
     [[nodiscard]] std::vector<ParkingPoint> list() const;
 
-    /** Atomically appends a validated point, or returns a validation, duplicate, or I/O error. */
+    /**
+     * Appends a finite pose after name normalization and atomically replaces the
+     * sidecar. A failed write preserves both memory and the target file. Success
+     * does not provide an fsync durability guarantee. Invalid names or values,
+     * duplicate normalized names, and I/O return their corresponding errors.
+     */
     [[nodiscard]] Result<void> save(ParkingPoint point);
 
     /** Returns a normalized-name match, or a validation or not-found error. */
     [[nodiscard]] Result<ParkingPoint> get(const std::string &name) const;
 
-    /** Atomically removes a normalized-name match, or returns a validation, not-found, or I/O error. */
+    /**
+     * Removes a normalized-name match and atomically replaces the sidecar. A
+     * failed write preserves both memory and the target file. Success does not
+     * provide an fsync durability guarantee. Invalid names, absent matches, and
+     * I/O return their corresponding errors.
+     */
     [[nodiscard]] Result<void> erase(const std::string &name);
 
     /** Returns this type's explicit error code for a domain error. */
@@ -67,4 +87,4 @@ private:
 };
 } // namespace robot_web_ui
 
-#endif  // ROBOT_WEB_UI_PARKING_POINT_STORE_H_
+#endif  // XX_PARKING_POINT_STORE_H_

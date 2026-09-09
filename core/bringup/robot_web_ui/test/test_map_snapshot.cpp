@@ -86,6 +86,20 @@ TEST(LoadNav2Pgm, RejectsInvalidPgm)
     std::filesystem::remove_all(yaml_path.parent_path());
 }
 
+TEST(LoadNav2Pgm, DirectoryImageReturnsReadError)
+{
+    const auto yaml_path = write_map_fixture(
+        {},
+        "image: .\nresolution: 0.2\norigin: [1.5, -2.0, 0.25]\nnegate: 0\n"
+        "occupied_thresh: 0.65\nfree_thresh: 0.25\nmode: trinary\n");
+
+    const auto snapshot = load_nav2_pgm(yaml_path);
+
+    ASSERT_FALSE(snapshot);
+    EXPECT_EQ(snapshot.error(), "invalid image: cannot read " + (yaml_path.parent_path() / ".").string());
+    std::filesystem::remove_all(yaml_path.parent_path());
+}
+
 TEST(LoadNav2Pgm, RejectsNonDecimalAndUnrepresentableDimensions)
 {
     const std::vector<uint8_t> pixels{0x00, 0xfe, 0xcd, 0xfe};

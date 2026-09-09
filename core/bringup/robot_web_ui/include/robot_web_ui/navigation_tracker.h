@@ -1,5 +1,5 @@
-#ifndef ROBOT_WEB_UI_NAVIGATION_TRACKER_H_
-#define ROBOT_WEB_UI_NAVIGATION_TRACKER_H_
+#ifndef XX_NAVIGATION_TRACKER_H_
+#define XX_NAVIGATION_TRACKER_H_
 
 #include "robot_web_ui/web_types.h"
 
@@ -89,4 +89,4 @@ private:
 };
 } // namespace robot_web_ui
 
-#endif  // ROBOT_WEB_UI_NAVIGATION_TRACKER_H_
+#endif  // XX_NAVIGATION_TRACKER_H_

@@ -13,7 +13,7 @@ namespace
 constexpr std::array<uint8_t, 16> kUuidOne = {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 constexpr std::array<uint8_t, 16> kUuidTwo = {2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
 
-TEST(NavigationTracker, TracksCurrentGoalAndRejectsLateGenerationEvents)
+TEST(NavigationTracker, TracksCurrentGoalAndRejectsStaleOrWrongIdentityEvents)
 {
     NavigationTracker tracker;
     EXPECT_EQ(tracker.state().status, NavigationStatus::idle);
@@ -44,13 +44,30 @@ TEST(NavigationTracker, TracksCurrentGoalAndRejectsLateGenerationEvents)
 
     const uint64_t second_generation = tracker.reserve_goal();
     EXPECT_EQ(tracker.state().status, NavigationStatus::sending);
-    const NavigationState before_late_events = tracker.state();
+    NavigationState before_late_events = tracker.state();
     EXPECT_FALSE(tracker.accept_goal(first_generation, kUuidOne));
-    EXPECT_FALSE(tracker.update_feedback(first_token, 1.0));
-    EXPECT_FALSE(tracker.reject_cancel(first_token, "late cancel"));
-    EXPECT_FALSE(tracker.finish_goal(first_token, NavigationStatus::failed, "late result"));
     EXPECT_EQ(tracker.state(), before_late_events);
-    EXPECT_TRUE(tracker.accept_goal(second_generation, kUuidTwo));
+    ASSERT_TRUE(tracker.accept_goal(second_generation, kUuidTwo));
+
+    const GoalToken second_token{second_generation, kUuidTwo};
+    const GoalToken wrong_uuid{second_generation, kUuidOne};
+    before_late_events = tracker.state();
+    EXPECT_FALSE(tracker.update_feedback(first_token, 1.0));
+    EXPECT_FALSE(tracker.update_feedback(wrong_uuid, 2.0));
+    EXPECT_FALSE(tracker.finish_goal(first_token, NavigationStatus::failed, "late result"));
+    EXPECT_FALSE(tracker.finish_goal(wrong_uuid, NavigationStatus::failed, "wrong goal result"));
+    EXPECT_EQ(tracker.state(), before_late_events);
+
+    GoalToken second_cancel_token{};
+    ASSERT_TRUE(tracker.begin_cancel(&second_cancel_token));
+    EXPECT_EQ(second_cancel_token, second_token);
+    before_late_events = tracker.state();
+    EXPECT_FALSE(tracker.reject_cancel(first_token, "late cancel"));
+    EXPECT_FALSE(tracker.reject_cancel(wrong_uuid, "wrong goal cancel"));
+    EXPECT_FALSE(tracker.finish_goal(first_token, NavigationStatus::failed, "late result"));
+    EXPECT_FALSE(tracker.finish_goal(wrong_uuid, NavigationStatus::failed, "wrong goal result"));
+    EXPECT_EQ(tracker.state(), before_late_events);
+    EXPECT_TRUE(tracker.reject_cancel(second_token, "current cancel rejected"));
 }
 
 TEST(NavigationTracker, AllowsInitialPoseOnlyWhenNoGoalIsActive)

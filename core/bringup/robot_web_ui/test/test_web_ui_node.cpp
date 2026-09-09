@@ -272,6 +272,21 @@ TEST_F(WebUiNodeTest, TildeMapPathLoadsStaticMapAndParkingStore)
     EXPECT_EQ(node->http_actions().list_parking_points().status, 200);
 }
 
+TEST_F(WebUiNodeTest, DirectoryMapImageKeepsManualOperationsAvailable)
+{
+    std::ofstream(directory / "map.yaml", std::ios::trunc)
+        << "image: .\nresolution: 1.0\norigin: [0, 0, 0]\n"
+           "negate: 0\noccupied_thresh: 0.65\nfree_thresh: 0.25\nmode: trinary\n";
+
+    start(false);
+
+    const auto state = node->http_actions().navigation_state();
+    EXPECT_FALSE(state["map_error"].is_null());
+    EXPECT_TRUE(state["layers"]["static"].is_null());
+    EXPECT_EQ(node->http_actions().manual_command("stop", 0).status, 200);
+    EXPECT_EQ(node->http_actions().list_parking_points().status, 200);
+}
+
 TEST_F(WebUiNodeTest, MappingModeRetainsManualControlAndDisablesNavigation)
 {
     start(false);
@@ -436,7 +451,7 @@ TEST_F(WebUiNodeTest, GoalLifecycleAndInitialPoseUseRealRosPeers)
     EXPECT_EQ(node->http_actions().navigation_asset("path"), nullptr);
 }
 
-TEST_F(WebUiNodeTest, ModeTimeoutDoesNotBorrowRequestStackAndManualCallsStayResponsive)
+TEST_F(WebUiNodeTest, ModeTimeoutReturnsPendingAndManualCallsStayResponsive)
 {
     start(false);
     std::promise<void> entered;
