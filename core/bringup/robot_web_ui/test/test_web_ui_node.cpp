@@ -20,12 +20,15 @@
 #include <chrono>
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <functional>
 #include <limits>
 #include <optional>
+#include <stdexcept>
+#include <string>
 #include <thread>
 
 namespace
@@ -73,6 +76,33 @@ namespace
 using namespace std::chrono_literals;
 using Navigate = nav2_msgs::action::NavigateToPose;
 using ServerGoal = rclcpp_action::ServerGoalHandle<Navigate>;
+
+class ScopedHome {
+public:
+    explicit ScopedHome(const std::filesystem::path &home);
+    ~ScopedHome();
+    ScopedHome(const ScopedHome &) = delete;
+    ScopedHome &operator=(const ScopedHome &) = delete;
+
+private:
+    std::optional<std::string> previous_;
+};
+
+ScopedHome::ScopedHome(const std::filesystem::path &home)
+{
+    if (const char *previous = std::getenv("HOME"))
+        previous_ = previous;
+    if (::setenv("HOME", home.c_str(), 1) != 0)
+        throw std::runtime_error("failed to set HOME for test");
+}
+
+ScopedHome::~ScopedHome()
+{
+    if (previous_)
+        (void)::setenv("HOME", previous_->c_str(), 1);
+    else
+        (void)::unsetenv("HOME");
+}
 
 class WebUiNodeTest : public testing::Test {
 protected:
@@ -227,6 +257,19 @@ TEST_F(WebUiNodeTest, NavigationModeCreatesOnlyItsSpecifiedRosInterfaces)
     ASSERT_EQ(infos.size(), 1U);
     EXPECT_EQ(infos[0].qos_profile().durability(), rclcpp::DurabilityPolicy::TransientLocal);
     EXPECT_EQ(infos[0].qos_profile().reliability(), rclcpp::ReliabilityPolicy::Reliable);
+}
+
+TEST_F(WebUiNodeTest, TildeMapPathLoadsStaticMapAndParkingStore)
+{
+    ScopedHome home(directory);
+    auto options = rclcpp::NodeOptions().parameter_overrides({
+        rclcpp::Parameter("navigation_sources_enabled", false),
+        rclcpp::Parameter("map_yaml_path", "~/map.yaml")});
+    node = std::make_shared<WebUiNode>(options);
+    executor.add_node(node);
+
+    EXPECT_FALSE(node->http_actions().navigation_state()["layers"]["static"].is_null());
+    EXPECT_EQ(node->http_actions().list_parking_points().status, 200);
 }
 
 TEST_F(WebUiNodeTest, MappingModeRetainsManualControlAndDisablesNavigation)

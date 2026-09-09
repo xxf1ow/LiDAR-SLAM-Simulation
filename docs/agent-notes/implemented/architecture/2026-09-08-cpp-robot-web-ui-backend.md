@@ -62,6 +62,8 @@ The installed `robot_web_ui` executable creates and binds HTTP before its main-t
 
 `robot_web_ui_ros` owns the concrete `WebUiNode` and its internal `HttpActions` implementation. The HTTP module borrows that interface and must finish all calls before node destruction. ROS callbacks use the single-threaded executor. GICP messages must contain finite, same-stamp `map -> camera_init` and `map -> body` transforms with nonzero quaternion norms. Localization, the retained local grid, its affine, and transform availability/error are copied together; invalid localization keeps the last pose and affine but marks the transform unavailable. A valid transform updates the affine without rebuilding the grid body, and local grid bodies are accepted only while that transform is available.
 
+The root node expands a leading `~` in `map_yaml_path` once before passing the same path to static-map loading and parking-point storage. This preserves the formal bringup configuration's home-relative map path without duplicating path handling in those subordinate modules.
+
 Manual commands check and copy the current mode under the state mutex, then publish after releasing it. Initial-pose publication reserves an in-flight flag under the same mutex used by goal reservation; competing initial-pose and goal requests return 409 until publication finishes. An RAII guard clears the flag after either success or failure. Reliable ROS publication can block on transport capacity, so neither publisher call holds the shared-state mutex; state requests and unrelated controls remain available during publication.
 
 Parking operations acquire a non-waiting atomic lease. A concurrent operation returns HTTP 503 without entering the serial store; RAII releases the lease on every return path. File I/O holds no node, snapshot, parking, or navigation mutex. Mode-service callbacks capture shared completion state, and timed-out requests are removed from the ROS client so an unavailable server cannot accumulate pending completions.
@@ -92,7 +94,7 @@ A full `sim + navigation` run through the formal bringup entry remains the dynam
 
 ## Consequences
 
-Replacing the Python backend preserves the external HTTP, persistence, and binary-map contracts while removing a process and Python ROS deserialization path. A focused test set reduces migration coverage compared with the mature Python suite, so representative real entry paths remain important.
+Replacing the Python backend preserves the external HTTP, persistence, and binary-map contracts while removing the Python runtime and Python ROS deserialization path. A focused test set reduces migration coverage compared with the mature Python suite, so representative real entry paths remain important.
 
 cpp-httplib workers and the ROS executor access one node concurrently. Short mutex-protected operations and immutable snapshots make that concurrency explicit; blocking a worker while holding shared state would reintroduce latency and deadlock risk.
 

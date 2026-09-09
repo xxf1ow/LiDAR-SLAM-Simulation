@@ -23,9 +23,11 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <future>
 #include <mutex>
 #include <optional>
+#include <string>
 #include <utility>
 
 namespace robot_web_ui
@@ -42,6 +44,16 @@ using detail::ParkingLease;
 ApiReply error_reply(int status, const std::string &message)
 {
     return {status, {{"error", message}}};
+}
+
+std::string expand_home_path(const std::string &path)
+{
+    if (path != "~" && path.rfind("~/", 0) != 0)
+        return path;
+    const char *home = std::getenv("HOME");
+    if (home == nullptr || *home == '\0')
+        return path;
+    return std::string(home) + path.substr(1);
 }
 
 Json optional_string(const std::optional<std::string> &value)
@@ -235,7 +247,7 @@ WebUiNode::Impl::Impl(WebUiNode &owner) : node(owner)
     max_angular = node.declare_parameter("max_angular_speed", 1.0);
     node.declare_parameter("host", std::string("0.0.0.0"));
     node.declare_parameter("port", 8080);
-    const auto map_path = node.declare_parameter("map_yaml_path", std::string());
+    const auto map_path = expand_home_path(node.declare_parameter("map_yaml_path", std::string()));
     navigation_enabled = node.declare_parameter("navigation_sources_enabled", false);
     auto loaded = load_nav2_pgm(map_path);
     if (loaded) static_map = *loaded;
