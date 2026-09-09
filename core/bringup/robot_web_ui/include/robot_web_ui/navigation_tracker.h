@@ -51,6 +51,9 @@ public:
     /** Records a Nav2 acceptance only when generation identifies the current sending goal. */
     [[nodiscard]] bool accept_goal(uint64_t generation, const std::array<uint8_t, 16> &uuid);
 
+    /** Records a current submission rejection or send failure and clears displayed goal data. */
+    [[nodiscard]] bool fail_submission(uint64_t generation, std::string message);
+
     /** Updates finite feedback only when the token identifies the current navigating goal. */
     [[nodiscard]] bool update_feedback(const GoalToken &token, double distance_remaining);
 

@@ -49,6 +49,13 @@ const std::error_category &parking_point_store_error_category() noexcept
     return category;
 }
 
+std::error_code current_io_error() noexcept
+{
+    if (errno != 0)
+        return {errno, std::generic_category()};
+    return std::make_error_code(std::errc::io_error);
+}
+
 tl::unexpected<std::error_code> failure(ParkingPointStore::Errc error) noexcept
 {
     return tl::make_unexpected(ParkingPointStore::make_error_code(error));
@@ -128,7 +135,7 @@ bool decode_utf8(const std::string &value, std::vector<std::pair<size_t, uint32_
             code_point = (code_point << 6U) | (byte & 0x3fU);
         }
         if ((length == 3 && code_point < 0x800) || (length == 4 && code_point < 0x10000) ||
-            (code_point >= 0xd800 && code_point <= 0xdfff))
+            code_point > 0x10ffff || (code_point >= 0xd800 && code_point <= 0xdfff))
             return false;
         code_points->push_back({index, code_point});
         index += length;
@@ -205,12 +212,19 @@ ParkingPointStore::Result<std::unique_ptr<ParkingPointStore>> ParkingPointStore:
         return std::unique_ptr<ParkingPointStore>(new ParkingPointStore(sidecar_path, {}));
     }
 
-    std::ifstream input(sidecar_path, std::ios::binary);
-    if (!input)
-        return tl::make_unexpected(std::error_code(errno, std::generic_category()));
-    const std::string contents{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
-    if (input.bad())
-        return tl::make_unexpected(std::error_code(errno, std::generic_category()));
+    std::string contents;
+    errno = 0;
+    try {
+        std::ifstream input(sidecar_path, std::ios::binary);
+        if (!input)
+            return tl::make_unexpected(current_io_error());
+        input.exceptions(std::ios::badbit);
+        contents.assign(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+        if (input.bad())
+            return tl::make_unexpected(current_io_error());
+    } catch (const std::ios_base::failure &) {
+        return tl::make_unexpected(current_io_error());
+    }
 
     try {
         const nlohmann::json root = nlohmann::json::parse(contents);

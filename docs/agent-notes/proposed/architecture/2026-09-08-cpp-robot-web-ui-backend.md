@@ -38,7 +38,7 @@ The navigation-state `motion` object and action-response `linear_x`, `angular_z`
 
 ## Navigation contract
 
-Navigation states remain `idle`, `sending`, `navigating`, `canceling`, `succeeded`, `canceled`, and `failed`. `POST /api/navigation-goal` will retain map revision, bounds, automatic-mode, localization, Action Server, and active-goal checks. A successful asynchronous submission will return HTTP 202 with `goal_status: sending`; this response means that submission started, not that Nav2 accepted the goal. Parking-point navigation will resolve the stored pose and use the same goal path.
+Navigation states remain `idle`, `sending`, `navigating`, `canceling`, `succeeded`, `canceled`, and `failed`. `POST /api/navigation-goal` will retain map revision, bounds, automatic-mode, localization, Action Server, and active-goal checks. A successful asynchronous submission will return HTTP 202 with `goal_status: sending`; this response means that submission started, not that Nav2 accepted the goal. A rejection or send failure for the current submission will transition that generation to `failed`, retain its error, and clear its displayed path and distance. Parking-point navigation will resolve the stored pose and use the same goal path.
 
 Only an accepted current goal can be canceled. A successfully submitted cancellation returns HTTP 202 with `goal_status: canceling`; a rejected or failed cancellation restores `navigating` and records the error. Nav2 results map to the existing succeeded, canceled, or failed terminal state.
 

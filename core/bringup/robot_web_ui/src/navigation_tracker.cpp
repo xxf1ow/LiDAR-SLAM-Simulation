@@ -61,6 +61,19 @@ bool NavigationTracker::accept_goal(uint64_t generation, const std::array<uint8_
     return true;
 }
 
+bool NavigationTracker::fail_submission(uint64_t generation, std::string message)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (status_ != NavigationStatus::sending || generation != generation_)
+        return false;
+    status_ = NavigationStatus::failed;
+    uuid_.reset();
+    distance_remaining_.reset();
+    message_ = std::move(message);
+    path_.reset();
+    return true;
+}
+
 bool NavigationTracker::update_feedback(const GoalToken &token, double distance_remaining)
 {
     std::lock_guard<std::mutex> lock(mutex_);

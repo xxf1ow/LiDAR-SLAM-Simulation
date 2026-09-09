@@ -68,6 +68,25 @@ TEST(NavigationTracker, AllowsInitialPoseOnlyWhenNoGoalIsActive)
     EXPECT_TRUE(tracker.initial_pose_allowed());
 }
 
+TEST(NavigationTracker, FailsCurrentSubmissionAndIgnoresStaleSubmissionFailures)
+{
+    NavigationTracker tracker;
+    const uint64_t first_generation = tracker.reserve_goal();
+    ASSERT_TRUE(tracker.update_path(std::make_shared<const PathSnapshot>()));
+
+    ASSERT_TRUE(tracker.fail_submission(first_generation, "navigation goal rejected"));
+    EXPECT_EQ(tracker.state().status, NavigationStatus::failed);
+    EXPECT_EQ(tracker.state().message, "navigation goal rejected");
+    EXPECT_FALSE(tracker.state().path);
+    EXPECT_FALSE(tracker.state().distance_remaining);
+
+    const uint64_t second_generation = tracker.reserve_goal();
+    const NavigationState before_stale_failure = tracker.state();
+    EXPECT_FALSE(tracker.fail_submission(first_generation, "navigation send failed"));
+    EXPECT_EQ(tracker.state(), before_stale_failure);
+    EXPECT_TRUE(tracker.accept_goal(second_generation, kUuidTwo));
+}
+
 TEST(NavigationTracker, AcceptsPathsOnlyForAnActiveOwnedGoalAndGatesDistanceOnNonemptyPath)
 {
     NavigationTracker tracker;

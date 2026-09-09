@@ -34,7 +34,12 @@ public:
         corrupt_sidecar,
     };
 
-    /** Opens the map's sidecar, returning an error without changing corrupt input. */
+    ParkingPointStore(const ParkingPointStore &) = delete;
+    ParkingPointStore &operator=(const ParkingPointStore &) = delete;
+    ParkingPointStore(ParkingPointStore &&) = delete;
+    ParkingPointStore &operator=(ParkingPointStore &&) = delete;
+
+    /** Opens the map's sidecar, returning an I/O or corruption error without changing corrupt input. */
     [[nodiscard]] static Result<std::unique_ptr<ParkingPointStore>> create(const std::filesystem::path &map_path);
 
     /** Returns the current points in their persisted order. */

@@ -9,12 +9,18 @@
 #include <stdexcept>
 #include <string>
 #include <sys/resource.h>
+#include <type_traits>
 #include <unistd.h>
 
 namespace robot_web_ui
 {
 namespace
 {
+static_assert(!std::is_copy_constructible_v<ParkingPointStore>);
+static_assert(!std::is_copy_assignable_v<ParkingPointStore>);
+static_assert(!std::is_move_constructible_v<ParkingPointStore>);
+static_assert(!std::is_move_assignable_v<ParkingPointStore>);
+
 class TemporaryDirectory {
 public:
     TemporaryDirectory();
@@ -148,6 +154,33 @@ TEST(ParkingPointStore, CorruptSidecarFailsCreationWithoutOverwritingIt)
     const auto store = ParkingPointStore::create(directory.path() / "warehouse.yaml");
     EXPECT_FALSE(store);
     EXPECT_EQ(read_file(sidecar), "not json");
+}
+
+TEST(ParkingPointStore, DirectorySidecarReturnsAnIoErrorWithoutThrowing)
+{
+    TemporaryDirectory directory;
+    const std::filesystem::path sidecar = directory.path() / "warehouse.parking_points.json";
+    ASSERT_TRUE(std::filesystem::create_directory(sidecar));
+
+    EXPECT_NO_THROW({
+        const auto store = ParkingPointStore::create(directory.path() / "warehouse.yaml");
+        ASSERT_FALSE(store);
+        EXPECT_EQ(store.error(), std::make_error_code(std::errc::is_a_directory));
+    });
+}
+
+TEST(ParkingPointStore, InvalidUnicodeScalarIsRejectedWithoutWriting)
+{
+    TemporaryDirectory directory;
+    auto store = ParkingPointStore::create(directory.path() / "warehouse.yaml");
+    ASSERT_TRUE(store);
+    const std::string invalid_scalar("\xf4\x90\x80\x80", 4);
+
+    EXPECT_NO_THROW({
+        EXPECT_FALSE((*store)->save(ParkingPoint{invalid_scalar, 1.0, 2.0, 0.0}));
+    });
+    EXPECT_TRUE((*store)->list().empty());
+    EXPECT_FALSE(std::filesystem::exists(directory.path() / "warehouse.parking_points.json"));
 }
 
 TEST(ParkingPointStore, WriteFailurePreservesMemoryAndTargetBytes)
