@@ -56,6 +56,10 @@ Third-party implementation dependencies are `cpp-httplib`, `nlohmann/json`, `yam
 
 `robot_web_ui_core` is an `ament_cmake` C++17 utility library. Its value types are independent of ROS and HTTP; it provides request validation, trinary Nav2 PGM decoding, deterministic gzip encoding, and strong SHA-256 ETags. ROS and HTTP integration remain outside this utility boundary.
 
+`robot_web_ui_ros` owns the concrete `WebUiNode` and its internal `HttpActions` implementation. The HTTP module borrows that interface and must finish all calls before node destruction. ROS callbacks use the single-threaded executor; initial-pose validation/publication and goal reservation share one short exclusion mutex. GICP messages must contain finite, same-stamp `map -> camera_init` and `map -> body` transforms with nonzero quaternion norms. Localization, the retained local grid, its affine, and transform availability/error are copied together; invalid localization keeps the last pose and affine but marks the transform unavailable. A valid transform updates the affine without rebuilding the grid body, and local grid bodies are accepted only while that transform is available.
+
+Parking operations acquire a non-waiting atomic lease. A concurrent operation returns HTTP 503 without entering the serial store; RAII releases the lease on every return path. File I/O holds no node, snapshot, parking, or navigation mutex. Mode-service callbacks capture shared completion state, and timed-out requests are removed from the ROS client so an unavailable server cannot accumulate pending completions.
+
 ## Errors and lifecycle
 
 HTTP errors retain the current 400 validation, 404 missing resource, 409 state conflict, 500 internal response failure, and 503 unavailable dependency semantics. A static-map or parking-sidecar error disables only dependent operations and remains visible in state; it does not terminate unrelated manual control or HTTP service. Invalid ROS input preserves the last valid snapshot and reports the associated layer error.
