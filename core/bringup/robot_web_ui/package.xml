@@ -8,23 +8,23 @@
   <maintainer email="20twenty.degree@gmail.com">xxf1ow</maintainer>
   <license>MIT</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>action_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>nav2_msgs</exec_depend>
-  <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>std_srvs</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
+  <build_depend>nlohmann-json3-dev</build_depend>
+  <build_depend>openssl</build_depend>
+  <build_depend>tl-expected</build_depend>
+  <build_depend>yaml-cpp</build_depend>
+  <build_depend>zlib</build_depend>
 
-  <test_depend>python3-pytest</test_depend>
-  <test_depend>python3-yaml</test_depend>
+  <exec_depend>nlohmann-json3-dev</exec_depend>
+  <exec_depend>openssl</exec_depend>
+  <exec_depend>tl-expected</exec_depend>
+  <exec_depend>yaml-cpp</exec_depend>
+  <exec_depend>zlib</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

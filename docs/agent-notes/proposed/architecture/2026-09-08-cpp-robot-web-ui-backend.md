@@ -52,6 +52,10 @@ The navigation-state `phase` field will remain present for JSON compatibility bu
 
 Third-party implementation dependencies are `cpp-httplib`, `nlohmann/json`, `yaml-cpp`, zlib, OpenSSL libcrypto for the existing SHA-256 ETag contract, and `tl::expected` for explicit fallible C++ interfaces. websocketpp, standalone Asio, OpenCV, and a lock-free queue library are not required. Third-party headers and types will not leak through the root node's public interface. The workspace-wide colcon defaults continue to select Release unless the caller explicitly supplies another `CMAKE_BUILD_TYPE`.
 
+## Current implementation
+
+`robot_web_ui_core` is an `ament_cmake` C++17 utility library. Its value types are independent of ROS and HTTP; it provides request validation, trinary Nav2 PGM decoding, deterministic gzip encoding, and strong SHA-256 ETags. ROS and HTTP integration remain outside this utility boundary.
+
 ## Errors and lifecycle
 
 HTTP errors retain the current 400 validation, 404 missing resource, 409 state conflict, 500 internal response failure, and 503 unavailable dependency semantics. A static-map or parking-sidecar error disables only dependent operations and remains visible in state; it does not terminate unrelated manual control or HTTP service. Invalid ROS input preserves the last valid snapshot and reports the associated layer error.
