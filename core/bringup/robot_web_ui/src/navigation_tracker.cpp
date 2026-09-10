@@ -33,7 +33,7 @@ bool operator==(const GoalToken &left, const GoalToken &right)
 bool operator==(const NavigationState &left, const NavigationState &right)
 {
     return left.status == right.status && left.distance_remaining == right.distance_remaining &&
-           left.message == right.message && left.phase == right.phase && left.path == right.path;
+           left.message == right.message && left.path == right.path;
 }
 
 NavigationTracker::NavigationTracker() = default;
@@ -140,7 +140,6 @@ NavigationState NavigationTracker::state() const
         status_,
         has_path_points(path_) ? distance_remaining_ : std::nullopt,
         message_,
-        std::nullopt,
         path_,
     };
 }

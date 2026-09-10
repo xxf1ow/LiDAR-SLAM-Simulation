@@ -51,7 +51,7 @@ BinarySnapshotPtr FakeActions::navigation_asset(const std::string &name) const
     if (name == "local_costmap") return nullptr;
     if (name != "static" && name != "global_costmap" && name != "path") return nullptr;
     const std::string bytes = "gzip-" + name;
-    return std::make_shared<const BinarySnapshot>(BinarySnapshot{3, "\"revision-3\"", "application/octet-stream", {'r','a','w'}, {bytes.begin(), bytes.end()}});
+    return std::make_shared<const BinarySnapshot>(BinarySnapshot{3, "\"revision-3\"", {'r','a','w'}, {bytes.begin(), bytes.end()}});
 }
 ApiReply FakeActions::manual_command(const std::string &direction, double speed)
 {

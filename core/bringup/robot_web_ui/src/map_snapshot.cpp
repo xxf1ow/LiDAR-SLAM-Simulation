@@ -27,8 +27,6 @@ namespace robot_web_ui
  *******************************************************************************************************/
 namespace
 {
-constexpr char k_media_type[] = "application/octet-stream";
-
 bool same_grid_info(const GridInfo &left, const GridInfo &right)
 {
     return left.width == right.width && left.height == right.height && left.resolution == right.resolution &&
@@ -78,8 +76,8 @@ BinarySnapshotPtr make_binary(uint64_t revision, const nlohmann::json &metadata,
 {
     const std::string metadata_bytes = metadata.dump();
     std::vector<uint8_t> hash_input;
-    hash_input.reserve(sizeof(k_media_type) - 1 + metadata_bytes.size() + data.size());
-    hash_input.insert(hash_input.end(), k_media_type, k_media_type + sizeof(k_media_type) - 1);
+    hash_input.reserve(sizeof(binary_media_type) - 1 + metadata_bytes.size() + data.size());
+    hash_input.insert(hash_input.end(), binary_media_type, binary_media_type + sizeof(binary_media_type) - 1);
     hash_input.insert(hash_input.end(), metadata_bytes.begin(), metadata_bytes.end());
     hash_input.insert(hash_input.end(), data.begin(), data.end());
 
@@ -91,8 +89,7 @@ BinarySnapshotPtr make_binary(uint64_t revision, const nlohmann::json &metadata,
         etag << std::setw(2) << static_cast<unsigned int>(byte);
     etag << '\"';
 
-    return std::make_shared<const BinarySnapshot>(
-        BinarySnapshot{revision, etag.str(), k_media_type, data, gzip_data(data)});
+    return std::make_shared<const BinarySnapshot>(BinarySnapshot{revision, etag.str(), data, gzip_data(data)});
 }
 } // namespace
 

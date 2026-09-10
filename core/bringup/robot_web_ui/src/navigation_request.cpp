@@ -63,6 +63,6 @@ tl::expected<NavigationPose, PoseError> parse_navigation_pose(
         return invalid_request("pose is outside the static map");
     }
 
-    return NavigationPose{x, y, yaw, revision};
+    return NavigationPose{x, y, yaw};
 }
 } // namespace robot_web_ui

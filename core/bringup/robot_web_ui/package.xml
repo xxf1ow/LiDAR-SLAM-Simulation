@@ -28,9 +28,7 @@
   <build_depend>libcpp-httplib-dev</build_depend>
   <build_depend>pkg-config</build_depend>
 
-  <exec_depend>nlohmann-json-dev</exec_depend>
   <exec_depend>libssl-dev</exec_depend>
-  <exec_depend>tl_expected</exec_depend>
   <exec_depend>yaml-cpp</exec_depend>
   <exec_depend>zlib</exec_depend>
   <exec_depend>libcpp-httplib-dev</exec_depend>

@@ -25,7 +25,7 @@ TEST(NavigationTracker, TracksCurrentGoalAndRejectsStaleOrWrongIdentityEvents)
 
     const GoalToken first_token{first_generation, kUuidOne};
     ASSERT_TRUE(tracker.update_path(std::make_shared<const PathSnapshot>(
-        PathSnapshot{"map", std::make_shared<const BinarySnapshot>(BinarySnapshot{1, "etag", "application/octet-stream", {1, 2, 3, 4, 5, 6, 7, 8}, {}})})));
+        PathSnapshot{"map", std::make_shared<const BinarySnapshot>(BinarySnapshot{1, "etag", {1, 2, 3, 4, 5, 6, 7, 8}, {}})})));
     EXPECT_TRUE(tracker.update_feedback(first_token, 4.5));
     EXPECT_EQ(tracker.state().distance_remaining, 4.5);
 
@@ -117,10 +117,9 @@ TEST(NavigationTracker, AcceptsPathsOnlyForAnActiveOwnedGoalAndGatesDistanceOnNo
     EXPECT_FALSE(tracker.state().distance_remaining);
 
     PathSnapshotPtr nonempty_path = std::make_shared<const PathSnapshot>(
-        PathSnapshot{"map", std::make_shared<const BinarySnapshot>(BinarySnapshot{1, "etag", "application/octet-stream", {1, 2, 3, 4, 5, 6, 7, 8}, {}})});
+        PathSnapshot{"map", std::make_shared<const BinarySnapshot>(BinarySnapshot{1, "etag", {1, 2, 3, 4, 5, 6, 7, 8}, {}})});
     EXPECT_TRUE(tracker.update_path(nonempty_path));
     EXPECT_EQ(tracker.state().distance_remaining, 2.0);
-    EXPECT_FALSE(tracker.state().phase);
     ASSERT_TRUE(tracker.finish_goal(token, NavigationStatus::succeeded, std::nullopt));
     EXPECT_FALSE(tracker.update_path(nonempty_path));
 }

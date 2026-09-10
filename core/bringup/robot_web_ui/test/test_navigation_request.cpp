@@ -19,7 +19,6 @@ TEST(ParseNavigationPose, NormalizesPoseWithinRotatedMap)
     EXPECT_DOUBLE_EQ(pose->x, 4.0);
     EXPECT_DOUBLE_EQ(pose->y, -2.0);
     EXPECT_NEAR(pose->yaw, std::atan2(std::sin(7.0), std::cos(7.0)), 1e-12);
-    EXPECT_EQ(pose->map_revision, 3U);
 }
 
 TEST(ParseNavigationPose, DistinguishesRevisionConflictFromInvalidPose)

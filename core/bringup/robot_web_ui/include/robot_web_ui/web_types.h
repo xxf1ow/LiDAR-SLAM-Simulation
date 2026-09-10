@@ -31,14 +31,15 @@ struct NavigationPose {
     double x;
     double y;
     double yaw;
-    uint64_t map_revision;
 };
+
+/** Binary map media type included in strong ETags and HTTP responses. */
+inline constexpr char binary_media_type[] = "application/octet-stream";
 
 /** A revisioned binary HTTP representation. */
 struct BinarySnapshot {
     uint64_t revision;
     std::string etag;
-    std::string media_type;
     std::vector<uint8_t> data;
     std::vector<uint8_t> gzip_data;
 };

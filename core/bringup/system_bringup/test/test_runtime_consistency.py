@@ -3,6 +3,7 @@ import builtins
 import importlib.util
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import types
@@ -1098,6 +1099,16 @@ def test_actual_install_contains_web_ui_executable_and_assets():
 
     assert executable.is_file()
     assert os.access(executable, os.X_OK)
+    loader = subprocess.run(
+        [executable],
+        env={**os.environ, "LD_TRACE_LOADED_OBJECTS": "1"},
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    loader_output = loader.stdout + loader.stderr
+    assert loader.returncode == 0
+    assert "not found" not in loader_output
     for relative_path in ("web/index.html", "web/map_view.js"):
         installed = install_prefix / "share/robot_web_ui" / relative_path
         source = package_root / relative_path

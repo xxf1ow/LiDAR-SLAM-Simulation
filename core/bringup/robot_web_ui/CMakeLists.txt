@@ -79,7 +79,7 @@ if(BUILD_TESTING)
 
   ament_add_gtest(test_web_ui_node test/test_web_ui_node.cpp)
   target_link_libraries(test_web_ui_node robot_web_ui_ros)
-  target_link_options(test_web_ui_node PRIVATE "LINKER:--wrap=rcl_publish")
+  target_link_options(test_web_ui_node PRIVATE "LINKER:--wrap=rcl_publish" "LINKER:--wrap=rename")
   ament_target_dependencies(test_web_ui_node rclcpp rclcpp_action geometry_msgs nav_msgs nav2_msgs std_msgs std_srvs tf2_msgs)
 
   ament_add_pytest_test(test_web_asset test/test_web_asset.py TIMEOUT 30)

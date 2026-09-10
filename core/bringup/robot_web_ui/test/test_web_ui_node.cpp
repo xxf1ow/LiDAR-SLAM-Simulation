@@ -1,7 +1,6 @@
 #include "robot_web_ui/web_ui_node.h"
 #include "robot_web_ui/http_actions.h"
 #include "robot_web_ui/parking_point_store.h"
-#include "../src/parking_lease.h"
 
 #include <gtest/gtest.h>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
@@ -17,6 +16,7 @@
 #include <std_srvs/srv/trigger.hpp>
 #include <tf2_msgs/msg/tf_message.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <atomic>
 #include <cmath>
@@ -49,6 +49,32 @@ PublishPause::PublishPause(std::string selected_topic, bool return_error)
     : topic(std::move(selected_topic)), fail(return_error), released(release.get_future().share()) {}
 
 std::shared_ptr<PublishPause> publish_pause;
+
+struct RenamePause {
+    explicit RenamePause(std::string selected_destination);
+    ~RenamePause();
+    void resume();
+
+    std::string destination;
+    std::atomic<bool> intercepted{false};
+    std::atomic<bool> resumed{false};
+    std::promise<void> entered;
+    std::promise<void> release;
+    std::shared_future<void> released;
+};
+
+RenamePause::RenamePause(std::string selected_destination)
+    : destination(std::move(selected_destination)), released(release.get_future().share()) {}
+
+RenamePause::~RenamePause() { resume(); }
+
+void RenamePause::resume()
+{
+    if (!resumed.exchange(true))
+        release.set_value();
+}
+
+std::shared_ptr<RenamePause> rename_pause;
 } // namespace
 
 extern "C" rcl_ret_t __real_rcl_publish(
@@ -67,6 +93,18 @@ extern "C" rcl_ret_t __wrap_rcl_publish(
         }
     }
     return __real_rcl_publish(publisher, message, allocation);
+}
+
+extern "C" int __real_rename(const char *old_path, const char *new_path);
+
+extern "C" int __wrap_rename(const char *old_path, const char *new_path)
+{
+    const auto pause = std::atomic_load(&rename_pause);
+    if (pause && pause->destination == new_path && !pause->intercepted.exchange(true)) {
+        pause->entered.set_value();
+        pause->released.wait();
+    }
+    return __real_rename(old_path, new_path);
 }
 
 namespace robot_web_ui
@@ -247,8 +285,13 @@ TEST_F(WebUiNodeTest, NavigationModeCreatesOnlyItsSpecifiedRosInterfaces)
         EXPECT_EQ(subscriptions.count(topic), 1U) << topic;
     for (const std::string topic : {"/tf", "/tf_static", "/base_controller/odom", "/localization", "/behavior_tree_log"})
         EXPECT_EQ(subscriptions.count(topic), 0U) << topic;
-    EXPECT_EQ(node->count_publishers("/cmd_vel_manual"), 1U);
-    EXPECT_EQ(node->count_publishers("/initialpose"), 1U);
+    for (const std::string topic : {"/cmd_vel_manual", "/initialpose"}) {
+        const auto publishers = peer->get_publishers_info_by_topic(topic);
+        const auto owned = std::count_if(publishers.begin(), publishers.end(), [](const auto &publisher) {
+            return publisher.node_name() == "robot_web_ui" && publisher.node_namespace() == "/";
+        });
+        EXPECT_EQ(owned, 1) << topic;
+    }
     const auto clients = peer->get_node_graph_interface()->get_client_names_and_types_by_node("robot_web_ui", "/");
     EXPECT_EQ(clients.count("/cmd_vel_gate/takeover_manual"), 1U);
     EXPECT_EQ(clients.count("/cmd_vel_gate/resume_automatic"), 1U);
@@ -451,6 +494,37 @@ TEST_F(WebUiNodeTest, GoalLifecycleAndInitialPoseUseRealRosPeers)
     EXPECT_EQ(node->http_actions().navigation_asset("path"), nullptr);
 }
 
+TEST_F(WebUiNodeTest, SuccessfulGoalExposesPathAndClearsItWithTerminalState)
+{
+    start();
+    std::shared_ptr<ServerGoal> goal;
+    auto server = rclcpp_action::create_server<Navigate>(
+        peer, "/navigate_to_pose",
+        [](const auto &, auto) { return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE; },
+        [](auto) { return rclcpp_action::CancelResponse::ACCEPT; },
+        [&](auto handle) { goal = handle; });
+    auto plan = peer->create_publisher<nav_msgs::msg::Path>("/plan", 1);
+    publish_localization();
+    publish_mode("automatic");
+    ASSERT_TRUE(until([&] { return node->http_actions().navigation_state()["navigation"]["action_server_ready"] == true; }));
+
+    const nlohmann::json pose{{"x", 1.0}, {"y", 1.0}, {"yaw", 0.5}, {"map_revision", 1}};
+    ASSERT_EQ(node->http_actions().send_navigation_goal(pose).status, 202);
+    ASSERT_TRUE(until([&] { return goal != nullptr; }));
+    nav_msgs::msg::Path path;
+    path.header.frame_id = "map";
+    path.poses.resize(1);
+    path.poses[0].pose.position.x = 1.0;
+    path.poses[0].pose.position.y = 1.5;
+    plan->publish(path);
+    ASSERT_TRUE(until([&] { return node->http_actions().navigation_asset("path") != nullptr; }));
+
+    goal->succeed(std::make_shared<Navigate::Result>());
+    ASSERT_TRUE(until([&] { return node->http_actions().navigation_state()["navigation"]["goal_status"] == "succeeded"; }));
+    EXPECT_EQ(node->http_actions().navigation_asset("path"), nullptr);
+    EXPECT_TRUE(node->http_actions().navigation_state()["navigation"]["message"].is_null());
+}
+
 TEST_F(WebUiNodeTest, ModeTimeoutReturnsPendingAndManualCallsStayResponsive)
 {
     start(false);
@@ -520,29 +594,36 @@ TEST_F(WebUiNodeTest, ParkingOperationsPersistLocalizedPoseAndReleaseAfterErrors
     EXPECT_TRUE(node->http_actions().list_parking_points().body["points"].empty());
 }
 
-TEST_F(WebUiNodeTest, ParkingLeaseRejectsConcurrentStoreAccessAndRecoversAfterRelease)
+TEST_F(WebUiNodeTest, ConcurrentParkingOperationsReturnBusyAndRecoverAfterPersistence)
 {
-    auto store = ParkingPointStore::create(directory / "map.yaml");
-    ASSERT_TRUE(store);
-    std::atomic_flag busy = ATOMIC_FLAG_INIT;
-    {
-        detail::ParkingLease first(busy);
-        ASSERT_TRUE(first.acquired());
-        auto second = std::async(std::launch::async, [&] {
-            detail::ParkingLease lease(busy);
-            if (!lease.acquired())
-                return false;
-            return static_cast<bool>((*store)->save({"second", 0, 0, 0}));
-        });
-        EXPECT_EQ(second.wait_for(100ms), std::future_status::ready);
-        EXPECT_FALSE(second.get());
-        EXPECT_TRUE((*store)->list().empty());
-        ASSERT_TRUE((*store)->save({"first", 0, 0, 0}));
+    start();
+    publish_mode("automatic");
+    publish_localization();
+    auto pause = std::make_shared<RenamePause>((directory / "map.parking_points.json").string());
+    std::atomic_store(&rename_pause, pause);
+
+    auto first = std::async(std::launch::async, [&] {
+        return node->http_actions().save_parking_point("first");
+    });
+    const auto entered = pause->entered.get_future().wait_for(3s);
+    if (entered != std::future_status::ready) {
+        pause->resume();
+        std::atomic_store(&rename_pause, std::shared_ptr<RenamePause>());
     }
-    detail::ParkingLease third(busy);
-    ASSERT_TRUE(third.acquired());
-    ASSERT_TRUE((*store)->save({"third", 1, 1, 0}));
-    EXPECT_EQ((*store)->list().size(), 2U);
+    ASSERT_EQ(entered, std::future_status::ready);
+    EXPECT_EQ(node->http_actions().list_parking_points().status, 503);
+    EXPECT_EQ(node->http_actions().save_parking_point("second").status, 503);
+    EXPECT_EQ(node->http_actions().navigate_parking_point("first").status, 503);
+    EXPECT_EQ(node->http_actions().delete_parking_point("first").status, 503);
+
+    pause->resume();
+    ASSERT_EQ(first.wait_for(3s), std::future_status::ready);
+    EXPECT_EQ(first.get().status, 201);
+    std::atomic_store(&rename_pause, std::shared_ptr<RenamePause>());
+    const auto points = node->http_actions().list_parking_points();
+    ASSERT_EQ(points.status, 200);
+    ASSERT_EQ(points.body["points"].size(), 1U);
+    EXPECT_EQ(points.body["points"][0]["name"], "first");
 }
 
 TEST_F(WebUiNodeTest, ModeServiceSuccessAndRejectionReturnTypedReplies)

@@ -5,7 +5,6 @@
 #include "robot_web_ui/navigation_request.h"
 #include "robot_web_ui/navigation_tracker.h"
 #include "robot_web_ui/parking_point_store.h"
-#include "parking_lease.h"
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
@@ -39,7 +38,6 @@ using Navigate = nav2_msgs::action::NavigateToPose;
 using GoalHandle = rclcpp_action::ClientGoalHandle<Navigate>;
 using Trigger = std_srvs::srv::Trigger;
 using Pose = std::array<double, 3>;
-using detail::ParkingLease;
 
 ApiReply error_reply(int status, const std::string &message)
 {
@@ -141,6 +139,30 @@ ApiReply parking_error(const std::error_code &error)
     return error_reply(status, error.message());
 }
 
+/** Non-waiting lease that serializes access to the parking-point store. */
+class ParkingLease {
+public:
+    explicit ParkingLease(std::atomic_flag &busy);
+    ~ParkingLease();
+    ParkingLease(const ParkingLease &) = delete;
+    ParkingLease &operator=(const ParkingLease &) = delete;
+    [[nodiscard]] bool acquired() const;
+
+private:
+    std::atomic_flag &busy_;
+    bool acquired_;
+};
+
+ParkingLease::ParkingLease(std::atomic_flag &busy) : busy_(busy), acquired_(!busy.test_and_set()) {}
+
+ParkingLease::~ParkingLease()
+{
+    if (acquired_)
+        busy_.clear();
+}
+
+bool ParkingLease::acquired() const { return acquired_; }
+
 /** Construct while holding the borrowed mutex and with an unreserved flag; release on every exit. */
 class InitialPoseReservation {
 public:
@@ -173,14 +195,6 @@ struct LocalLayer {
     std::optional<std::string> error;
 };
 } // namespace
-
-detail::ParkingLease::ParkingLease(std::atomic_flag &busy) : busy_(busy), acquired_(!busy.test_and_set()) {}
-detail::ParkingLease::~ParkingLease()
-{
-    if (acquired_)
-        busy_.clear();
-}
-bool detail::ParkingLease::acquired() const { return acquired_; }
 
 /*******************************************************************************************************
  * @brief ROS resources and request operations

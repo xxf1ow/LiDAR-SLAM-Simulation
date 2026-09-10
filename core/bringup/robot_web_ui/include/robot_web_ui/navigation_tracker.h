@@ -29,12 +29,11 @@ struct GoalToken {
 
 bool operator==(const GoalToken &left, const GoalToken &right);
 
-/** Immutable current navigation projection. The phase field is always absent. */
+/** Immutable current navigation projection. */
 struct NavigationState {
     NavigationStatus status;
     std::optional<double> distance_remaining;
     std::optional<std::string> message;
-    std::optional<std::string> phase;
     PathSnapshotPtr path;
 };
 

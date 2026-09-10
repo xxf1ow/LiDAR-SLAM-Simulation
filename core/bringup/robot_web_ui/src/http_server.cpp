@@ -68,8 +68,7 @@ void send_asset(const httplib::Request &request, httplib::Response &response, Bi
     response.status = 200;
     response.set_header("Content-Encoding", "gzip");
     const auto length = snapshot->gzip_data.size();
-    const auto media_type = snapshot->media_type;
-    response.set_content_provider(length, media_type.c_str(),
+    response.set_content_provider(length, binary_media_type,
         [snapshot = std::move(snapshot)](size_t offset, size_t count, httplib::DataSink &sink) {
             return sink.write(reinterpret_cast<const char *>(snapshot->gzip_data.data()) + offset, count);
         });
