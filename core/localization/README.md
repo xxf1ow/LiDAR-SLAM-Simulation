@@ -25,7 +25,7 @@ git apply ../fast-lio2.patch
 
 ## GICP 集成
 
-`gicp_localization/` 是项目代码，使用 small_gicp 低频更新校正并高频发布当前预览或最后一次接受的 `map -> camera_init`。fitness 未达阈值时保留上一次校正；首次 accepted 前不发布 `/localization`，避免把进程存活当作定位就绪。
+`gicp_localization/` 是项目代码，使用 small_gicp 低频更新校正并高频发布当前预览或最后一次接受的 `map -> camera_init`。fitness 未达阈值时保留上一次校正；首次 accepted 前不发布 `/localization`，避免把进程存活当作定位就绪。首次接受配准且存在 odom 后，节点还以 5 Hz 发布 `/gicp_localization/localization_snapshot`；一个 `tf2_msgs/msg/TFMessage` 原子携带同时间戳的 `map -> camera_init` 与 `map -> body`，供 Web UI 使用，不改变原有定位和 TF 输出。
 
 small_gicp 克隆到忽略目录：
 

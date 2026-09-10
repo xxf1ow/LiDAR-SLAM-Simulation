@@ -451,9 +451,16 @@ def _render_controller(template, effective):
     return controllers
 
 
-def _render_web_ui(template, effective):
+def _render_web_ui(template, effective, mode):
     web_ui = deepcopy(template)
     motion = effective["profile"]["motion"]
+    _set_template_existing(
+        "web_ui",
+        web_ui,
+        ("robot_web_ui", "ros__parameters", "navigation_sources_enabled"),
+        mode == "navigation",
+        bool,
+    )
     _set_template_existing(
         "web_ui",
         web_ui,
@@ -937,10 +944,12 @@ def _render_sensor_configs(inputs):
     return generated
 
 
-def _validate_generated_configs(effective, templates, controllers, web_ui, nav2):
+def _validate_generated_configs(
+    mode, effective, templates, controllers, web_ui, nav2
+):
     expected = {
         "controllers": _render_controller(templates["controllers"], effective),
-        "web_ui": _render_web_ui(templates["web_ui"], effective),
+        "web_ui": _render_web_ui(templates["web_ui"], effective, mode),
         "nav2": _render_nav2(templates["nav2"], effective),
     }
     actual = {
@@ -970,14 +979,16 @@ def _render_runtime_configs(inputs):
     effective = inputs["effective"]
     templates = inputs["templates"]
     controllers = _render_controller(templates["controllers"], effective)
-    web_ui = _render_web_ui(templates["web_ui"], effective)
+    web_ui = _render_web_ui(templates["web_ui"], effective, inputs["mode"])
     nav2 = _render_nav2(templates["nav2"], effective)
     fast_lio = _render_fast_lio(templates["fast_lio"], effective)
     lio_sam = _render_lio_sam(
         templates["lio_sam"], effective, inputs["map_artifacts"]
     )
     gicp = _render_gicp(templates["gicp"], effective)
-    _validate_generated_configs(effective, templates, controllers, web_ui, nav2)
+    _validate_generated_configs(
+        inputs["mode"], effective, templates, controllers, web_ui, nav2
+    )
     _validate_fast_lio_generated(effective, templates["fast_lio"], fast_lio)
     _validate_lio_sam_generated(
         effective, inputs["map_artifacts"], templates["lio_sam"], lio_sam
@@ -1088,6 +1099,7 @@ def compile_runtime_configs(bringup_config_path, output_dir=None):
                 "staged effective_profile does not match in-memory report"
             )
         _validate_generated_configs(
+            inputs["mode"],
             reloaded["effective_profile"],
             inputs["templates"],
             reloaded["controllers"],

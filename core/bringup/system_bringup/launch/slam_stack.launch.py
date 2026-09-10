@@ -1,6 +1,6 @@
 """共享上层 SLAM/定位/导航栈(被 sim/real 内部 include,不直接用命令行调)。
 
-mode=navigation:fast_lio 里程计 → (错峰) gicp 定位 → (错峰) nav2。
+mode=navigation:fast_lio 里程计就绪后，错峰启动 gicp 定位与 nav2。
 mode=mapping   :lio_sam 建图(与导航互斥,产先验图)。
 参数由父级 launch 透传(launch_arguments),本文件用 DeclareLaunchArgument 接收。
 """
@@ -9,7 +9,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (DeclareLaunchArgument, IncludeLaunchDescription,
-                            LogInfo, OpaqueFunction)
+                            LogInfo, OpaqueFunction, TimerAction)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
@@ -110,18 +110,19 @@ def _stack(context, *args, **kwargs):
         nav2 = _inc("robot_navigation", "launch/navigation.launch.py",
                     {"params_file": nav2_params, "map": nav_map, "use_rviz": "false",
                      "use_sim_time": use_sim, "cmd_vel_output_topic": cmd_vel_output_topic})
-        # 链式就绪闸门(非阻塞):等上游真发出关键话题 + settling 后才起下个,超时中止
+        # GICP 与 Nav2 按固定时间错峰启动；人工初始定位不阻塞 Nav2 进程创建。
         return [
-            flow("MODE=navigation → ② fast_lio → gate(/Odometry+/cloud_registered_body) → gicp → gate(/localization+/base_controller/odom) → nav2"),
+            flow(
+                "MODE=navigation → ② fast_lio → "
+                "gate(/Odometry+/cloud_registered_body) → "
+                "gicp → 12s 错峰启动 nav2"
+            ),
             body_bridge,
             fast_lio,
             rviz,
         ] + ready_gate(["/Odometry", "/cloud_registered_body"], 60.0,
                        "fast_lio→/Odometry+/cloud_registered_body",
-                       [gicp] + ready_gate(
-                           ["/localization", "/base_controller/odom"], 60.0,
-                           "gicp+base_controller→/localization+/base_controller/odom",
-                           [nav2], use_sim_time=use_sim, settling=settling),
+                       [gicp, TimerAction(period=12.0, actions=[nav2])],
                        use_sim_time=use_sim, settling=settling)
     raise RuntimeError("未知 mode='%s'(应为 navigation|mapping)" % mode)
 

@@ -9,7 +9,6 @@ import pytest
 
 HTML = (
     Path(__file__).parents[1]
-    / "robot_web_ui"
     / "web"
     / "index.html"
 )
@@ -19,7 +18,7 @@ def test_page_structure_matches_contextual_mobile_contract():
     source = HTML.read_text(encoding="utf-8")
 
     for element_id in (
-        "mapCanvas", "statusStrip", "modeStatus", "motionStatus",
+        "mapCanvas", "statusStrip", "modeStatus",
         "notice", "navigationStatus", "controlDock", "mapActions",
         "operationRegion", "navigationActions", "parkingActions",
         "manualControls", "saveParkingForm", "parkingName",
@@ -27,8 +26,7 @@ def test_page_structure_matches_contextual_mobile_contract():
         "parkingDrawer", "parkingDrawerHeader", "parkingDrawerClose",
         "parkingList", "modeToggle",
         "setInitialPose", "navigationAction", "confirmPlacement",
-        "cancelPlacement", "speed", "linearVelocity",
-        "angularVelocity", "feedbackState", "mapZoomIn",
+        "cancelPlacement", "speed", "mapZoomIn",
         "mapZoomOut", "mapFit", "mapCenterRobot",
     ):
         assert source.count(f'id="{element_id}"') == 1
@@ -58,7 +56,10 @@ def test_page_structure_matches_contextual_mobile_contract():
     assert 'id="speedValue"' in manual_markup
     assert "background: rgba(11, 18, 32, 0.68)" in status_css
     assert "color: #f2f6fb" in status_css
-    assert '#feedbackState::before { content: "· "; }' in source
+    for removed_id in (
+        "motionStatus", "linearVelocity", "angularVelocity", "feedbackState"
+    ):
+        assert f'id="{removed_id}"' not in source
     assert "padding: 8px 10px" in status_css
     assert "border-radius: 10px" in status_css
     assert "text-shadow: -1px -1px 0 #fff" not in status_css
@@ -182,14 +183,13 @@ def _run_browser_scenario(scenario):
 
         const elements = new Map(
           ["speed", "speedValue", "notice", "modeToggle", "modeStatus",
-           "motionStatus", "statusStrip", "controlDock", "mapActions",
+           "statusStrip", "controlDock", "mapActions",
                "navigationActions", "manualControls",
                "parkingActions", "saveParkingForm", "parkingName",
                "saveParkingPoint", "goToParkingPoint",
            "confirmSaveParkingPoint", "cancelSaveParkingPoint",
            "parkingDrawer", "parkingDrawerHeader", "parkingDrawerClose",
            "parkingList", "operationRegion",
-            "linearVelocity", "angularVelocity", "feedbackState",
             "mapCanvas", "mapZoomIn", "mapZoomOut",
             "mapFit", "mapCenterRobot"].map(
              (id) => [id, new FakeElement(id)]
@@ -582,75 +582,6 @@ def _run_browser_scenario(scenario):
             return;
           }}
 
-          if (scenario === "motion-feedback") {{
-            applyMotionFeedback({{
-              linear_x: 0.25,
-              angular_z: -0.1,
-              feedback_fresh: true
-            }});
-            assert.strictEqual(
-              elements.get("linearVelocity").textContent,
-              "0.25 m/s"
-            );
-            assert.strictEqual(
-              elements.get("angularVelocity").textContent,
-              "-0.10 rad/s"
-            );
-            assert.strictEqual(
-              elements.get("feedbackState").textContent,
-              ""
-            );
-            assert.strictEqual(elements.get("feedbackState").hidden, true);
-
-            elements.get("speed").value = "35";
-            await elements.get("speed").emit("input");
-            assert.strictEqual(elements.get("speedValue").textContent, "35%");
-
-            applyMotionFeedback({{
-              linear_x: null,
-              angular_z: null,
-              feedback_fresh: false
-            }});
-            assert.strictEqual(
-              elements.get("linearVelocity").textContent,
-              "--"
-            );
-            assert.strictEqual(
-              elements.get("angularVelocity").textContent,
-              "--"
-            );
-            assert.strictEqual(
-              elements.get("feedbackState").textContent,
-              "底盘反馈中断"
-            );
-            assert.strictEqual(elements.get("feedbackState").hidden, false);
-
-            await resolveNext({{
-              payload: {{
-                ok: true,
-                session_id: "session-a",
-                mode: "manual",
-                linear_x: 0.25,
-                angular_z: -0.1,
-                feedback_fresh: true
-              }}
-            }});
-            assert.strictEqual(
-              elements.get("linearVelocity").textContent,
-              "0.25 m/s"
-            );
-            assert.strictEqual(
-              elements.get("angularVelocity").textContent,
-              "-0.10 rad/s"
-            );
-            assert.strictEqual(
-              elements.get("feedbackState").textContent,
-              ""
-            );
-            assert.strictEqual(elements.get("feedbackState").hidden, true);
-            return;
-          }}
-
           if (scenario === "initial-and-authoritative-interlock") {{
             assert.strictEqual(currentMode, null);
             assert(directionButtons.every((button) => button.disabled));
@@ -707,6 +638,49 @@ def _run_browser_scenario(scenario):
               elements.get("modeToggle").textContent,
               "状态同步中…"
             );
+            return;
+          }}
+
+          if (scenario === "automatic-command-response-is-rate-limited") {{
+            await resolveNext({{payload: {{
+              ok: true,
+              session_id: "session-a",
+              mode: "automatic"
+            }}}});
+            assert.strictEqual(currentMode, "automatic");
+            const firstCommandIndex = pending.findIndex(
+              (request) => request.path === "/api/manual-command"
+            );
+            const firstCommand = pending.splice(firstCommandIndex, 1)[0];
+            assert(firstCommand);
+            assert.strictEqual(
+              requests.filter(
+                (request) => request.path === "/api/manual-command"
+              ).length,
+              1
+            );
+
+            firstCommand.resolve({{payload: {{
+              ok: true,
+              accepted: true,
+              sequence: 1,
+              last_sequence: 1,
+              mode: "automatic"
+            }}}});
+            await flush();
+            assert.strictEqual(
+              requests.filter(
+                (request) => request.path === "/api/manual-command"
+              ).length,
+              1
+            );
+
+            await tick();
+            const commands = requests.filter(
+              (request) => request.path === "/api/manual-command"
+            );
+            assert.strictEqual(commands.length, 2);
+            assert.strictEqual(commands[1].body.sequence, 2);
             return;
           }}
 
@@ -1009,10 +983,7 @@ def _run_browser_scenario(scenario):
             )[0].resolve({{
               payload: {{
                 ok: true,
-                mode: "automatic",
-                linear_x: 0.4,
-                angular_z: -0.2,
-                feedback_fresh: true
+                mode: "automatic"
               }}
             }});
             await resumePromise;
@@ -1021,16 +992,6 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(modeToggle.disabled, false);
             assert.strictEqual(modeToggle.textContent, "人工接管");
             assert(directionButtons.every((button) => button.disabled));
-            assert.strictEqual(
-              elements.get("linearVelocity").textContent,
-              "0.40 m/s"
-            );
-            assert.strictEqual(
-              elements.get("angularVelocity").textContent,
-              "-0.20 rad/s"
-            );
-            assert.strictEqual(elements.get("feedbackState").hidden, true);
-
             delayedManual.resolve({{payload: {{
               ok: true,
               sequence: delayedManual.body.sequence,
@@ -1053,29 +1014,14 @@ def _run_browser_scenario(scenario):
             terminateManualSession();
             assert.strictEqual(currentMode, null);
             assert.strictEqual(elements.get("notice").textContent, "newer notice");
-            assert.strictEqual(
-              elements.get("linearVelocity").textContent,
-              "0.40 m/s"
-            );
             staleModeRequest.resolve({{payload: {{
               ok: true,
-              mode: "manual",
-              linear_x: 9.9,
-              angular_z: 8.8,
-              feedback_fresh: true
+              mode: "manual"
             }}}});
             await staleModePromise;
             await flush();
             assert.strictEqual(currentMode, null);
             assert.strictEqual(elements.get("notice").textContent, "newer notice");
-            assert.strictEqual(
-              elements.get("linearVelocity").textContent,
-              "0.40 m/s"
-            );
-            assert.strictEqual(
-              elements.get("angularVelocity").textContent,
-              "-0.20 rad/s"
-            );
             return;
           }}
 
@@ -1092,29 +1038,13 @@ def _run_browser_scenario(scenario):
               status: 409,
               payload: {{
                 error: "manual control is not active",
-                mode: "automatic",
-                linear_x: 0.25,
-                angular_z: -0.1,
-                feedback_fresh: true
+                mode: "automatic"
               }}
             }});
             await flush();
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(desiredDirection, "stop");
             assert(directionButtons.every((button) => button.disabled));
-            assert.strictEqual(
-              elements.get("linearVelocity").textContent,
-              "0.25 m/s"
-            );
-            assert.strictEqual(
-              elements.get("angularVelocity").textContent,
-              "-0.10 rad/s"
-            );
-            assert.strictEqual(
-              elements.get("feedbackState").textContent,
-              ""
-            );
-            assert.strictEqual(elements.get("feedbackState").hidden, true);
             return;
           }}
 
@@ -1383,7 +1313,7 @@ def _run_browser_scenario(scenario):
         "parking-refresh-race",
         "contextual-layout",
         "initial-and-authoritative-interlock",
-        "motion-feedback",
+        "automatic-command-response-is-rate-limited",
         "sequenced-command-stream",
         "all-stop-paths",
         "stale-button-events",

@@ -14,7 +14,7 @@ LEGACY_WEB_CONTROL = (
 )
 ROBOT_GZ_CMAKE = ROOT / "core/simulation/robot_gz_bringup/CMakeLists.txt"
 ROBOT_GZ_PACKAGE = ROOT / "core/simulation/robot_gz_bringup/package.xml"
-ROBOT_WEB_UI = ROOT / "core/bringup/robot_web_ui/robot_web_ui"
+ROBOT_WEB_UI = ROOT / "core/bringup/robot_web_ui/src"
 ACTIVE_BRINGUP_DOCS_AND_LAUNCH = (
     ROOT / "CLAUDE.md",
     ROOT / "core/simulation/robot_gz_bringup/README.md",

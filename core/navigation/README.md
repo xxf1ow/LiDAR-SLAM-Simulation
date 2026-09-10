@@ -42,7 +42,7 @@ ros2 run robot_navigation pcd_to_occupancy \
 
 该工具依赖 Open3D。地图路径通过 `bringup.yaml` 的 `map_artifacts.nav2_map` 提供，不写死到 launch。
 
-把 mode 设为 `navigation` 并选择 platform，再通过正式入口启动。RViz 会在 Nav2 前显示 prior map 与 registered cloud；初值错误时发布 `/initialpose`。首次 accepted 后 `/localization` 出现，ready gate 才启动 Nav2。确认点云贴合后再下发 goal。
+把 mode 设为 `navigation` 并选择 platform，再通过正式入口启动。FAST-LIO 数据就绪后，GICP 与 Nav2 按固定时间错峰启动；Nav2 不等待首次定位。初值错误时通过 Web 页面或 RViz 发布 `/initialpose`，确认 `/localization` 出现且点云贴合后再下发 goal。
 
 ## 验收
 

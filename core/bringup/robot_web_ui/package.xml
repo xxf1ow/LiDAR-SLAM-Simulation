@@ -4,27 +4,39 @@
 <package format="3">
   <name>robot_web_ui</name>
   <version>0.1.0</version>
-  <description>Mobile Web controls for manual robot motion and mode selection.</description>
+  <description>C++ ROS and HTTP backend for mobile robot control.</description>
   <maintainer email="20twenty.degree@gmail.com">xxf1ow</maintainer>
   <license>MIT</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
+  <buildtool_depend>ament_cmake</buildtool_depend>
 
-  <exec_depend>ament_index_python</exec_depend>
-  <exec_depend>action_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>nav2_msgs</exec_depend>
-  <exec_depend>python3-yaml</exec_depend>
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>std_srvs</exec_depend>
-  <exec_depend>tf2_ros</exec_depend>
+  <depend>rclcpp</depend>
+  <depend>ament_index_cpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <depend>tf2_msgs</depend>
 
-  <test_depend>python3-pytest</test_depend>
-  <test_depend>python3-yaml</test_depend>
+  <build_depend>nlohmann-json-dev</build_depend>
+  <build_depend>libssl-dev</build_depend>
+  <build_depend>tl_expected</build_depend>
+  <build_depend>yaml-cpp</build_depend>
+  <build_depend>zlib</build_depend>
+  <build_depend>libcpp-httplib-dev</build_depend>
+  <build_depend>pkg-config</build_depend>
+
+  <exec_depend>libssl-dev</exec_depend>
+  <exec_depend>yaml-cpp</exec_depend>
+  <exec_depend>zlib</exec_depend>
+  <exec_depend>libcpp-httplib-dev</exec_depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_cmake_pytest</test_depend>
 
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

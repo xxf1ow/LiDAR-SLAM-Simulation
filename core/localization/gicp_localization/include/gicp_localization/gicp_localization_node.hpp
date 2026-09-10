@@ -1,4 +1,6 @@
-#pragma once
+#ifndef GICP_LOCALIZATION_GICP_LOCALIZATION_NODE_HPP_
+#define GICP_LOCALIZATION_GICP_LOCALIZATION_NODE_HPP_
+
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -9,6 +11,7 @@
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <nav_msgs/msg/odometry.hpp>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <tf2_msgs/msg/tf_message.hpp>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
@@ -29,6 +32,7 @@ private:
   void initialPoseCb(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
   void gicpTimerCb();
   void tfTimerCb();
+  void ui_snapshot_timer_cb();
 
   // 参数
   std::string map_frame_, odom_frame_, base_frame_;
@@ -45,8 +49,10 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr init_sub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr loc_pub_;
+  rclcpp::Publisher<tf2_msgs::msg::TFMessage>::SharedPtr ui_snapshot_pub_;
   rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr prior_map_pub_;  // latched, 供 RViz 查看
   rclcpp::TimerBase::SharedPtr gicp_timer_, tf_timer_;
+  rclcpp::TimerBase::SharedPtr ui_snapshot_timer_;
   rclcpp::CallbackGroup::SharedPtr slow_group_, fast_group_;
 
   // 共享状态（mtx_ 保护）
@@ -61,3 +67,5 @@ private:
 };
 
 }  // namespace gicp_localization
+
+#endif  // GICP_LOCALIZATION_GICP_LOCALIZATION_NODE_HPP_

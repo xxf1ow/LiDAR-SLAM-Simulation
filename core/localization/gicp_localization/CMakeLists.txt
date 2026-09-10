@@ -18,6 +18,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_eigen REQUIRED)
+find_package(tf2_msgs REQUIRED)
 find_package(pcl_conversions REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common io)
 find_package(Eigen3 REQUIRED)
@@ -61,6 +62,7 @@ ament_target_dependencies(gicp_localization_diag rclcpp)
 
 add_executable(gicp_localization_node
   src/gicp_localization_node.cpp
+  src/localization_snapshot.cpp
   src/main.cpp
 )
 target_include_directories(gicp_localization_node PUBLIC
@@ -70,7 +72,8 @@ target_link_libraries(gicp_localization_node
   gicp_localization_diag
 )
 ament_target_dependencies(gicp_localization_node
-  rclcpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_eigen pcl_conversions)
+  rclcpp sensor_msgs nav_msgs geometry_msgs tf2 tf2_ros tf2_eigen tf2_msgs
+  pcl_conversions)
 
 install(TARGETS gicp_localization_node DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
@@ -83,6 +86,15 @@ if(BUILD_TESTING)
   target_link_libraries(test_prior_map gicp_localization_core)
   ament_add_gtest(test_gicp_aligner test/test_gicp_aligner.cpp)
   target_link_libraries(test_gicp_aligner gicp_localization_core)
+  ament_add_gtest(test_localization_snapshot
+    test/test_localization_snapshot.cpp
+    src/localization_snapshot.cpp
+  )
+  target_link_libraries(test_localization_snapshot
+    gicp_localization_core
+    Eigen3::Eigen
+  )
+  ament_target_dependencies(test_localization_snapshot tf2_eigen tf2_msgs)
 endif()
 
 ament_package()

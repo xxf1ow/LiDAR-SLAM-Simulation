@@ -1,4 +1,5 @@
 """Validate compiled runtime manifests and generated configuration artifacts."""
+import os
 import tempfile
 from pathlib import Path
 
@@ -174,7 +175,8 @@ _ACTIVE_RUNTIME_FILES = {
         "vanjee_lidar.launch.py"
     ),
     "cmd_gate": "core/robot/cmd_vel_gate/cmd_vel_gate/gate_node.py",
-    "web_ui": "core/bringup/robot_web_ui/robot_web_ui/web_ui_node.py",
+    "web_ui_index": "core/bringup/robot_web_ui/web/index.html",
+    "web_ui_script": "core/bringup/robot_web_ui/web/map_view.js",
     "lidar_adapter": (
         "core/simulation/lidar_pointcloud_adapter/"
         "lidar_pointcloud_adapter/adapter_node.py"
@@ -206,16 +208,20 @@ _INSTALLED_RUNTIME_SHARES = {
     "navigation": ("robot_navigation", "launch/navigation.launch.py"),
     "gicp_launch": ("gicp_localization", "launch/localization.launch.py"),
     "vanjee_launch": ("vanjee_lidar_ros", "launch/vanjee_lidar.launch.py"),
+    "web_ui_index": ("robot_web_ui", "web/index.html"),
+    "web_ui_script": ("robot_web_ui", "web/map_view.js"),
 }
 _INSTALLED_RUNTIME_MODULES = {
     "cmd_gate": "cmd_vel_gate.gate_node",
-    "web_ui": "robot_web_ui.web_ui_node",
     "lidar_adapter": "lidar_pointcloud_adapter.adapter_node",
     "profile_compiler": "system_bringup.profile_compiler",
     "runtime_config_compiler": "system_bringup.runtime_config_compiler",
     "consistency_check": "system_bringup.consistency_check",
     "sensor_gate_logic": "system_bringup.sensor_gate_logic",
     "sensor_gate_node": "system_bringup.sensor_gate_node",
+}
+_INSTALLED_RUNTIME_EXECUTABLES = {
+    "web_ui": ("robot_web_ui", "robot_web_ui"),
 }
 
 
@@ -230,8 +236,8 @@ def _resolve_installed_runtime_paths(failures):
     except (ImportError, ModuleNotFoundError) as exc:
         failures.append(
             "active installed runtime cannot be resolved outside a sourced ROS "
-            "environment; package shares and node modules "
-            "cmd_vel_gate.gate_node, robot_web_ui.web_ui_node, and "
+            "environment; package shares, the robot_web_ui executable, and "
+            "node modules cmd_vel_gate.gate_node and "
             "lidar_pointcloud_adapter.adapter_node are required: "
             f"{exc}"
         )
@@ -260,6 +266,35 @@ def _resolve_installed_runtime_paths(failures):
         )
         if path is not None:
             paths[label] = path
+
+    for label, (package, executable) in _INSTALLED_RUNTIME_EXECUTABLES.items():
+        try:
+            share = get_package_share_directory(package)
+        except (PackageNotFoundError, OSError, RuntimeError, ValueError) as exc:
+            failures.append(
+                f"active installed runtime package {package} cannot be resolved: {exc}"
+            )
+            continue
+        share_path = _normalize_path(
+            share,
+            f"active installed runtime package share {package}",
+            failures,
+        )
+        if share_path is None:
+            continue
+        path = _normalize_path(
+            share_path.parents[1] / "lib" / package / executable,
+            f"active installed runtime executable {package}/{executable}",
+            failures,
+        )
+        if path is None:
+            continue
+        if not path.is_file() or not os.access(path, os.X_OK):
+            failures.append(
+                f"active installed runtime executable is missing or not executable: {path}"
+            )
+            continue
+        paths[label] = path
 
     for label, module_name in _INSTALLED_RUNTIME_MODULES.items():
         try:
@@ -291,9 +326,12 @@ def _validate_installed_freshness(repo_root, failures):
             reviewed_paths[label] = path
 
     active_paths = _resolve_installed_runtime_paths(failures)
-    if set(active_paths) != set(_ACTIVE_RUNTIME_FILES):
-        missing = sorted(set(_ACTIVE_RUNTIME_FILES) - set(active_paths))
-        extra = sorted(set(active_paths) - set(_ACTIVE_RUNTIME_FILES))
+    expected_labels = set(_ACTIVE_RUNTIME_FILES) | set(
+        _INSTALLED_RUNTIME_EXECUTABLES
+    )
+    if set(active_paths) != expected_labels:
+        missing = sorted(expected_labels - set(active_paths))
+        extra = sorted(set(active_paths) - expected_labels)
         failures.append(
             "active installed runtime path set is incomplete: "
             f"missing={missing}, extra={extra}"
@@ -551,6 +589,7 @@ def run_runtime_consistency(repo_root, manifest):
     ):
         try:
             rcc._validate_generated_configs(
+                mode,
                 report,
                 source_templates,
                 loaded["controllers"],

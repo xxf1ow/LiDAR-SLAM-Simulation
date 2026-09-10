@@ -25,7 +25,7 @@ ros2 launch system_bringup bringup.launch.py
 | `real` | `mapping` | 8030D + Vanjee 722 | LIO-SAM |
 | `real` | `navigation` | 8030D + Vanjee 722 | FAST-LIO → GICP → Nav2 |
 
-`slam_stack.launch.py` 在 navigation 模式启动 FAST-LIO 与 GICP，并提前提供 RViz；GICP 首次 accepted、`/localization` 出现后才启动 Nav2。mapping 模式只启动 LIO-SAM。`slam_stack` 永久拥有 `body -> base_footprint` bridge，`robot_navigation` 不发布该 TF。
+`slam_stack.launch.py` 在 navigation 模式等待 FAST-LIO 数据就绪，然后启动 GICP，并在 12 秒固定错峰后启动 Nav2；首次 accepted 不阻塞 Nav2 进程创建。mapping 模式只启动 LIO-SAM。`slam_stack` 永久拥有 `body -> base_footprint` bridge，`robot_navigation` 不发布该 TF。
 
 ## 控制和 Web
 

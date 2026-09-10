@@ -48,7 +48,7 @@ navigation 坐标链为：
 map ── GICP ──> camera_init ── FAST-LIO ──> body ── slam_stack ──> base_footprint ── URDF ──> base_link
 ```
 
-GICP 首次接受配准后才发布 `/localization`，随后启动 Nav2。FAST-LIO 提供连续局部坐标，GICP 提供 `map -> camera_init` 校正，`slam_stack` 永久拥有 `body -> base_footprint` bridge。
+FAST-LIO 数据就绪后启动 GICP，并在 12 秒固定错峰后启动 Nav2；Nav2 进程创建不等待首次定位。GICP 首次接受配准后才发布 `/localization`，FAST-LIO 提供连续局部坐标，GICP 提供 `map -> camera_init` 校正，`slam_stack` 永久拥有 `body -> base_footprint` bridge。
 
 mapping 坐标链为：
 
@@ -71,6 +71,10 @@ Web  ──> /cmd_vel_manual┘                               │
 ```
 
 完整 bringup 中 `cmd_vel_gate` 是唯一的 `/cmd_vel` 发布者。Web 人工接管只改变 gate 接受的速度源，不取消现有 Nav2 goal。manual 命令超时会输出零速，但不会使硬件失能。
+
+`robot_web_ui` 可执行文件在一个进程中组合 C++ ROS 节点和 cpp-httplib HTTP 服务。HTTP 先绑定端口，主线程随后运行单线程 ROS executor；HTTP 工作者调用线程安全的节点操作，二进制响应持有不可变快照。退出时 HTTP 停止并 join 后才销毁节点，且不取消导航或切换控制模式。
+
+navigation 模式下，`robot_web_ui` 直接订阅 5 Hz `/gicp_localization/localization_snapshot`、全局与局部代价地图、该节点当前目标对应的 `/plan`，以及 `/cmd_vel_gate/mode`。它不订阅 `/tf`、`/tf_static`、`/base_controller/odom`、`/localization` 或 `/behavior_tree_log`。mapping 模式将生成参数 `navigation_sources_enabled` 设为 `false`，因此不创建导航数据订阅或 NavigateToPose client，但人工命令和 gate 模式切换仍可用。
 
 ## 时钟和启动边界
 

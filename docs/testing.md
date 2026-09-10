@@ -18,14 +18,15 @@
 
 ## 快速回归
 
-Python 包可以从仓库根目录运行聚焦测试，例如：
+Python 包和独立浏览器资产 harness 可以从仓库根目录运行聚焦测试，例如：
 
 ```bash
 python3 -m pytest core/bringup/system_bringup/test -q
-python3 -m pytest core/bringup/robot_web_ui/test -q
+python3 -m pytest core/bringup/robot_web_ui/test/test_web_asset.py \
+  core/bringup/robot_web_ui/test/test_map_view.py -q
 ```
 
-Web 资产测试依赖 `node`。测试开始前确认 `command -v node` 和 `node --version`；缺少 Node 必须按环境失败处理。
+Web 资产测试依赖 `node`，且不导入后端模块。测试开始前确认 `command -v node` 和 `node --version`；缺少 Node 必须按环境失败处理。C++ 后端行为由 `robot_web_ui` 的 gtest 目标覆盖，并通过下述 ROS 包测试入口运行。
 
 ## ROS 包测试
 

@@ -1,6 +1,8 @@
 # Robot Web UI 外部 HTTP 接口
 
-本参考只描述语音助手等同机客户端使用的稳定 HTTP 合同。浏览器内部路由由 Web UI 实现和测试拥有，不在此手工列出。客户端通过 `http://127.0.0.1:<port>` 访问，JSON 使用 UTF-8，失败响应为 `{"error":"..."}`。
+本参考描述 C++ `robot_web_ui` 节点向语音助手等同机客户端提供的稳定 HTTP 合同。该节点与 cpp-httplib 服务运行在一个进程中；浏览器内部路由由 Web UI 实现和测试拥有，不在此手工列出。客户端通过 `http://127.0.0.1:<port>` 访问，JSON 使用 UTF-8，失败响应为 `{"error":"..."}`。
+
+正式 bringup 从生成的参数文件启动 `lib/robot_web_ui/robot_web_ui`。`navigation_sources_enabled` 在 navigation 模式为 `true`，在 mapping 模式为 `false`；mapping 模式保留人工控制、接管和恢复自动模式接口，但导航数据、初始位姿、保存当前位置和发起导航操作不可用。静态页面安装在 `share/robot_web_ui/web/`。
 
 ## 助手状态
 
@@ -13,16 +15,16 @@ GET /api/assistant-state
 ```json
 {
   "mode": "automatic",
-  "navigation": "following",
+  "navigation": "navigating",
   "distance_m": 3.8,
   "issue": null
 }
 ```
 
 - `mode`：`automatic`、`manual` 或 `unknown`。
-- `navigation`：`idle`、`sending`、`navigating`、`planning`、`following`、`recovering`、`canceling`、`succeeded`、`canceled` 或 `failed`。执行任一导航恢复行为时统一返回 `recovering`，客户端不需要识别具体的行为树节点。
+- `navigation`：`idle`、`sending`、`navigating`、`canceling`、`succeeded`、`canceled` 或 `failed`。
 - `distance_m`：剩余距离（米），不可用时为 `null`。
-- `issue`：最重要的当前异常或 `null`；优先级依次为 `feedback_unavailable`、`map_unavailable`、`localization_unavailable`、`navigation_unavailable`。
+- `issue`：最重要的当前异常或 `null`；优先级依次为 `map_unavailable`、`localization_unavailable`、`navigation_unavailable`。
 
 ## 停车点
 

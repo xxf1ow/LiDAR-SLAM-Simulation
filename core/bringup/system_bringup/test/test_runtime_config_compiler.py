@@ -622,9 +622,15 @@ def test_web_ui_template_is_a_complete_native_parameter_file():
         "ros__parameters"
     ]
     assert set(params) == {
-        "use_sim_time", "max_linear_speed", "max_angular_speed", "host", "port"
+        "use_sim_time",
+        "navigation_sources_enabled",
+        "max_linear_speed",
+        "max_angular_speed",
+        "host",
+        "port",
     }
     assert type(params["use_sim_time"]) is bool
+    assert params["navigation_sources_enabled"] is True
     assert type(params["max_linear_speed"]) is float
     assert type(params["max_angular_speed"]) is float
     assert isinstance(params["host"], str)
@@ -1068,10 +1074,18 @@ def test_renderer_maps_profile_motion_and_geometry_to_all_modules(
 
 
 @pytest.mark.parametrize("platform", ["sim", "real"])
-def test_renderer_does_not_depend_on_mode(runtime_tree, platform):
-    assert _rendered(runtime_tree, platform, "mapping") == _rendered(
-        runtime_tree, platform, "navigation"
-    )
+def test_renderer_enables_navigation_sources_only_in_navigation_mode(
+    runtime_tree, platform
+):
+    mapping = _rendered(runtime_tree, platform, "mapping")
+    navigation = _rendered(runtime_tree, platform, "navigation")
+
+    assert mapping["web_ui"]["robot_web_ui"]["ros__parameters"][
+        "navigation_sources_enabled"
+    ] is False
+    assert navigation["web_ui"]["robot_web_ui"]["ros__parameters"][
+        "navigation_sources_enabled"
+    ] is True
 
 
 def test_renderer_does_not_mutate_loaded_templates(runtime_tree):
@@ -1420,6 +1434,7 @@ def test_generated_config_validator_rejects_cross_module_drift(
 
     with pytest.raises(ValueError):
         rcc._validate_generated_configs(
+            inputs["mode"],
             inputs["effective"],
             inputs["templates"],
             rendered["controllers"],
@@ -1441,6 +1456,7 @@ CONTROLLER_RENDER_PATHS = (
     ("base_controller", "ros__parameters", "angular.z.min_acceleration"),
 ) + rcc.CONTROLLER_TIME_PATHS
 WEB_UI_RENDER_PATHS = (
+    ("robot_web_ui", "ros__parameters", "navigation_sources_enabled"),
     ("robot_web_ui", "ros__parameters", "max_linear_speed"),
     ("robot_web_ui", "ros__parameters", "max_angular_speed"),
 ) + rcc.WEB_UI_TIME_PATHS
@@ -1551,6 +1567,7 @@ def test_generated_config_validator_rejects_nav2_stvl_and_fixed_behavior_drift(
 
     with pytest.raises(ValueError, match="generated nav2"):
         rcc._validate_generated_configs(
+            inputs["mode"],
             inputs["effective"],
             inputs["templates"],
             rendered["controllers"],
@@ -2075,7 +2092,7 @@ def test_sim_and_real_public_compiles_remain_schema_and_value_isolated(
                 )
             }
 
-        for name in ("controllers", "web_ui", "nav2"):
+        for name in ("controllers", "nav2"):
             assert generated[platform]["mapping"][name] == generated[platform][
                 "navigation"
             ][name]

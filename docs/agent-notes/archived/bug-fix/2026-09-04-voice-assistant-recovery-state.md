@@ -1,6 +1,7 @@
 # Agent Note: Voice assistant recovery state
 
 Status: implemented
+Archived: 2026-09-09
 
 ## Problem
 

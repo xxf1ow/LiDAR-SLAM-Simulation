@@ -29,6 +29,8 @@ FAST-LIO、LIO-SAM 和 small_gicp 不是仓库内容。按 [Localization](../cor
 
 Web 资产测试要求可执行的 `node`。当前 WSL 通过 `/home/lxx/.local/bin/node` 使用既有 Windows Node；运行相关测试前执行 `command -v node` 和 `node --version`。缺少 Node 是环境失败，不是允许的 skip。
 
+`robot_web_ui` 的 C++ HTTP 服务依赖系统 `libcpp-httplib-dev`、配套运行库与 `pkg-config`；CMake 通过 pkg-config 查找，不下载或内置该库。
+
 ## 构建工作区
 
 从 `core/` 执行默认 copy-install 构建：
@@ -38,6 +40,25 @@ cd /home/lxx/xxsim/core
 source /opt/ros/humble/setup.bash
 colcon build
 source install/setup.bash
+```
+
+已构建 Python 版 `robot_web_ui` 的工作区升级到 C++ 包时，增量安装不会删除旧模块和环境 hook。首次构建前必须在 `core/` 清理该包的生成目录，再重建并验证：
+
+```bash
+rm -rf build/robot_web_ui install/robot_web_ui
+colcon build --packages-select robot_web_ui
+test -x install/robot_web_ui/lib/robot_web_ui/robot_web_ui
+test -f install/robot_web_ui/share/robot_web_ui/web/index.html
+test -f install/robot_web_ui/share/robot_web_ui/web/map_view.js
+test -z "$(find install/robot_web_ui \
+  -name '*.py*' \
+  -print -quit)"
+```
+
+`core/colcon_defaults.yaml` 使所有 CMake 包默认以 `Release` 构建；Python 包不受该设置影响。`robot_web_ui` 是 CMake 包，其可执行文件和浏览器资产均由 colcon 安装。需要断言和调试符号时显式覆盖构建类型：
+
+```bash
+colcon build --cmake-args -DCMAKE_BUILD_TYPE=Debug
 ```
 
 不要在现有 `build/` 与 `install/` 上切换为 `--symlink-install`。确需改变安装模式时，必须先有意重建两个目录，避免 `ament_cmake_python` 目录和符号链接混用。
@@ -57,7 +78,7 @@ source install/setup.bash
 - `core/bringup/system_bringup/config/profiles/{sim,real}.yaml`：平台几何、传感器、后端和跨模块限制。
 - `core/bringup/system_bringup/config/templates/*.yaml`：controller、Web UI、Nav2、SLAM、定位和传感器后端的完整原生配置。
 
-Profile、`bringup.yaml` 和 source templates 由 runtime compiler 从源码读取，修改后不需要重建即可生成本次配置；template 变化仍需在 packaging/static acceptance 前重建安装副本。ROS 实际从 install 加载的 launch 或 Python runtime 变化后必须重建对应包。不得通过临时 launch 参数或分散配置复制绕过运行时编译器。
+Profile、`bringup.yaml` 和 source templates 由 runtime compiler 从源码读取，修改后不需要重建即可生成本次配置；template 变化仍需在 packaging/static acceptance 前重建安装副本。ROS 实际从 install 加载的 launch、Python runtime、C++ 可执行文件或浏览器资产变化后必须重建对应包。不得通过临时 launch 参数或分散配置复制绕过运行时编译器。
 
 ## 文档工作流
 
