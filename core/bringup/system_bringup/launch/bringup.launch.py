@@ -113,11 +113,26 @@ def _bringup(context, *args, **kwargs):
     bridge = manifest["fast_lio_body_bridge_arguments"]
     use_sim = "true" if use_sim_time else "false"
     settling = stack_cfg["settling"]
+    with open(manifest["effective_profile_path"], encoding="utf-8") as stream:
+        columns = yaml.safe_load(stream)["profile"]["sensors"]["lidar"][
+            "columns_per_scan"
+        ]
+    ring = 26 if platform == "real" else 7
     flow = lambda message: LogInfo(
         msg="======== [system_bringup] %s" % message
     )
 
     control_layer = [
+        Node(
+            package="lidar_target_tracking",
+            executable="tracker_node",
+            output="screen",
+            parameters=[{
+                "use_sim_time": use_sim_time,
+                "ring": ring,
+                "columns": columns,
+            }],
+        ),
         Node(
             package="cmd_vel_gate",
             executable="cmd_vel_gate",
