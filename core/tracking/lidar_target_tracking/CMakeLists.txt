@@ -60,7 +60,7 @@ if(BUILD_TESTING)
   target_link_libraries(test_scan_bridge scan_bridge)
   ament_target_dependencies(test_scan_bridge sensor_msgs geometry_msgs)
   ament_add_gtest(test_tracking_snapshot test/test_tracking_snapshot.cpp)
-  target_link_libraries(test_tracking_snapshot scan_bridge tracking_snapshot)
+  target_link_libraries(test_tracking_snapshot reference_tracking scan_bridge tracking_snapshot)
   ament_target_dependencies(test_tracking_snapshot sensor_msgs geometry_msgs)
 endif()
 

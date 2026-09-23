@@ -50,7 +50,7 @@ public:
 
 Json FakeActions::navigation_state() const { return {{"localized", true}, {"navigation", {{"status", "idle"}, {"phase", nullptr}}}}; }
 Json FakeActions::assistant_state() const { return {{"mode", "automatic"}, {"navigation", "idle"}, {"distance_m", nullptr}, {"issue", nullptr}}; }
-Json FakeActions::tracking_state() const { return {{"available", true}, {"obstacles", Json::array({{{"x", 1.0}, {"y", -0.5}}})}}; }
+Json FakeActions::tracking_state() const { return {{"frame_id", "base_footprint"}, {"stamp", {{"sec", 5}, {"nanosec", 42}}}, {"active", true}, {"target", {{"x", 1.0}, {"y", -0.5}}}, {"points", Json::array({{1.0, -0.5}})}}; }
 ApiReply FakeActions::publish_tracking_target(const Json &payload)
 {
     ++tracking_targets;

@@ -338,10 +338,14 @@ TEST_F(WebUiNodeTest, TrackingStateAndTargetWorkInMappingMode)
     auto snapshots = peer->create_publisher<std_msgs::msg::String>("/tracking/state", 10);
     ASSERT_TRUE(until([&] { return snapshots->get_subscription_count() == 1; }));
     std_msgs::msg::String snapshot;
-    snapshot.data = R"({"available":true,"obstacles":[{"x":1.0,"y":-0.5}]})";
+    snapshot.data = R"({"frame_id":"base_footprint","stamp":{"sec":5,"nanosec":42},"active":true,"target":{"x":1.0,"y":-0.5},"points":[[1.0,-0.5]]})";
     snapshots->publish(snapshot);
-    ASSERT_TRUE(until([&] { return node->http_actions().tracking_state().value("available", false); }));
-    EXPECT_EQ(node->http_actions().tracking_state()["obstacles"].size(), 1U);
+    const auto first = nlohmann::json::parse(snapshot.data);
+    ASSERT_TRUE(until([&] { return node->http_actions().tracking_state() == first; }));
+    snapshot.data = R"({"frame_id":"base_footprint","stamp":{"sec":6,"nanosec":7},"active":false,"target":null,"points":[]})";
+    snapshots->publish(snapshot);
+    const auto second = nlohmann::json::parse(snapshot.data);
+    ASSERT_TRUE(until([&] { return node->http_actions().tracking_state() == second; }));
 
     EXPECT_EQ(node->http_actions().publish_tracking_target({{"x", 1.0}, {"y", -0.5}}).status, 503);
     std::optional<geometry_msgs::msg::PointStamped> received;
