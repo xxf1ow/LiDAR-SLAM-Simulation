@@ -30,7 +30,8 @@ bool valid_layout(const sensor_msgs::msg::PointCloud2 &cloud) {
       !has_field(cloud, "ring", sensor_msgs::msg::PointField::UINT16, sizeof(uint16_t)) ||
       cloud.point_step == 0 || cloud.width > std::numeric_limits<size_t>::max() / cloud.point_step ||
       cloud.row_step != cloud.width * cloud.point_step ||
-      cloud.height > std::numeric_limits<size_t>::max() / cloud.row_step ||
+      (cloud.row_step != 0 &&
+       cloud.height > std::numeric_limits<size_t>::max() / cloud.row_step) ||
       cloud.data.size() != static_cast<size_t>(cloud.row_step) * cloud.height) {
     return false;
   }

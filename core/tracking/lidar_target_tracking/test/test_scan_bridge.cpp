@@ -69,4 +69,16 @@ TEST(ScanBridge, EmptySelectedRingIsValid) {
   for (float range : result->scan.ranges) EXPECT_TRUE(std::isinf(range));
 }
 
+TEST(ScanBridge, ZeroWidthCloudIsValidEmptyScan) {
+  auto cloud = make_cloud();
+  cloud.width = 0;
+  cloud.row_step = 0;
+  cloud.data.clear();
+
+  const auto result = lidar_target_tracking::bridge_scan(cloud, make_transform(), 26, 1200);
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->points.empty());
+  for (float range : result->scan.ranges) EXPECT_TRUE(std::isinf(range));
+}
+
 }  // namespace
