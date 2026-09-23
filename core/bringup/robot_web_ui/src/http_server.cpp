@@ -171,6 +171,9 @@ HttpServer::Impl::Impl(Params params_value, HttpActions &actions_value)
     server.Get("/map_view\\.js", [this](const httplib::Request &, httplib::Response &response) {
         send_file(response, std::filesystem::path(params.web_directory) / "map_view.js", "application/javascript; charset=utf-8");
     });
+    server.Get("/tracking_view\\.js", [this](const httplib::Request &, httplib::Response &response) {
+        send_file(response, std::filesystem::path(params.web_directory) / "tracking_view.js", "application/javascript; charset=utf-8");
+    });
     server.Get("/api/assistant-state", [this](const httplib::Request &, httplib::Response &response) {
         send_json(response, {200, actions.assistant_state()});
     });

@@ -31,13 +31,14 @@
       inset: 0;
       pointer-events: none;
     }
-    #mapCanvas {
+    #mapCanvas, #trackingCanvas {
       position: fixed;
       inset: 0;
       width: 100vw;
       height: 100dvh;
       touch-action: none;
     }
+    #trackingCanvas { background: var(--canvas); }
     .overlay {
       position: absolute;
       left: 12px;
@@ -98,6 +99,12 @@
       min-height: 0;
       overflow: hidden;
     }
+    #operationDrawer {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 8px;
+    }
+    #operationDrawer button { min-height: 44px; }
     #parkingDrawerHeader {
       display: flex;
       align-items: center;
@@ -180,11 +187,13 @@
 </head>
 <body>
 <canvas id="mapCanvas" aria-label="导航地图"></canvas>
+<canvas id="trackingCanvas" aria-label="机器人周围激光点" hidden></canvas>
 <main>
   <section id="statusStrip" class="overlay" aria-label="机器人状态">
     <p id="modeStatus">控制模式：状态同步中</p>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
     <p id="navigationStatus" role="status" aria-live="polite"></p>
+    <p id="trackingStatus" role="status" aria-live="polite" hidden></p>
   </section>
   <section id="controlDock" class="overlay" aria-label="操作区">
     <section id="operationRegion">
@@ -229,12 +238,17 @@
         <button disabled data-direction="right" aria-label="右转">右转</button>
         </section>
       </section>
+      <section id="operationDrawer" aria-label="选择操作" hidden>
+        <button id="chooseNavigation" type="button">恢复自动导航</button>
+        <button id="chooseTracking" type="button">查看目标跟踪</button>
+      </section>
     </section>
     <button id="modeToggle" disabled>状态同步中…</button>
   </section>
 </main>
 
 <script src="/map_view.js"></script>
+<script src="/tracking_view.js"></script>
 <script>
   const speed = document.getElementById("speed");
   const speedValue = document.getElementById("speedValue");
@@ -254,7 +268,17 @@
   const parkingDrawerClose = document.getElementById("parkingDrawerClose");
   const parkingList = document.getElementById("parkingList");
   const manualControls = document.getElementById("manualControls");
+  const mapCanvas = document.getElementById("mapCanvas");
+  const trackingCanvas = document.getElementById("trackingCanvas");
+  const trackingStatus = document.getElementById("trackingStatus");
+  const operationDrawer = document.getElementById("operationDrawer");
+  const chooseNavigation = document.getElementById("chooseNavigation");
+  const chooseTracking = document.getElementById("chooseTracking");
   let mapView = null;
+  let trackingView = null;
+  let trackingVisible = false;
+  let operationDrawerOpen = false;
+  let trackingPollGeneration = 0;
   let desiredDirection = "stop";
   let commandLoopRunning = false;
   let manualSessionId = null;
@@ -515,6 +539,38 @@
     return modeSwitchPending || modeSwitchTarget !== null;
   }
 
+  function showTracking(visible) {
+    trackingVisible = visible;
+    operationDrawerOpen = false;
+    mapCanvas.hidden = visible;
+    trackingCanvas.hidden = !visible;
+    trackingStatus.hidden = !visible;
+    trackingPollGeneration += 1;
+    renderControls();
+    if (visible) pollTracking(trackingPollGeneration);
+    else if (mapView) mapView.refreshViewport();
+  }
+
+  async function pollTracking(generation) {
+    if (!trackingVisible || document.hidden || generation !== trackingPollGeneration) return;
+    try {
+      const state = await get("/api/tracking-state");
+      if (generation !== trackingPollGeneration || !trackingVisible) return;
+      if (trackingView) trackingView.setState(state);
+      trackingStatus.textContent = state.available === false
+        ? "目标跟踪：数据不可用"
+        : state.active && state.target
+          ? `最后一次参考输出：X ${state.target.x.toFixed(2)} 米，Y ${state.target.y.toFixed(2)} 米`
+          : "最后一次参考输出：暂无目标";
+    } catch (error) {
+      if (generation !== trackingPollGeneration) return;
+      trackingStatus.textContent = `目标跟踪请求失败：${error.message}`;
+    }
+    if (generation === trackingPollGeneration && trackingVisible && !document.hidden) {
+      setTimeout(() => pollTracking(generation), 500);
+    }
+  }
+
   function renderControls() {
     const modePending = modeSwitchInProgress();
     const previousContext = navigationActions.hidden + ":"
@@ -527,7 +583,7 @@
       modeToggle.textContent = "人工接管";
       modeToggle.disabled = false;
     } else if (currentMode === "manual") {
-      modeToggle.textContent = "恢复自动导航";
+      modeToggle.textContent = trackingVisible ? "返回地图" : "选择操作";
       modeToggle.disabled = false;
     } else {
       modeToggle.textContent = "状态同步中…";
@@ -544,12 +600,13 @@
           ? "控制模式：人工接管"
           : "控制模式：状态同步中";
     const drawerVisible = parkingDrawerOpen && currentMode === "automatic";
-    mapActions.hidden = drawerVisible;
+    mapActions.hidden = drawerVisible || trackingVisible || operationDrawerOpen;
     navigationActions.hidden = currentMode !== "automatic"
       || modePending || drawerVisible;
     parkingActions.hidden = currentMode !== "automatic"
       || modePending || drawerVisible;
     parkingDrawer.hidden = !drawerVisible;
+    operationDrawer.hidden = !operationDrawerOpen || currentMode !== "manual" || modePending;
     saveParkingForm.hidden = !saveParkingFormOpen || drawerVisible
       || currentMode !== "automatic" || modePending;
     manualControls.hidden = currentMode !== "manual" || modePending;
@@ -579,6 +636,10 @@
         parkingDrawerOpen = false;
         if (mapView) mapView.setParkingPointsVisible(false);
       }
+    }
+    if (currentMode !== "manual") {
+      operationDrawerOpen = false;
+      if (trackingVisible) showTracking(false);
     }
     renderControls();
     if (currentMode === "automatic" && previousMode !== "automatic") {
@@ -825,10 +886,29 @@
   goToParkingPoint.addEventListener("click", openParkingDrawer);
   parkingDrawerClose.addEventListener("click", closeParkingDrawer);
   parkingList.addEventListener("click", handleParkingListClick);
-  modeToggle.addEventListener("click", requestMode);
+  modeToggle.addEventListener("click", () => {
+    if (currentMode === "manual" && !modeSwitchInProgress()) {
+      if (trackingVisible) showTracking(false);
+      else {
+        operationDrawerOpen = !operationDrawerOpen;
+        renderControls();
+      }
+      return;
+    }
+    return requestMode();
+  });
+  chooseNavigation.addEventListener("click", () => {
+    operationDrawerOpen = false;
+    renderControls();
+    return requestMode();
+  });
+  chooseTracking.addEventListener("click", () => {
+    if (currentMode === "manual") showTracking(true);
+  });
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopMotion();
+    else if (trackingVisible) pollTracking(++trackingPollGeneration);
   });
   window.addEventListener("pagehide", stopMotion);
   window.addEventListener("blur", stopMotion);
@@ -872,6 +952,9 @@
       request: post
     });
     mapView.setParkingPoints(parkingPoints);
+  }
+  if (globalThis.RobotTrackingView) {
+    trackingView = RobotTrackingView.create({canvas: trackingCanvas, request: post});
   }
 </script>
 </body>

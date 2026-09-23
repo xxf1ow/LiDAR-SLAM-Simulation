@@ -53,7 +53,7 @@ add_executable(robot_web_ui src/main.cpp)
 target_link_libraries(robot_web_ui robot_web_ui_ros robot_web_ui_http)
 ament_target_dependencies(robot_web_ui rclcpp ament_index_cpp)
 install(TARGETS robot_web_ui DESTINATION lib/${PROJECT_NAME})
-install(FILES web/index.html web/map_view.js DESTINATION share/${PROJECT_NAME}/web)
+install(FILES web/index.html web/map_view.js web/tracking_view.js DESTINATION share/${PROJECT_NAME}/web)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
@@ -84,6 +84,7 @@ if(BUILD_TESTING)
 
   ament_add_pytest_test(test_web_asset test/test_web_asset.py TIMEOUT 30)
   ament_add_pytest_test(test_map_view test/test_map_view.py TIMEOUT 30)
+  ament_add_pytest_test(test_tracking_view test/test_tracking_view.py TIMEOUT 30)
 endif()
 
 ament_package()

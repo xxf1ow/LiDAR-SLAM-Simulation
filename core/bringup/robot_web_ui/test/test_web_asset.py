@@ -14,6 +14,11 @@ HTML = (
 )
 
 
+def test_browser_scripts_are_installed():
+    cmake = (HTML.parents[1] / "CMakeLists.txt").read_text(encoding="utf-8")
+    assert "install(FILES web/index.html web/map_view.js web/tracking_view.js " in cmake
+
+
 def test_page_structure_matches_contextual_mobile_contract():
     source = HTML.read_text(encoding="utf-8")
 
@@ -24,7 +29,8 @@ def test_page_structure_matches_contextual_mobile_contract():
         "manualControls", "saveParkingForm", "parkingName",
         "confirmSaveParkingPoint", "cancelSaveParkingPoint",
         "parkingDrawer", "parkingDrawerHeader", "parkingDrawerClose",
-        "parkingList", "modeToggle",
+        "parkingList", "modeToggle", "trackingCanvas", "trackingStatus",
+        "operationDrawer", "chooseNavigation", "chooseTracking",
         "setInitialPose", "navigationAction", "confirmPlacement",
         "cancelPlacement", "speed", "mapZoomIn",
         "mapZoomOut", "mapFit", "mapCenterRobot",
@@ -73,6 +79,7 @@ def test_page_structure_matches_contextual_mobile_contract():
     assert "min-height: 44px" in source
     assert '<input id="speed" type="range" min="0" max="100"' in source
     assert '<script src="/map_view.js"></script>' in source
+    assert '<script src="/tracking_view.js"></script>' in source
     assert ":focus-visible" in source
     assert "prefers-reduced-motion: reduce" in source
 
@@ -190,12 +197,22 @@ def _run_browser_scenario(scenario):
            "confirmSaveParkingPoint", "cancelSaveParkingPoint",
            "parkingDrawer", "parkingDrawerHeader", "parkingDrawerClose",
            "parkingList", "operationRegion",
-            "mapCanvas", "mapZoomIn", "mapZoomOut",
+            "mapCanvas", "trackingCanvas", "trackingStatus",
+            "operationDrawer", "chooseNavigation", "chooseTracking",
+            "mapZoomIn", "mapZoomOut",
             "mapFit", "mapCenterRobot"].map(
              (id) => [id, new FakeElement(id)]
            )
         );
         elements.set("mapCanvas", new FakeCanvas());
+        elements.set("trackingCanvas", new FakeCanvas());
+        const trackingStates = [];
+        global.RobotTrackingView = {{
+          create(options) {{
+            assert.strictEqual(options.canvas, elements.get("trackingCanvas"));
+            return {{ setState(state) {{ trackingStates.push(state); }} }};
+          }}
+        }};
         const mapViewCalls = [];
         let mapViewOptions = null;
         global.RobotMapView = {{
@@ -334,6 +351,56 @@ def _run_browser_scenario(scenario):
           assert.strictEqual(requests[0].path, "/api/manual-session");
           assert.deepStrictEqual(requests[0].body, {{}});
 
+          if (scenario === "tracking-drawer") {{
+            const primary = elements.get("modeToggle");
+            const drawer = elements.get("operationDrawer");
+            const trackingCanvas = elements.get("trackingCanvas");
+            applyMode("manual");
+            const gateCount = requests.filter((request) =>
+              request.path === "/api/resume-automatic" || request.path === "/api/takeover-manual"
+            ).length;
+            await primary.emit("click");
+            assert.strictEqual(drawer.hidden, false);
+            await elements.get("chooseTracking").emit("click");
+            assert.strictEqual(currentMode, "manual");
+            assert.strictEqual(trackingCanvas.hidden, false);
+            assert.strictEqual(elements.get("mapCanvas").hidden, true);
+            assert.strictEqual(requests.at(-1).path, "/api/tracking-state");
+            pending.splice(pending.findIndex((request) =>
+              request.path === "/api/tracking-state"), 1)[0].resolve({{
+              payload: {{frame_id: "base_footprint", stamp: {{sec: 1, nanosec: 0}},
+                active: true, target: {{x: 1, y: 0}}, points: [[1, 0]]}}
+            }});
+            await flush();
+            assert.strictEqual(trackingStates.at(-1).target.x, 1);
+            assert(elements.get("trackingStatus").textContent.includes("最后一次参考输出"));
+            const pollCount = requests.filter((request) =>
+              request.path === "/api/tracking-state").length;
+            await primary.emit("click");
+            assert.strictEqual(trackingCanvas.hidden, true);
+            assert.strictEqual(elements.get("mapCanvas").hidden, false);
+            await tick(500);
+            assert.strictEqual(requests.filter((request) =>
+              request.path === "/api/tracking-state").length, pollCount);
+            assert.strictEqual(requests.filter((request) =>
+              request.path === "/api/resume-automatic" || request.path === "/api/takeover-manual"
+            ).length, gateCount);
+            await primary.emit("click");
+            const navigation = elements.get("chooseNavigation").emit("click");
+            assert.strictEqual(requests.at(-1).path, "/api/resume-automatic");
+            pending.splice(pending.findIndex((request) =>
+              request.path === "/api/resume-automatic"), 1)[0].resolve({{
+              payload: {{ok: true, mode: "automatic"}}
+            }});
+            await navigation;
+            applyMode("automatic");
+            const takeover = primary.emit("click");
+            assert.strictEqual(requests.at(-1).path, "/api/takeover-manual");
+            assert.strictEqual(drawer.hidden, true);
+            void takeover;
+            return;
+          }}
+
           if (scenario === "parking_lifecycle") {{
             const saveParkingPoint = elements.get("saveParkingPoint");
             const goToParkingPoint = elements.get("goToParkingPoint");
@@ -365,7 +432,8 @@ def _run_browser_scenario(scenario):
               ok: true, sequence: 1, mode: "manual"
             }}}});
 
-            const automaticPromise = elements.get("modeToggle").emit("click");
+            await elements.get("modeToggle").emit("click");
+            const automaticPromise = elements.get("chooseNavigation").emit("click");
             await flush();
             assert.strictEqual(requests[2].path, "/api/manual-command");
             assert.deepStrictEqual(requests[2].body, {{
@@ -608,7 +676,7 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(elements.get("modeToggle").disabled, false);
             assert.strictEqual(
               elements.get("modeToggle").textContent,
-              "恢复自动导航"
+              "选择操作"
             );
             desiredDirection = "forward";
             heldMovementKeys.push("w");
@@ -959,12 +1027,13 @@ def _run_browser_scenario(scenario):
             await flush();
             assert.strictEqual(currentMode, "manual");
             assert.strictEqual(modeToggle.disabled, false);
-            assert.strictEqual(modeToggle.textContent, "恢复自动导航");
+            assert.strictEqual(modeToggle.textContent, "选择操作");
             assert(directionButtons.every((button) => !button.disabled));
 
             await directionButtons[0].emit("pointerdown");
             assert.strictEqual(desiredDirection, "forward");
-            const resumePromise = modeToggle.emit("click");
+            await modeToggle.emit("click");
+            const resumePromise = elements.get("chooseNavigation").emit("click");
             assert.strictEqual(modeToggle.textContent, "切换中…");
             assert.strictEqual(modeToggle.disabled, true);
             assert.strictEqual(desiredDirection, "stop");
@@ -1052,7 +1121,8 @@ def _run_browser_scenario(scenario):
             await directionButtons[0].emit("pointerdown");
             assert.strictEqual(desiredDirection, "forward");
             const modeToggle = elements.get("modeToggle");
-            const modePromise = modeToggle.emit("click");
+            await modeToggle.emit("click");
+            const modePromise = elements.get("chooseNavigation").emit("click");
             assert.strictEqual(desiredDirection, "stop");
             assert.strictEqual(currentMode, "manual");
             assert.strictEqual(modeToggle.textContent, "切换中…");
@@ -1172,7 +1242,8 @@ def _run_browser_scenario(scenario):
 
           if (scenario === "mode-notice-ownership") {{
             const modeToggle = elements.get("modeToggle");
-            const resumePromise = modeToggle.emit("click");
+            await modeToggle.emit("click");
+            const resumePromise = elements.get("chooseNavigation").emit("click");
             const modeIndex = pending.findIndex((request) =>
               request.path === "/api/resume-automatic"
             );
@@ -1309,6 +1380,7 @@ def _run_browser_scenario(scenario):
 @pytest.mark.parametrize(
     "scenario",
     [
+        "tracking-drawer",
         "parking_lifecycle",
         "parking-refresh-race",
         "contextual-layout",

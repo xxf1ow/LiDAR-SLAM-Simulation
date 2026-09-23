@@ -146,6 +146,7 @@ void HttpTest::SetUp()
     directory = mkdtemp(name);
     std::ofstream(directory / "index.html", std::ios::binary) << "<html>robot</html>\n";
     std::ofstream(directory / "map_view.js", std::ios::binary) << "export const robot = 1;\n";
+    std::ofstream(directory / "tracking_view.js", std::ios::binary) << "export const tracking = 1;\n";
     auto result = HttpServer::create({"127.0.0.1", port, directory.string()}, actions);
     ASSERT_TRUE(result) << result.error().message();
     server = std::move(*result);
@@ -195,7 +196,7 @@ TEST_F(HttpTest, TrackingRoutesReturnSnapshotAndAcceptOnlyFiniteXY)
 
 TEST_F(HttpTest, ServesOnlyNamedStaticAssetsAndCompactState)
 {
-    for (const auto &entry : {std::make_pair("/", "<html>robot</html>\n"), std::make_pair("/map_view.js", "export const robot = 1;\n")}) {
+    for (const auto &entry : {std::make_pair("/", "<html>robot</html>\n"), std::make_pair("/map_view.js", "export const robot = 1;\n"), std::make_pair("/tracking_view.js", "export const tracking = 1;\n")}) {
         auto response = client->Get(entry.first);
         ASSERT_TRUE(response);
         EXPECT_EQ(response->status, 200);
