@@ -207,8 +207,10 @@ def _run_browser_scenario(scenario):
         elements.set("mapCanvas", new FakeCanvas());
         elements.set("trackingCanvas", new FakeCanvas());
         const trackingStates = [];
+        let trackingViewOptions = null;
         global.RobotTrackingView = {{
           create(options) {{
+            trackingViewOptions = options;
             assert.strictEqual(options.canvas, elements.get("trackingCanvas"));
             return {{ setState(state) {{ trackingStates.push(state); }} }};
           }}
@@ -374,6 +376,19 @@ def _run_browser_scenario(scenario):
             await flush();
             assert.strictEqual(trackingStates.at(-1).target.x, 1);
             assert(elements.get("trackingStatus").textContent.includes("最后一次参考输出"));
+            trackingViewOptions.onSelectionError(new Error("subscriber unavailable"));
+            assert.strictEqual(elements.get("notice").textContent,
+              "目标设置失败：subscriber unavailable");
+            await tick(500);
+            pending.splice(pending.findIndex((request) =>
+              request.path === "/api/tracking-state"), 1)[0].resolve({{
+              payload: {{available: false}}
+            }});
+            await flush();
+            assert.strictEqual(elements.get("notice").textContent,
+              "目标设置失败：subscriber unavailable");
+            trackingViewOptions.onSelectionSuccess();
+            assert.strictEqual(elements.get("notice").textContent, "");
             const pollCount = requests.filter((request) =>
               request.path === "/api/tracking-state").length;
             await primary.emit("click");

@@ -31,10 +31,17 @@ def test_tracking_view_renders_snapshot_and_selects_base_footprint_target():
           addEventListener(name, callback) {{ listeners.set(name, callback); }}
         }};
         const sent = [];
+        const errors = [];
+        let successes = 0;
         vm.runInThisContext(fs.readFileSync({str(VIEW)!r}, "utf8"));
         const view = RobotTrackingView.create({{
           canvas,
-          request: async (path, body) => {{ sent.push([path, body]); }}
+          request: async (path, body) => {{
+            sent.push([path, body]);
+            if (sent.length === 1) throw new Error("subscriber unavailable");
+          }},
+          onSelectionError: (error) => errors.push(error.message),
+          onSelectionSuccess: () => {{ successes += 1; }}
         }});
         view.setState({{
           frame_id: "base_footprint", stamp: {{sec: 2, nanosec: 0}},
@@ -47,7 +54,10 @@ def test_tracking_view_renders_snapshot_and_selects_base_footprint_target():
         assert(calls.some((call) => call[0] === "arc" && call[1] === 100 && call[2] === 50));
         (async () => {{
           await listeners.get("dblclick")({{clientX: 100, clientY: 50}});
+          assert.deepStrictEqual(errors, ["subscriber unavailable"]);
+          assert.strictEqual(successes, 0);
           await listeners.get("dblclick")({{clientX: 100, clientY: 0}});
+          assert.strictEqual(successes, 1);
           assert.deepStrictEqual(sent, [
             ["/api/tracking-target", {{x: 0, y: 0}}],
             ["/api/tracking-target", {{x: 0.5, y: 0}}]

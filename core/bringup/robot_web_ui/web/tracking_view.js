@@ -3,7 +3,7 @@
 
   const PIXELS_PER_METER = 100;
 
-  function create({canvas, request}) {
+  function create({canvas, request, onSelectionError, onSelectionSuccess}) {
     const context = canvas.getContext("2d");
 
     function drawPoint(x, y, radius, color) {
@@ -44,7 +44,12 @@
       const rect = canvas.getBoundingClientRect();
       const x = (rect.height / 2 - (event.clientY - rect.top)) / PIXELS_PER_METER;
       const y = (rect.width / 2 - (event.clientX - rect.left)) / PIXELS_PER_METER;
-      await request("/api/tracking-target", {x, y});
+      try {
+        await request("/api/tracking-target", {x, y});
+        onSelectionSuccess();
+      } catch (error) {
+        onSelectionError(error);
+      }
     });
 
     return {setState};

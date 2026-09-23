@@ -954,7 +954,19 @@
     mapView.setParkingPoints(parkingPoints);
   }
   if (globalThis.RobotTrackingView) {
-    trackingView = RobotTrackingView.create({canvas: trackingCanvas, request: post});
+    trackingView = RobotTrackingView.create({
+      canvas: trackingCanvas,
+      request: post,
+      onSelectionError: (error) => {
+        noticeOwner = "tracking";
+        notice.textContent = `目标设置失败：${error.message}`;
+      },
+      onSelectionSuccess: () => {
+        if (noticeOwner !== "tracking") return;
+        noticeOwner = null;
+        notice.textContent = "";
+      }
+    });
   }
 </script>
 </body>
