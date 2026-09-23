@@ -227,6 +227,24 @@ def _run_map_scenario(scenario):
             canvas, buttons, navigationStatus, statusStrip, controlDock,
             navigationButtons, request, poll: false
           });
+          if (scenario === "hidden-controls") {
+            const start = view.getTransform();
+            canvas.hidden = true;
+            await buttons.zoomIn.emit("click");
+            await buttons.zoomOut.emit("click");
+            await buttons.fit.emit("click");
+            await buttons.centerRobot.emit("click");
+            assert.deepStrictEqual(view.getTransform(), start);
+            buttons.zoomIn.disabled = false;
+            await view.applyState(state());
+            assert.strictEqual(buttons.zoomIn.disabled, false);
+            canvas.hidden = false;
+            view.refreshViewport();
+            assert.strictEqual(buttons.zoomIn.disabled, true);
+            await buttons.zoomIn.emit("click");
+            assert.notDeepStrictEqual(view.getTransform(), start);
+            return;
+          }
           if (scenario === "auto-fit-lifecycle") {
             const staticMap = grid(1, {width: 20, height: 10});
             responses.push(bytes(new Array(200).fill(0)));
@@ -1475,6 +1493,11 @@ def test_single_pointer_drag_pans_without_pinch_or_rotation_modes():
 @pytest.mark.parametrize("scenario", ["zoom", "auto-fit-lifecycle"])
 def test_view_transform_controls_and_auto_fit_lifecycle(scenario):
     _run_map_scenario(scenario)
+
+
+@pytest.mark.skipif(NODE is None, reason="Node.js is required")
+def test_hidden_navigation_canvas_does_not_receive_shared_view_controls():
+    _run_map_scenario("hidden-controls")
 
 
 @pytest.mark.skipif(NODE is None, reason="Node.js is required")

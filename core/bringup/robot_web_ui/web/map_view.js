@@ -518,9 +518,11 @@
       if (options.navigationStatus) {
         options.navigationStatus.textContent = messages.join("；");
       }
-      Object.values(buttons).forEach((button) => {
-        if (button) button.disabled = unavailable;
-      });
+      if (!canvas.hidden) {
+        Object.values(buttons).forEach((button) => {
+          if (button) button.disabled = unavailable;
+        });
+      }
       updateNavigationButtons();
     }
 
@@ -609,6 +611,7 @@
 
     function refreshViewport() {
       if (autoFit && hasFitted) fitToMap();
+      updateNavigationStatus();
       render();
     }
 
@@ -806,10 +809,18 @@
         if (dragging && event.pointerId === dragging.pointerId) dragging = null;
       });
     });
-    if (buttons.zoomIn) buttons.zoomIn.addEventListener("click", () => zoom(1.25));
-    if (buttons.zoomOut) buttons.zoomOut.addEventListener("click", () => zoom(0.8));
-    if (buttons.fit) buttons.fit.addEventListener("click", fit);
-    if (buttons.centerRobot) buttons.centerRobot.addEventListener("click", centerRobot);
+    if (buttons.zoomIn) buttons.zoomIn.addEventListener("click", () => {
+      if (!canvas.hidden) zoom(1.25);
+    });
+    if (buttons.zoomOut) buttons.zoomOut.addEventListener("click", () => {
+      if (!canvas.hidden) zoom(0.8);
+    });
+    if (buttons.fit) buttons.fit.addEventListener("click", () => {
+      if (!canvas.hidden) fit();
+    });
+    if (buttons.centerRobot) buttons.centerRobot.addEventListener("click", () => {
+      if (!canvas.hidden) centerRobot();
+    });
     if (navigationButtons.initialPose) {
       navigationButtons.initialPose.addEventListener("click", () => startPlacement("initial_pose"));
     }

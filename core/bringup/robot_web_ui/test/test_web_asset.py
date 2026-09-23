@@ -73,6 +73,15 @@ def test_page_structure_matches_contextual_mobile_contract():
     assert "pointer-events: none" in status_css
     assert "safe-area-inset-bottom" in source
     assert "grid-template-columns: repeat(2, 1fr)" in source
+    drawer_markup = source.split('id="operationDrawer"', 1)[1].split(
+        '</section>', 1
+    )[0]
+    assert '>自动导航</button>' in drawer_markup
+    assert '>目标跟踪</button>' in drawer_markup
+    assert drawer_markup.count('<button ') == 2
+    drawer_css = source.split('#operationDrawer {', 1)[1].split('}', 1)[0]
+    assert 'grid-template-columns:' not in drawer_css
+    assert '#operationDrawer button { min-height: 52px; }' in source
     assert "max-height: 55dvh" in source
     assert "overflow-y: auto" in source
     assert "id=\"parkingList\"" in source
@@ -189,7 +198,7 @@ def _run_browser_scenario(scenario):
         global.AbortController = FakeAbortController;
 
         const elements = new Map(
-          ["speed", "speedValue", "notice", "modeToggle", "modeStatus",
+          ["speed", "speedValue", "notice", "navigationStatus", "modeToggle", "modeStatus",
            "statusStrip", "controlDock", "mapActions",
                "navigationActions", "manualControls",
                "parkingActions", "saveParkingForm", "parkingName",
@@ -207,12 +216,20 @@ def _run_browser_scenario(scenario):
         elements.set("mapCanvas", new FakeCanvas());
         elements.set("trackingCanvas", new FakeCanvas());
         const trackingStates = [];
+        const trackingViewCalls = [];
         let trackingViewOptions = null;
         global.RobotTrackingView = {{
           create(options) {{
             trackingViewOptions = options;
             assert.strictEqual(options.canvas, elements.get("trackingCanvas"));
-            return {{ setState(state) {{ trackingStates.push(state); }} }};
+            return {{
+              setState(state) {{ trackingStates.push(state); }},
+              zoomIn() {{ trackingViewCalls.push("zoomIn"); }},
+              zoomOut() {{ trackingViewCalls.push("zoomOut"); }},
+              fit() {{ trackingViewCalls.push("fit"); }},
+              centerRobot() {{ trackingViewCalls.push("centerRobot"); }},
+              refreshViewport() {{ trackingViewCalls.push("refreshViewport"); }}
+            }};
           }}
         }};
         const mapViewCalls = [];
@@ -227,6 +244,10 @@ def _run_browser_scenario(scenario):
                 eventLog.push(["cancelPlacement"]);
               }},
               refreshViewport() {{ mapViewCalls.push(["refreshViewport"]); }},
+              zoomIn() {{ mapViewCalls.push(["zoomIn"]); }},
+              zoomOut() {{ mapViewCalls.push(["zoomOut"]); }},
+              fit() {{ mapViewCalls.push(["fit"]); }},
+              centerRobot() {{ mapViewCalls.push(["centerRobot"]); }},
               setParkingPoints(points) {{
                 mapViewCalls.push(["setParkingPoints", points]);
               }},
@@ -358,13 +379,41 @@ def _run_browser_scenario(scenario):
             const drawer = elements.get("operationDrawer");
             const trackingCanvas = elements.get("trackingCanvas");
             applyMode("manual");
+            assert.strictEqual(primary.textContent, "选择模式");
             const gateCount = requests.filter((request) =>
               request.path === "/api/resume-automatic" || request.path === "/api/takeover-manual"
             ).length;
             await primary.emit("click");
             assert.strictEqual(drawer.hidden, false);
+            assert.strictEqual(primary.textContent, "取消");
+            assert.strictEqual(elements.get("manualControls").hidden, true);
+            await primary.emit("click");
+            assert.strictEqual(drawer.hidden, true);
+            await primary.emit("click");
+            assert.strictEqual(drawer.hidden, false);
+            desiredDirection = "forward";
+            heldMovementKeys.push("w");
             await elements.get("chooseTracking").emit("click");
             assert.strictEqual(currentMode, "manual");
+            assert.strictEqual(desiredDirection, "stop");
+            assert.strictEqual(primary.textContent, "手动控制");
+            assert.strictEqual(elements.get("modeStatus").textContent,
+              "控制模式：目标跟踪");
+            assert.strictEqual(elements.get("manualControls").hidden, true);
+            assert.strictEqual(elements.get("navigationActions").hidden, true);
+            assert.strictEqual(elements.get("parkingActions").hidden, true);
+            assert.strictEqual(elements.get("mapActions").hidden, false);
+            assert.strictEqual(elements.get("navigationStatus").hidden, true);
+            documentListeners.get("keydown")({{
+              key: "w", repeat: false, preventDefault() {{}}
+            }});
+            assert.strictEqual(desiredDirection, "stop");
+            await elements.get("mapZoomIn").emit("click");
+            await elements.get("mapZoomOut").emit("click");
+            await elements.get("mapFit").emit("click");
+            await elements.get("mapCenterRobot").emit("click");
+            assert.deepStrictEqual(trackingViewCalls.slice(-4),
+              ["zoomIn", "zoomOut", "fit", "centerRobot"]);
             assert.strictEqual(trackingCanvas.hidden, false);
             assert.strictEqual(elements.get("mapCanvas").hidden, true);
             assert.strictEqual(requests.at(-1).path, "/api/tracking-state");
@@ -393,6 +442,8 @@ def _run_browser_scenario(scenario):
               request.path === "/api/tracking-state").length;
             await primary.emit("click");
             assert.strictEqual(trackingCanvas.hidden, true);
+            assert.strictEqual(primary.textContent, "选择模式");
+            assert.strictEqual(elements.get("manualControls").hidden, false);
             assert.strictEqual(elements.get("mapCanvas").hidden, false);
             await tick(500);
             assert.strictEqual(requests.filter((request) =>
@@ -409,6 +460,7 @@ def _run_browser_scenario(scenario):
             }});
             await navigation;
             applyMode("automatic");
+            assert.strictEqual(primary.textContent, "手动控制");
             const takeover = primary.emit("click");
             assert.strictEqual(requests.at(-1).path, "/api/takeover-manual");
             assert.strictEqual(drawer.hidden, true);
@@ -641,7 +693,7 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(navigationActions.hidden && manualControls.hidden, false);
 
             applyMode("manual");
-            assert.strictEqual(modeStatus.textContent, "控制模式：人工接管");
+            assert.strictEqual(modeStatus.textContent, "控制模式：手动控制");
             assert.strictEqual(navigationActions.hidden, true);
             assert.strictEqual(manualControls.hidden, false);
             assert.strictEqual(navigationActions.hidden && manualControls.hidden, false);
@@ -691,7 +743,7 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(elements.get("modeToggle").disabled, false);
             assert.strictEqual(
               elements.get("modeToggle").textContent,
-              "选择操作"
+              "选择模式"
             );
             desiredDirection = "forward";
             heldMovementKeys.push("w");
@@ -706,7 +758,7 @@ def _run_browser_scenario(scenario):
             assert.strictEqual(elements.get("modeToggle").disabled, false);
             assert.strictEqual(
               elements.get("modeToggle").textContent,
-              "人工接管"
+              "手动控制"
             );
 
             applyMode("manual");
@@ -1008,7 +1060,7 @@ def _run_browser_scenario(scenario):
 
             applyMode("automatic");
             assert.strictEqual(modeToggle.disabled, false);
-            assert.strictEqual(modeToggle.textContent, "人工接管");
+            assert.strictEqual(modeToggle.textContent, "手动控制");
             mapViewCalls.length = 0;
             eventLog.length = 0;
             const takeoverPromise = modeToggle.emit("click");
@@ -1042,7 +1094,7 @@ def _run_browser_scenario(scenario):
             await flush();
             assert.strictEqual(currentMode, "manual");
             assert.strictEqual(modeToggle.disabled, false);
-            assert.strictEqual(modeToggle.textContent, "选择操作");
+            assert.strictEqual(modeToggle.textContent, "选择模式");
             assert(directionButtons.every((button) => !button.disabled));
 
             await directionButtons[0].emit("pointerdown");
@@ -1074,7 +1126,7 @@ def _run_browser_scenario(scenario):
             await flush();
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(modeToggle.disabled, false);
-            assert.strictEqual(modeToggle.textContent, "人工接管");
+            assert.strictEqual(modeToggle.textContent, "手动控制");
             assert(directionButtons.every((button) => button.disabled));
             delayedManual.resolve({{payload: {{
               ok: true,
@@ -1165,7 +1217,7 @@ def _run_browser_scenario(scenario):
             );
             assert.notStrictEqual(
               elements.get("notice").textContent,
-              "人工接管请求已完成"
+              "手动控制请求已完成"
             );
             assert.strictEqual(desiredDirection, "stop");
             assert.strictEqual(currentMode, "manual");
@@ -1270,7 +1322,7 @@ def _run_browser_scenario(scenario):
             await flush();
             assert.strictEqual(
               elements.get("notice").textContent,
-              "恢复自动导航请求已完成"
+              "自动导航请求已完成"
             );
 
             await tick();
@@ -1316,7 +1368,7 @@ def _run_browser_scenario(scenario):
             );
             assert.strictEqual(currentMode, "automatic");
             assert.strictEqual(modeToggle.disabled, false);
-            assert.strictEqual(modeToggle.textContent, "人工接管");
+            assert.strictEqual(modeToggle.textContent, "手动控制");
             assert(directionButtons.every((button) => button.disabled));
 
             await tick();
