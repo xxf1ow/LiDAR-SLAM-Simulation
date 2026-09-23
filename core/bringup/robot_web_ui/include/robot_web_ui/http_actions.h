@@ -25,6 +25,12 @@ public:
     virtual ~HttpActions() = default;
     [[nodiscard]] virtual nlohmann::json navigation_state() const = 0;
     [[nodiscard]] virtual nlohmann::json assistant_state() const = 0;
+    /** Returns the latest tracking snapshot, or {"available":false} before one arrives. */
+    [[nodiscard]] virtual nlohmann::json tracking_state() const = 0;
+    /** Publishes finite numeric x/y in base_footprint; returns 400 for invalid input,
+     * 503 without a target subscriber, or 202 after publication.
+     */
+    [[nodiscard]] virtual ApiReply publish_tracking_target(const nlohmann::json &payload) = 0;
     /** Returns shared immutable bytes, or null for an unknown or unavailable layer. */
     [[nodiscard]] virtual BinarySnapshotPtr navigation_asset(const std::string &name) const = 0;
     /** Publishes a direction at 0–100 percent; nonzero commands require manual mode.

@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -281,11 +282,11 @@ TEST_F(WebUiNodeTest, NavigationModeCreatesOnlyItsSpecifiedRosInterfaces)
     start();
     const auto subscriptions = peer->get_node_graph_interface()->get_subscriber_names_and_types_by_node("robot_web_ui", "/");
     for (const std::string topic : {"/gicp_localization/localization_snapshot", "/global_costmap/costmap",
-                                   "/local_costmap/costmap", "/plan", "/cmd_vel_gate/mode"})
+                                   "/local_costmap/costmap", "/plan", "/cmd_vel_gate/mode", "/tracking/state"})
         EXPECT_EQ(subscriptions.count(topic), 1U) << topic;
     for (const std::string topic : {"/tf", "/tf_static", "/base_controller/odom", "/localization", "/behavior_tree_log"})
         EXPECT_EQ(subscriptions.count(topic), 0U) << topic;
-    for (const std::string topic : {"/cmd_vel_manual", "/initialpose"}) {
+    for (const std::string topic : {"/cmd_vel_manual", "/initialpose", "/tracking/target"}) {
         const auto publishers = peer->get_publishers_info_by_topic(topic);
         const auto owned = std::count_if(publishers.begin(), publishers.end(), [](const auto &publisher) {
             return publisher.node_name() == "robot_web_ui" && publisher.node_namespace() == "/";
@@ -328,6 +329,34 @@ TEST_F(WebUiNodeTest, DirectoryMapImageKeepsManualOperationsAvailable)
     EXPECT_TRUE(state["layers"]["static"].is_null());
     EXPECT_EQ(node->http_actions().manual_command("stop", 0).status, 200);
     EXPECT_EQ(node->http_actions().list_parking_points().status, 200);
+}
+
+TEST_F(WebUiNodeTest, TrackingStateAndTargetWorkInMappingMode)
+{
+    start(false);
+    EXPECT_EQ(node->http_actions().tracking_state(), (nlohmann::json{{"available", false}}));
+    auto snapshots = peer->create_publisher<std_msgs::msg::String>("/tracking/state", 10);
+    ASSERT_TRUE(until([&] { return snapshots->get_subscription_count() == 1; }));
+    std_msgs::msg::String snapshot;
+    snapshot.data = R"({"available":true,"obstacles":[{"x":1.0,"y":-0.5}]})";
+    snapshots->publish(snapshot);
+    ASSERT_TRUE(until([&] { return node->http_actions().tracking_state().value("available", false); }));
+    EXPECT_EQ(node->http_actions().tracking_state()["obstacles"].size(), 1U);
+
+    EXPECT_EQ(node->http_actions().publish_tracking_target({{"x", 1.0}, {"y", -0.5}}).status, 503);
+    std::optional<geometry_msgs::msg::PointStamped> received;
+    auto target = peer->create_subscription<geometry_msgs::msg::PointStamped>(
+        "/tracking/target", 10, [&](geometry_msgs::msg::PointStamped::ConstSharedPtr message) { received = *message; });
+    ASSERT_TRUE(until([&] { return node->count_subscribers("/tracking/target") == 1; }));
+    EXPECT_EQ(node->http_actions().publish_tracking_target({{"x", "1"}, {"y", 0}}).status, 400);
+    EXPECT_EQ(node->http_actions().publish_tracking_target({{"x", 1.0}, {"y", std::numeric_limits<double>::infinity()}}).status, 400);
+    EXPECT_EQ(node->http_actions().publish_tracking_target({{"x", 1.0}, {"y", -0.5}}).status, 202);
+    ASSERT_TRUE(until([&] { return received.has_value(); }));
+    EXPECT_EQ(received->header.frame_id, "base_footprint");
+    EXPECT_NE(received->header.stamp.sec, 0);
+    EXPECT_DOUBLE_EQ(received->point.x, 1.0);
+    EXPECT_DOUBLE_EQ(received->point.y, -0.5);
+    EXPECT_DOUBLE_EQ(received->point.z, 0.0);
 }
 
 TEST_F(WebUiNodeTest, MappingModeRetainsManualControlAndDisablesNavigation)

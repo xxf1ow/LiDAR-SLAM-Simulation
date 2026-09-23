@@ -25,6 +25,8 @@ class FakeActions final : public HttpActions {
 public:
     Json navigation_state() const override;
     Json assistant_state() const override;
+    Json tracking_state() const override;
+    ApiReply publish_tracking_target(const Json &payload) override;
     BinarySnapshotPtr navigation_asset(const std::string &name) const override;
     ApiReply manual_command(const std::string &direction, double speed) override;
     ApiReply takeover_manual() override;
@@ -42,10 +44,19 @@ public:
     std::promise<void> mode_started;
     std::promise<void> release_mode;
     Json points = Json::array();
+    int tracking_targets = 0;
+    Json last_tracking_target;
 };
 
 Json FakeActions::navigation_state() const { return {{"localized", true}, {"navigation", {{"status", "idle"}, {"phase", nullptr}}}}; }
 Json FakeActions::assistant_state() const { return {{"mode", "automatic"}, {"navigation", "idle"}, {"distance_m", nullptr}, {"issue", nullptr}}; }
+Json FakeActions::tracking_state() const { return {{"available", true}, {"obstacles", Json::array({{{"x", 1.0}, {"y", -0.5}}})}}; }
+ApiReply FakeActions::publish_tracking_target(const Json &payload)
+{
+    ++tracking_targets;
+    last_tracking_target = payload;
+    return {202, {{"ok", true}}};
+}
 BinarySnapshotPtr FakeActions::navigation_asset(const std::string &name) const
 {
     if (name == "local_costmap") return nullptr;
@@ -151,6 +162,35 @@ Json HttpTest::session()
     if (!result) return Json::object();
     EXPECT_EQ(result->status, 200);
     return Json::parse(result->body);
+}
+
+TEST_F(HttpTest, TrackingRoutesReturnSnapshotAndAcceptOnlyFiniteXY)
+{
+    auto state = client->Get("/api/tracking-state");
+    ASSERT_TRUE(state);
+    EXPECT_EQ(state->status, 200);
+    EXPECT_EQ(Json::parse(state->body), actions.tracking_state());
+
+    auto valid = post("/api/tracking-target", {{"x", 1.0}, {"y", -0.5}});
+    ASSERT_TRUE(valid);
+    EXPECT_EQ(valid->status, 202);
+    EXPECT_EQ(actions.tracking_targets, 1);
+    EXPECT_EQ(actions.last_tracking_target, (Json{{"x", 1.0}, {"y", -0.5}}));
+
+    for (const std::string body : {R"({"x":"1","y":0})", R"({"x":1})", R"({"x":1,"y":0,"z":0})",
+                                   R"({"x":1e999,"y":0})", R"({"x":null,"y":0})", R"([1,2])", "{"}) {
+        auto invalid = client->Post("/api/tracking-target", body, "application/json");
+        ASSERT_TRUE(invalid);
+        EXPECT_EQ(invalid->status, 400) << body;
+    }
+    EXPECT_EQ(actions.tracking_targets, 1);
+
+    auto navigation = client->Get("/api/navigation-state");
+    ASSERT_TRUE(navigation);
+    EXPECT_EQ(navigation->status, 200);
+    auto manual = post("/api/manual-session", Json::object());
+    ASSERT_TRUE(manual);
+    EXPECT_EQ(manual->status, 200);
 }
 
 TEST_F(HttpTest, ServesOnlyNamedStaticAssetsAndCompactState)

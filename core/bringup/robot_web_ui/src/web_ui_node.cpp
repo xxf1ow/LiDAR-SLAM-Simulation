@@ -7,6 +7,7 @@
 #include "robot_web_ui/parking_point_store.h"
 
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
+#include <geometry_msgs/msg/point_stamped.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 #include <nav2_msgs/action/navigate_to_pose.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
@@ -203,6 +204,8 @@ struct WebUiNode::Impl final : HttpActions {
     explicit Impl(WebUiNode &node);
     Json navigation_state() const override;
     Json assistant_state() const override;
+    Json tracking_state() const override;
+    ApiReply publish_tracking_target(const Json &payload) override;
     BinarySnapshotPtr navigation_asset(const std::string &name) const override;
     ApiReply manual_command(const std::string &direction, double speed_percent) override;
     ApiReply takeover_manual() override;
@@ -242,9 +245,12 @@ struct WebUiNode::Impl final : HttpActions {
     uint64_t generation = 0;
     GoalHandle::SharedPtr goal_handle;
     std::optional<std::string> path_error;
+    Json latest_tracking_state = {{"available", false}};
 
     rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr manual_publisher;
     rclcpp::Publisher<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr initial_publisher;
+    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr tracking_target_publisher;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr tracking_state_subscription;
     rclcpp::Subscription<std_msgs::msg::String>::SharedPtr mode_subscription;
     rclcpp::Subscription<tf2_msgs::msg::TFMessage>::SharedPtr localization_subscription;
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr global_subscription;
@@ -274,6 +280,14 @@ WebUiNode::Impl::Impl(WebUiNode &owner) : node(owner)
     const auto current = rclcpp::QoS(1).reliable().durability_volatile();
     manual_publisher = node.create_publisher<geometry_msgs::msg::TwistStamped>("/cmd_vel_manual", 10);
     initial_publisher = node.create_publisher<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", current);
+    tracking_target_publisher = node.create_publisher<geometry_msgs::msg::PointStamped>("/tracking/target", current);
+    tracking_state_subscription = node.create_subscription<std_msgs::msg::String>(
+        "/tracking/state", current, [this](std_msgs::msg::String::ConstSharedPtr message) {
+            auto snapshot = Json::parse(message->data, nullptr, false);
+            if (snapshot.is_discarded() || !snapshot.is_object()) return;
+            std::lock_guard<std::mutex> lock(mutex);
+            latest_tracking_state = std::move(snapshot);
+        });
     mode_subscription = node.create_subscription<std_msgs::msg::String>(
         "/cmd_vel_gate/mode", retained, [this](std_msgs::msg::String::ConstSharedPtr message) {
             if (message->data == "manual" || message->data == "automatic") {
@@ -438,6 +452,33 @@ Json WebUiNode::Impl::assistant_state() const
     return {{"mode", state["gate_mode"].is_null() ? Json("unknown") : state["gate_mode"]},
             {"navigation", state["navigation"]["goal_status"]},
             {"distance_m", state["navigation"]["distance_remaining"]}, {"issue", issue}};
+}
+
+Json WebUiNode::Impl::tracking_state() const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return latest_tracking_state;
+}
+
+ApiReply WebUiNode::Impl::publish_tracking_target(const Json &payload)
+{
+    if (!payload.is_object() || payload.size() != 2 || !payload.contains("x") || !payload.contains("y") ||
+        !payload["x"].is_number() || !payload["y"].is_number() ||
+        !std::isfinite(payload["x"].get<double>()) || !std::isfinite(payload["y"].get<double>()))
+        return error_reply(400, "tracking target must contain finite numeric x and y");
+    if (tracking_target_publisher->get_subscription_count() == 0)
+        return error_reply(503, "tracking target subscriber unavailable");
+    geometry_msgs::msg::PointStamped message;
+    message.header.frame_id = "base_footprint";
+    message.header.stamp = node.now();
+    message.point.x = payload["x"].get<double>();
+    message.point.y = payload["y"].get<double>();
+    try {
+        tracking_target_publisher->publish(message);
+    } catch (const rclcpp::exceptions::RCLError &error) {
+        return error_reply(503, error.what());
+    }
+    return {202, {{"ok", true}}};
 }
 
 BinarySnapshotPtr WebUiNode::Impl::navigation_asset(const std::string &name) const
