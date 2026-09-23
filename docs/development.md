@@ -50,6 +50,7 @@ colcon build --packages-select robot_web_ui
 test -x install/robot_web_ui/lib/robot_web_ui/robot_web_ui
 test -f install/robot_web_ui/share/robot_web_ui/web/index.html
 test -f install/robot_web_ui/share/robot_web_ui/web/map_view.js
+test -f install/robot_web_ui/share/robot_web_ui/web/tracking_view.js
 test -z "$(find install/robot_web_ui \
   -name '*.py*' \
   -print -quit)"

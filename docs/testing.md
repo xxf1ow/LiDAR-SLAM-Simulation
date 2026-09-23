@@ -23,7 +23,8 @@ Python 包和独立浏览器资产 harness 可以从仓库根目录运行聚焦�
 ```bash
 python3 -m pytest core/bringup/system_bringup/test -q
 python3 -m pytest core/bringup/robot_web_ui/test/test_web_asset.py \
-  core/bringup/robot_web_ui/test/test_map_view.py -q
+  core/bringup/robot_web_ui/test/test_map_view.py \
+  core/bringup/robot_web_ui/test/test_tracking_view.py -q
 ```
 
 Web 资产测试依赖 `node`，且不导入后端模块。测试开始前确认 `command -v node` 和 `node --version`；缺少 Node 必须按环境失败处理。C++ 后端行为由 `robot_web_ui` 的 gtest 目标覆盖，并通过下述 ROS 包测试入口运行。
@@ -42,6 +43,8 @@ colcon test-result --all --verbose
 ```
 
 模块 README 维护其推荐包集合。`colcon test-result` 必须为零 errors 和 failures；只有明确记录且由默认策略拥有的 package exclusion 才能接受。
+
+跟踪路径的聚焦包是 `lidar_target_tracking`、`robot_web_ui` 和 `system_bringup`；依次检查点云单环桥接、参考搜索与状态、HTTP/浏览器选点，以及正式 launch 接线。包级测试和静态 launch 检查不能证明 DDS 端到端消息流或现场跟踪效果。
 
 ## 工作区回归
 
@@ -63,6 +66,8 @@ colcon test-result --all --verbose
 ## 动态验收
 
 CPU-only WSL 的 launch/config/xacro 测试不证明 Gazebo 动态行为或真机安全。每次动态验收必须从受影响模块的当前合同出发，明确现场安全条件、正式入口、观察项、停止条件、进程组清理和配置恢复；这些任务特定步骤不作为长期项目文档保留。
+
+原版 LiDAR 跟踪效果的首次现场验收应让车辆静止，使用正式 bringup 和真实 `/points_raw`，在 Web 跟踪视图双击选择人，观察正常步速移动、转身及绕车时的回波、目标位置和漏匹配。记录平台、Profile、运行输入和观察时长；最后位置保留不表示人仍被观测。此项需要现场人员与物理急停，自动化通过不代替现场结论。
 
 动态报告记录时间、主机、分支、精确 HEAD、运行输入快照、观察时长、首个失败、环境限制、清理结果和 `PASS|FAILED|BLOCKED`。报告、普通日志、bag 和生成 YAML 保存在仓库外。
 

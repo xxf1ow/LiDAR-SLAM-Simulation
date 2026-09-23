@@ -27,6 +27,8 @@ ros2 launch system_bringup bringup.launch.py
 
 `slam_stack.launch.py` 在 navigation 模式等待 FAST-LIO 数据就绪，然后启动 GICP，并在 12 秒固定错峰后启动 Nav2；首次 accepted 不阻塞 Nav2 进程创建。mapping 模式只启动 LIO-SAM。`slam_stack` 永久拥有 `body -> base_footprint` bridge，`robot_navigation` 不发布该 TF。
 
+正式入口在四种 platform/mode 组合中均启动 `lidar_target_tracking`。它使用 effective Profile 的 `columns_per_scan`：real 为 1200 并取原始 `ring=26`，sim 为 1800 并取原始 `ring=7`。跟踪器只发布观测状态，不下发导航目标或速度；输入、输出和异常帧语义见 [tracking 包说明](../../tracking/lidar_target_tracking/README.md)。
+
 ## 控制和 Web
 
 完整 bringup 中 Nav2 发布 `/cmd_vel_auto`，Web 发布 `/cmd_vel_manual`，只有 `cmd_vel_gate` 发布 `/cmd_vel`。Web 人工接管只切换 gate 接受的速度源，不取消现有 Nav2 goal；恢复 automatic 后 Nav2 可以继续输出。

@@ -35,6 +35,14 @@ Status: proposed
 | 无地图专用跟踪启动链 | 撤回，使用现有完整 `mapping` 或 `navigation` 启动 |
 | 现场移动目标验收后再设计车辆跟随 | 保留；首次验收只评估原版效果 |
 
+### 当前实现与现场边界
+
+代码包含原样复制的三个参考头文件、`lidar_target_tracking` 点云桥接与状态发布、正式 bringup 接线，以及 Web 观测和选点接口。原始包的 `package.xml` 声明 MIT；复制头文件没有被项目适配代码改写。现场移动目标观察尚未完成，因此本 Note 保持 proposed；静态测试不能决定参考算法是否适合人体移动。
+
+Web 的选点操作在 manual 模式打开的跟踪视图中进行；HTTP `202` 只确认选点消息发布。跟踪节点不设置原版速度回调，也不创建速度发布者。跟踪状态的目标值在未匹配时保留最后输出，不能解释为本帧确认目标。
+
+三个复制头文件与固定参考提交的对应文件逐一 `cmp` 相同。`lidar_target_tracking` 的三个 CTest 目标、`robot_web_ui` 的十个 CTest 目标、Web 资产 43 项及 `system_bringup` Python 测试 759 项通过；`colcon test-result --all --verbose` 汇总 863 项、零失败。Web CTest 需要允许本地 socket 和可写 ROS 日志目录。选定包的 `colcon build` 在 `robot_web_ui` 的 CMake 构建返回成功后，于安装步骤未结束；`colcon test` 在执行首个 CTest 前未结束，完整工作区构建则在 `can_driver` 超过 90 秒未结束，因此这些命令没有完整结果。DDS 端到端传输、Gazebo 行为和真机移动目标效果仍缺现场证据。
+
 ## Alternatives considered
 
 **沿用高度带、聚类或预测关联。** 这些会改变参考实现收到的点和选目标规则，无法隔离原版效果；本次只取一条原始水平环并保留原版搜索圆与质心计算。
