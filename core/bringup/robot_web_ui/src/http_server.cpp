@@ -4,6 +4,7 @@
 #include <httplib.h>
 #include <openssl/rand.h>
 #include <atomic>
+#include <cmath>
 #include <cerrno>
 #include <condition_variable>
 #include <filesystem>
@@ -170,11 +171,17 @@ HttpServer::Impl::Impl(Params params_value, HttpActions &actions_value)
     server.Get("/map_view\\.js", [this](const httplib::Request &, httplib::Response &response) {
         send_file(response, std::filesystem::path(params.web_directory) / "map_view.js", "application/javascript; charset=utf-8");
     });
+    server.Get("/tracking_view\\.js", [this](const httplib::Request &, httplib::Response &response) {
+        send_file(response, std::filesystem::path(params.web_directory) / "tracking_view.js", "application/javascript; charset=utf-8");
+    });
     server.Get("/api/assistant-state", [this](const httplib::Request &, httplib::Response &response) {
         send_json(response, {200, actions.assistant_state()});
     });
     server.Get("/api/navigation-state", [this](const httplib::Request &, httplib::Response &response) {
         send_json(response, {200, actions.navigation_state()});
+    });
+    server.Get("/api/tracking-state", [this](const httplib::Request &, httplib::Response &response) {
+        send_json(response, {200, actions.tracking_state()});
     });
     server.Get("/api/parking-points", [this](const httplib::Request &, httplib::Response &response) {
         send_json(response, actions.list_parking_points());
@@ -189,7 +196,7 @@ HttpServer::Impl::Impl(Params params_value, HttpActions &actions_value)
     }
     for (const char *path : {"/api/manual-session", "/api/manual-command", "/api/takeover-manual",
                             "/api/resume-automatic", "/api/initial-pose", "/api/navigation-goal",
-                            "/api/navigation-cancel", "/api/parking-points/save",
+                            "/api/navigation-cancel", "/api/tracking-target", "/api/parking-points/save",
                             "/api/parking-points/navigate", "/api/parking-points/delete"}) {
         server.Post(path, [this](const httplib::Request &request, httplib::Response &response) {
             const auto payload = read_json(request);
@@ -269,6 +276,13 @@ ApiReply HttpServer::Impl::post(const std::string &path, const Json &payload)
     if (path == "/api/resume-automatic") return actions.resume_automatic();
     if (path == "/api/initial-pose") return actions.publish_initial_pose(payload);
     if (path == "/api/navigation-goal") return actions.send_navigation_goal(payload);
+    if (path == "/api/tracking-target") {
+        if (payload.size() != 2 || !payload.contains("x") || !payload.contains("y") ||
+            !payload["x"].is_number() || !payload["y"].is_number() ||
+            !std::isfinite(payload["x"].get<double>()) || !std::isfinite(payload["y"].get<double>()))
+            return error_reply(400, "tracking target must contain finite numeric x and y");
+        return actions.publish_tracking_target(payload);
+    }
     if (path == "/api/navigation-cancel") {
         if (!payload.empty()) return error_reply(400, "navigation cancel request must be {}");
         return actions.cancel_navigation();

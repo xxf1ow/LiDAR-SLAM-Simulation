@@ -4,7 +4,7 @@
 
 ## 系统组成
 
-`core/` 是独立的 ROS 2 Humble colcon 工作区。项目代码按运行职责分为六个模块：
+`core/` 是独立的 ROS 2 Humble colcon 工作区。项目代码按运行职责分为七个模块：
 
 | 模块 | 系统职责 | 详细文档 |
 |---|---|---|
@@ -13,6 +13,7 @@
 | `mapping` | LIO-SAM 建图、先验点云和二维地图产出 | [Mapping](../core/mapping/README.md) |
 | `localization` | FAST-LIO 连续里程计与 GICP 先验图校正 | [Localization](../core/localization/README.md) |
 | `navigation` | Nav2 地图、规划、控制、行为和速度转换 | [Navigation](../core/navigation/README.md) |
+| `tracking` | 单环点云桥接、参考激光目标跟踪和观测状态 | [LiDAR target tracking](../core/tracking/lidar_target_tracking/README.md) |
 | `bringup` | Profile 编译、一致性和传感器闸门、Web UI、全栈编排 | [System bringup](../core/bringup/system_bringup/README.md) |
 
 上游 FAST-LIO、LIO-SAM 和 small_gicp 源码不进入 Git；模块 README 固定其提交，项目修改由跟踪的 patch 交付。ZL-8030D 与 Vanjee 厂商代码位于 `core/robot/drivers/`，项目适配层与厂商实现保持分离。
@@ -58,6 +59,8 @@ map ── static ──> odom ── LIO-SAM ──> base_footprint ── URDF
 
 轮式里程计 TF 被关闭，LIO-SAM 在 mapping 模式独占 `odom -> base_footprint`。
 
+正式 bringup 在两种平台及两种模式下启动 `lidar_target_tracking`。它从 `/points_raw` 取平台对应的原始单环，按点云时间戳变换到 `base_footprint`，将内部扫描交给原版跟踪器，并把单环回波与最后一次目标位置发布到 `/tracking/state`。Web 通过 `/tracking/target` 设置搜索中心；该路径只产生观测，不发送 Nav2 goal 或速度。环号、列数和状态语义见 [tracking 包说明](../core/tracking/lidar_target_tracking/README.md)。
+
 ## 控制流
 
 ```text
@@ -71,6 +74,8 @@ Web  ──> /cmd_vel_manual┘                               │
 ```
 
 完整 bringup 中 `cmd_vel_gate` 是唯一的 `/cmd_vel` 发布者。Web 人工接管只改变 gate 接受的速度源，不取消现有 Nav2 goal。manual 命令超时会输出零速，但不会使硬件失能。
+
+Web 页面显示手动控制、自动导航和目标跟踪。手动页的模式抽屉可进入自动导航或目标跟踪；自动导航通过 gate 服务返回手动控制，目标跟踪则保持 gate 为 `manual`，返回手动页不调用 gate。跟踪页显示单环激光画布及其平移、缩放、适配和居中控件；手动方向输入在该页停用。车辆经 Nav2 跟随目标的速度源切换尚未接入。
 
 `robot_web_ui` 可执行文件在一个进程中组合 C++ ROS 节点和 cpp-httplib HTTP 服务。HTTP 先绑定端口，主线程随后运行单线程 ROS executor；HTTP 工作者调用线程安全的节点操作，二进制响应持有不可变快照。退出时 HTTP 停止并 join 后才销毁节点，且不取消导航或切换控制模式。
 

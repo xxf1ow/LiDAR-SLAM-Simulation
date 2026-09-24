@@ -1,6 +1,7 @@
 import ast
 import importlib.util
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import types
@@ -8,6 +9,8 @@ import xml.etree.ElementTree as ET
 
 import pytest
 import yaml
+
+from system_bringup import runtime_config_compiler as rcc
 
 
 ROOT = Path(__file__).resolve().parents[4]
@@ -897,6 +900,59 @@ def test_formal_bringup_compiles_and_validates_once_before_action_construction()
     assert all(call.lineno > gate_index for call in action_calls)
 
 
+@pytest.mark.parametrize(
+    ("platform", "mode", "ring", "columns", "profile_columns"),
+    (
+        ("sim", "mapping", 7, 1800, None),
+        ("sim", "navigation", 7, 1800, None),
+        ("real", "mapping", 26, 1200, None),
+        ("real", "navigation", 26, 1200, None),
+        ("sim", "mapping", 7, 1812, 1812),
+        ("real", "navigation", 26, 1212, 1212),
+    ),
+)
+def test_formal_bringup_launches_tracker_from_compiled_profile(
+    monkeypatch, tmp_path, platform, mode, ring, columns, profile_columns
+):
+    config_dir = tmp_path / "config"
+    shutil.copytree(BRINGUP.parent.parent / "config", config_dir)
+    config_path = config_dir / "bringup.yaml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    config["platform"] = platform
+    config["mode"] = mode
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+    if profile_columns is not None:
+        profile_path = config_dir / "profiles" / f"{platform}.yaml"
+        profile = yaml.safe_load(profile_path.read_text(encoding="utf-8"))
+        profile["sensors"]["lidar"]["columns_per_scan"] = profile_columns
+        profile_path.write_text(yaml.safe_dump(profile), encoding="utf-8")
+
+    launch_module = _fake_launch_module(monkeypatch, tmp_path / "share")
+    monkeypatch.setattr(launch_module, "yaml", yaml)
+    monkeypatch.setattr(
+        launch_module, "_source_bringup_config_path", lambda: config_path
+    )
+    monkeypatch.setattr(
+        launch_module,
+        "compile_runtime_configs",
+        lambda source: rcc.compile_runtime_configs(source, tmp_path / "runtime"),
+    )
+    actions = launch_module._bringup(None)
+    tracking_nodes = [
+        action for action in actions
+        if action.kwargs.get("package") == "lidar_target_tracking"
+    ]
+
+    assert len(tracking_nodes) == 1
+    tracker = tracking_nodes[0]
+    assert tracker.kwargs["executable"] == "tracker_node"
+    assert tracker.kwargs["parameters"] == [{
+        "use_sim_time": platform == "sim",
+        "ring": ring,
+        "columns": columns,
+    }]
+
+
 def test_formal_bringup_has_no_active_legacy_runtime_path():
     source = BRINGUP.read_text(encoding="utf-8")
     for name in (
@@ -1330,7 +1386,7 @@ def test_manifest_exec_depends_on_control_packages_and_body_bridge():
     dependencies = {
         element.text for element in manifest.getroot().findall("exec_depend")
     }
-    assert {"cmd_vel_gate", "robot_web_ui"} <= dependencies
+    assert {"cmd_vel_gate", "robot_web_ui", "lidar_target_tracking"} <= dependencies
     assert {"robot_bringup", "vanjee_lidar_ros", "rclpy", "sensor_msgs"} <= dependencies
     assert "tf2_ros" in dependencies
     assert "rviz2" in dependencies

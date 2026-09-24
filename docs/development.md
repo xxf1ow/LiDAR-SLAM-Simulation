@@ -50,6 +50,7 @@ colcon build --packages-select robot_web_ui
 test -x install/robot_web_ui/lib/robot_web_ui/robot_web_ui
 test -f install/robot_web_ui/share/robot_web_ui/web/index.html
 test -f install/robot_web_ui/share/robot_web_ui/web/map_view.js
+test -f install/robot_web_ui/share/robot_web_ui/web/tracking_view.js
 test -z "$(find install/robot_web_ui \
   -name '*.py*' \
   -print -quit)"
@@ -63,14 +64,14 @@ colcon build --cmake-args -DCMAKE_BUILD_TYPE=Debug
 
 不要在现有 `build/` 与 `install/` 上切换为 `--symlink-install`。确需改变安装模式时，必须先有意重建两个目录，避免 `ament_cmake_python` 目录和符号链接混用。
 
-日常窄构建使用包边界，例如：
+跟踪包局部构建：
 
 ```bash
-colcon build --packages-up-to system_bringup
+colcon build --packages-select lidar_target_tracking
 source install/setup.bash
 ```
 
-各模块的包选择和诊断入口由其 README 维护。构建后按[测试指南](testing.md)选择与改动表面相称的检查。
+正式运行见[System bringup](../core/bringup/system_bringup/README.md)；测试见[测试指南](testing.md)。
 
 ## 修改运行配置
 

@@ -31,13 +31,14 @@
       inset: 0;
       pointer-events: none;
     }
-    #mapCanvas {
+    #mapCanvas, #trackingCanvas {
       position: fixed;
       inset: 0;
       width: 100vw;
       height: 100dvh;
       touch-action: none;
     }
+    #trackingCanvas { background: var(--canvas); }
     .overlay {
       position: absolute;
       left: 12px;
@@ -98,6 +99,11 @@
       min-height: 0;
       overflow: hidden;
     }
+    #operationDrawer {
+      display: grid;
+      gap: 8px;
+    }
+    #operationDrawer button { min-height: 52px; }
     #parkingDrawerHeader {
       display: flex;
       align-items: center;
@@ -180,11 +186,13 @@
 </head>
 <body>
 <canvas id="mapCanvas" aria-label="导航地图"></canvas>
+<canvas id="trackingCanvas" aria-label="机器人周围激光点" hidden></canvas>
 <main>
   <section id="statusStrip" class="overlay" aria-label="机器人状态">
     <p id="modeStatus">控制模式：状态同步中</p>
     <p id="notice" class="notice" role="status" aria-live="polite"></p>
     <p id="navigationStatus" role="status" aria-live="polite"></p>
+    <p id="trackingStatus" role="status" aria-live="polite" hidden></p>
   </section>
   <section id="controlDock" class="overlay" aria-label="操作区">
     <section id="operationRegion">
@@ -229,12 +237,17 @@
         <button disabled data-direction="right" aria-label="右转">右转</button>
         </section>
       </section>
+      <section id="operationDrawer" aria-label="选择模式" hidden>
+        <button id="chooseNavigation" type="button">自动导航</button>
+        <button id="chooseTracking" type="button">目标跟踪</button>
+      </section>
     </section>
     <button id="modeToggle" disabled>状态同步中…</button>
   </section>
 </main>
 
 <script src="/map_view.js"></script>
+<script src="/tracking_view.js"></script>
 <script>
   const speed = document.getElementById("speed");
   const speedValue = document.getElementById("speedValue");
@@ -242,6 +255,8 @@
   const notice = document.getElementById("notice");
   const modeToggle = document.getElementById("modeToggle");
   const mapActions = document.getElementById("mapActions");
+  const mapActionButtons = ["mapZoomIn", "mapZoomOut", "mapFit", "mapCenterRobot"]
+    .map((id) => document.getElementById(id));
   const navigationActions = document.getElementById("navigationActions");
   const parkingActions = document.getElementById("parkingActions");
   const saveParkingPoint = document.getElementById("saveParkingPoint");
@@ -254,7 +269,18 @@
   const parkingDrawerClose = document.getElementById("parkingDrawerClose");
   const parkingList = document.getElementById("parkingList");
   const manualControls = document.getElementById("manualControls");
+  const mapCanvas = document.getElementById("mapCanvas");
+  const trackingCanvas = document.getElementById("trackingCanvas");
+  const trackingStatus = document.getElementById("trackingStatus");
+  const navigationStatus = document.getElementById("navigationStatus");
+  const operationDrawer = document.getElementById("operationDrawer");
+  const chooseNavigation = document.getElementById("chooseNavigation");
+  const chooseTracking = document.getElementById("chooseTracking");
   let mapView = null;
+  let trackingView = null;
+  let trackingVisible = false;
+  let operationDrawerOpen = false;
+  let trackingPollGeneration = 0;
   let desiredDirection = "stop";
   let commandLoopRunning = false;
   let manualSessionId = null;
@@ -515,6 +541,42 @@
     return modeSwitchPending || modeSwitchTarget !== null;
   }
 
+  function showTracking(visible) {
+    if (visible) stopMotion();
+    trackingVisible = visible;
+    operationDrawerOpen = false;
+    mapCanvas.hidden = visible;
+    trackingCanvas.hidden = !visible;
+    trackingStatus.hidden = !visible;
+    trackingPollGeneration += 1;
+    renderControls();
+    if (visible) {
+      if (trackingView) trackingView.refreshViewport();
+      pollTracking(trackingPollGeneration);
+    }
+    else if (mapView) mapView.refreshViewport();
+  }
+
+  async function pollTracking(generation) {
+    if (!trackingVisible || document.hidden || generation !== trackingPollGeneration) return;
+    try {
+      const state = await get("/api/tracking-state");
+      if (generation !== trackingPollGeneration || !trackingVisible) return;
+      if (trackingView) trackingView.setState(state);
+      trackingStatus.textContent = state.available === false
+        ? "目标跟踪：数据不可用"
+        : state.active && state.target
+          ? `最后一次参考输出：X ${state.target.x.toFixed(2)} 米，Y ${state.target.y.toFixed(2)} 米`
+          : "最后一次参考输出：暂无目标";
+    } catch (error) {
+      if (generation !== trackingPollGeneration) return;
+      trackingStatus.textContent = `目标跟踪请求失败：${error.message}`;
+    }
+    if (generation === trackingPollGeneration && trackingVisible && !document.hidden) {
+      setTimeout(() => pollTracking(generation), 500);
+    }
+  }
+
   function renderControls() {
     const modePending = modeSwitchInProgress();
     const previousContext = navigationActions.hidden + ":"
@@ -524,35 +586,45 @@
       modeToggle.textContent = "切换中…";
       modeToggle.disabled = true;
     } else if (currentMode === "automatic") {
-      modeToggle.textContent = "人工接管";
+      modeToggle.textContent = "手动控制";
       modeToggle.disabled = false;
     } else if (currentMode === "manual") {
-      modeToggle.textContent = "恢复自动导航";
+      modeToggle.textContent = trackingVisible
+        ? "手动控制" : operationDrawerOpen ? "取消" : "选择模式";
       modeToggle.disabled = false;
     } else {
       modeToggle.textContent = "状态同步中…";
       modeToggle.disabled = true;
     }
     motionButtons.forEach((button) => {
-      button.disabled = currentMode !== "manual" || modePending;
+      button.disabled = currentMode !== "manual" || modePending
+        || trackingVisible || operationDrawerOpen;
     });
     modeStatus.textContent = modePending
       ? "控制模式：切换中"
       : currentMode === "automatic"
         ? "控制模式：自动导航"
         : currentMode === "manual"
-          ? "控制模式：人工接管"
+          ? trackingVisible ? "控制模式：目标跟踪" : "控制模式：手动控制"
           : "控制模式：状态同步中";
     const drawerVisible = parkingDrawerOpen && currentMode === "automatic";
-    mapActions.hidden = drawerVisible;
+    mapActions.hidden = drawerVisible || operationDrawerOpen;
+    if (trackingVisible) {
+      mapActionButtons.forEach((button) => {
+        button.disabled = false;
+      });
+    }
+    navigationStatus.hidden = trackingVisible;
     navigationActions.hidden = currentMode !== "automatic"
       || modePending || drawerVisible;
     parkingActions.hidden = currentMode !== "automatic"
       || modePending || drawerVisible;
     parkingDrawer.hidden = !drawerVisible;
+    operationDrawer.hidden = !operationDrawerOpen || currentMode !== "manual" || modePending;
     saveParkingForm.hidden = !saveParkingFormOpen || drawerVisible
       || currentMode !== "automatic" || modePending;
-    manualControls.hidden = currentMode !== "manual" || modePending;
+    manualControls.hidden = currentMode !== "manual" || modePending
+      || trackingVisible || operationDrawerOpen;
     const nextContext = navigationActions.hidden + ":"
       + parkingActions.hidden + ":" + manualControls.hidden + ":"
       + parkingDrawer.hidden;
@@ -579,6 +651,10 @@
         parkingDrawerOpen = false;
         if (mapView) mapView.setParkingPointsVisible(false);
       }
+    }
+    if (currentMode !== "manual") {
+      operationDrawerOpen = false;
+      if (trackingVisible) showTracking(false);
     }
     renderControls();
     if (currentMode === "automatic" && previousMode !== "automatic") {
@@ -685,7 +761,8 @@
   }
 
   function beginMotion(event) {
-    if (currentMode !== "manual" || modeSwitchInProgress()) return;
+    if (currentMode !== "manual" || modeSwitchInProgress()
+      || trackingVisible || operationDrawerOpen) return;
     buttonMotionOwner = event.currentTarget;
     setDesiredDirection(event.currentTarget.dataset.direction);
     event.currentTarget.setPointerCapture(event.pointerId);
@@ -703,7 +780,8 @@
   }
 
   function beginKeyboardMotion(event) {
-    if (currentMode !== "manual" || modeSwitchInProgress()) return;
+    if (currentMode !== "manual" || modeSwitchInProgress()
+      || trackingVisible || operationDrawerOpen) return;
     if ((event.key !== " " && event.key !== "Enter") || event.repeat) return;
     event.preventDefault();
     buttonMotionOwner = event.currentTarget;
@@ -728,7 +806,8 @@
   };
 
   function beginWasdMotion(event) {
-    if (currentMode !== "manual" || modeSwitchInProgress()) return;
+    if (currentMode !== "manual" || modeSwitchInProgress()
+      || trackingVisible || operationDrawerOpen) return;
     const key = event.key.toLowerCase();
     const direction = keyboardDirections[key];
     if (direction === undefined || event.repeat) return;
@@ -743,6 +822,7 @@
     const key = event.key.toLowerCase();
     if (keyboardDirections[key] === undefined) return;
     event.preventDefault();
+    if (trackingVisible || operationDrawerOpen) return;
     const keyIndex = heldMovementKeys.indexOf(key);
     if (keyIndex !== -1) heldMovementKeys.splice(keyIndex, 1);
     const activeKey = heldMovementKeys[heldMovementKeys.length - 1];
@@ -788,8 +868,8 @@
       ? "/api/takeover-manual"
       : "/api/resume-automatic";
     const successMessage = observedMode === "automatic"
-      ? "人工接管请求已完成"
-      : "恢复自动导航请求已完成";
+      ? "手动控制请求已完成"
+      : "自动导航请求已完成";
     if (observedMode === "automatic" && mapView) {
       mapView.cancelPlacement();
     }
@@ -825,10 +905,30 @@
   goToParkingPoint.addEventListener("click", openParkingDrawer);
   parkingDrawerClose.addEventListener("click", closeParkingDrawer);
   parkingList.addEventListener("click", handleParkingListClick);
-  modeToggle.addEventListener("click", requestMode);
+  modeToggle.addEventListener("click", () => {
+    if (currentMode === "manual" && !modeSwitchInProgress()) {
+      if (trackingVisible) showTracking(false);
+      else {
+        operationDrawerOpen = !operationDrawerOpen;
+        if (operationDrawerOpen && desiredDirection !== "stop") stopMotion();
+        renderControls();
+      }
+      return;
+    }
+    return requestMode();
+  });
+  chooseNavigation.addEventListener("click", () => {
+    operationDrawerOpen = false;
+    renderControls();
+    return requestMode();
+  });
+  chooseTracking.addEventListener("click", () => {
+    if (currentMode === "manual") showTracking(true);
+  });
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) stopMotion();
+    else if (trackingVisible) pollTracking(++trackingPollGeneration);
   });
   window.addEventListener("pagehide", stopMotion);
   window.addEventListener("blur", stopMotion);
@@ -873,6 +973,29 @@
     });
     mapView.setParkingPoints(parkingPoints);
   }
+  if (globalThis.RobotTrackingView) {
+    trackingView = RobotTrackingView.create({
+      canvas: trackingCanvas,
+      request: post,
+      onSelectionError: (error) => {
+        noticeOwner = "tracking";
+        notice.textContent = `目标设置失败：${error.message}`;
+      },
+      onSelectionSuccess: () => {
+        if (noticeOwner !== "tracking") return;
+        noticeOwner = null;
+        notice.textContent = "";
+      }
+    });
+  }
+  [
+    ["mapZoomIn", "zoomIn"], ["mapZoomOut", "zoomOut"],
+    ["mapFit", "fit"], ["mapCenterRobot", "centerRobot"]
+  ].forEach(([id, action]) => {
+    document.getElementById(id).addEventListener("click", () => {
+      if (trackingVisible && trackingView) trackingView[action]();
+    });
+  });
 </script>
 </body>
 </html>
